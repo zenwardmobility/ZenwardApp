@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+/*
+  Zenward design tokens.
+  Source of truth: /docs/design/design-tokens.md (approved P0-E2-S1, gate-updated 2026-08-30).
+  Every color/spacing/radius/shadow value below traces back to that document —
+  do not add ad hoc values here or in component files.
+*/
+@theme {
+  /* Brand anchors */
+  --color-brand-care-navy: #123447;
+  --color-brand-route-teal: #21a89a;
+  --color-brand-interactive-teal: #178577;
+  --color-brand-calm-mist: #ddf4f0;
+  --color-brand-arrival-gold: #f4b860;
+
+  /* Neutrals */
+  --color-text-primary: #101f27;
+  --color-text-secondary: #3e535c;
+  --color-text-muted: #64777e;
+  --color-text-disabled: #9aacb2;
+  --color-border-subtle: #d5dee1;
+  --color-border-strong: #7c8e93;
+  --color-surface-app: #f6f9fa;
+  --color-surface-secondary: #eef3f4;
+  --color-surface-elevated: #ffffff;
+  --color-surface-hover: #e7eef0;
+
+  /* Semantic: success */
+  --color-success-text: #1c7a4d;
+  --color-success-bg: #e6f4ec;
+  --color-success-border: #a9d9be;
+  --color-success-strong: #1c7a4d;
+
+  /* Semantic: warning (tied to Arrival Gold per design system) */
+  --color-warning-text: #8a5a12;
+  --color-warning-bg: #fcefd9;
+  --color-warning-border: #ebc888;
+  --color-warning-strong: #f4b860;
+
+  /* Semantic: critical */
+  --color-critical-text: #b3261e;
+  --color-critical-bg: #fbe9e7;
+  --color-critical-border: #f3b7b0;
+  --color-critical-strong: #b3261e;
+
+  /* Semantic: informational */
+  --color-info-text: #1d5f91;
+  --color-info-bg: #e7f1fa;
+  --color-info-border: #afd3ec;
+  --color-info-strong: #1d5f91;
+
+  /* Typography families */
+  --font-display: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* Spacing — semantic aliases layered on Tailwind's 4px scale (see design-tokens.md §5) */
+  --spacing-2xs: 0.125rem; /* 2px */
+  --spacing-xs: 0.25rem; /* 4px */
+  --spacing-sm: 0.5rem; /* 8px */
+  --spacing-md: 1rem; /* 16px */
+  --spacing-lg: 1.5rem; /* 24px */
+  --spacing-xl: 2rem; /* 32px */
+  --spacing-2xl: 3rem; /* 48px */
+  --spacing-3xl: 4rem; /* 64px */
+  --spacing-4xl: 5rem; /* 80px */
+
+  /* Radius */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  /* radius-full is Tailwind's built-in `rounded-full`, reserved for pills per design system */
+
+  /* Shadows — two levels only, per design-tokens.md §7 */
+  --shadow-sm: 0 1px 2px rgba(16, 31, 39, 0.06), 0 1px 3px rgba(16, 31, 39, 0.08);
+  --shadow-md: 0 2px 4px rgba(16, 31, 39, 0.08), 0 4px 12px rgba(16, 31, 39, 0.12);
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 280ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+body {
+  background: var(--color-surface-app);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+}
+
+/* Visible keyboard focus everywhere — never remove without a replacement. */
+:focus-visible {
+  outline: 2px solid var(--color-brand-interactive-teal);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
