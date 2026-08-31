@@ -324,6 +324,8 @@ audit_events_select_org_admin        -- OA read, own org only
 audit_events_select_platform_admin   -- PA read, all orgs
 ```
 
+**Implementation update (P1-E2-S1 → P1-E2-S3):** the three Driver-scoped policies above (`trips_select_assigned_driver`, `trip_notes_select_assigned_driver_visible`, `trip_assignments_select_own_driver`) were built exactly as illustrated in P1-E2-S1, then **retired** in P1-E2-S3 once the controlled Driver read API existed to replace them — RLS controls rows, not columns, and each was found to expose more columns than a Driver needs (full rationale: [driver-data-minimization.md](../security/driver-data-minimization.md), ZD-096). The OA/Dispatcher policies above remain exactly as illustrated, unchanged. This section is left as originally written (it documents the pre-implementation plan) rather than rewritten in place — see [rls-model.md](../security/rls-model.md) "Policy inventory" for the actual, current policy list.
+
 ## Authorization test matrix
 
 The full adversarial suite (restated from the work item) that future implementation must pass, alongside the RLS matrix in domain-model.md §O and the transition matrix in lifecycle-model.md §S:

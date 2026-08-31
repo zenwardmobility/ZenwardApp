@@ -88,7 +88,19 @@ end $$;
 reset role;
 
 -- =============================================================================
--- F. Driver A SELECT own assigned Trip — ALLOW
+-- F. Driver A direct base-table SELECT on own assigned Trip — DENY
+-- (CONTRACT CHANGED IN P1-E2-S3, ZD-096)
+-- OLD CONTRACT (P1-E2-S1 through P1-E2-S2A): trips_select_assigned_driver
+--   granted a Driver direct row-level SELECT on any Trip they ever held an
+--   assignment on — ALLOW was the correct/expected result then.
+-- NEW CONTRACT (P1-E2-S3): that policy is retired. Driver has NO direct
+--   base-table SELECT on trips at all; driver_list_active_trips/
+--   driver_get_trip_detail/driver_list_trip_history (SECURITY DEFINER,
+--   explicit minimum-necessary projections) are the sole Driver-facing
+--   read path — see docs/security/driver-data-minimization.md and ZD-096.
+--   This is not a capability loss: see supabase/tests/
+--   driver_read_authorization_tests.sql for the successor coverage
+--   (Driver A can still reach the same Trip's detail through the RPC).
 -- =============================================================================
 do $$
 declare v_count int;
@@ -96,8 +108,8 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a3';
   select count(*) into v_count from public.trips where id = '80000000-0000-0000-0000-0000000000a1';
-  if v_count = 1 then raise notice 'TEST F: PASS (Driver A sees own assigned trip)';
-  else raise notice 'TEST F: FAIL (expected 1, got %)', v_count; end if;
+  if v_count = 0 then raise notice 'TEST F: PASS (Driver A cannot directly SELECT trips at all — retired in favor of the controlled read API, ZD-096)';
+  else raise notice 'TEST F: FAIL (expected 0, got % — direct base-table Trip access should be retired)', v_count; end if;
 end $$;
 reset role;
 
@@ -130,7 +142,16 @@ end $$;
 reset role;
 
 -- =============================================================================
--- I. Driver A SELECT driver_visible note on own assigned Trip — ALLOW
+-- I. Driver A direct base-table SELECT on a driver_visible note — DENY
+-- (CONTRACT CHANGED IN P1-E2-S3, ZD-096)
+-- OLD CONTRACT: trip_notes_select_assigned_driver_visible granted a
+--   Driver direct row-level SELECT on driver_visible notes for any Trip
+--   they ever held an assignment on — ALLOW was correct then.
+-- NEW CONTRACT: that policy is retired. driver_get_trip_detail embeds
+--   driver_visible notes (explicit id/body/created_at fields only, never
+--   author_user_id) for a CURRENTLY, actively assigned Trip — see
+--   docs/security/driver-data-minimization.md and ZD-096. Successor
+--   coverage: supabase/tests/driver_read_minimization_tests.sql.
 -- =============================================================================
 do $$
 declare v_count int;
@@ -139,8 +160,8 @@ begin
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a3';
   select count(*) into v_count from public.trip_notes
     where trip_id = '80000000-0000-0000-0000-0000000000a1' and visibility = 'driver_visible';
-  if v_count = 1 then raise notice 'TEST I: PASS (Driver A sees driver_visible note on own trip)';
-  else raise notice 'TEST I: FAIL (expected 1, got %)', v_count; end if;
+  if v_count = 0 then raise notice 'TEST I: PASS (Driver A cannot directly SELECT trip_notes at all — retired in favor of the controlled read API, ZD-096)';
+  else raise notice 'TEST I: FAIL (expected 0, got % — direct base-table note access should be retired)', v_count; end if;
 end $$;
 reset role;
 

@@ -1,10 +1,12 @@
 # Zenward Platform — RLS Model
 
-**Work item:** P1-E2-S1 — Supabase Schema + RLS Foundation, amended by P1-E2-S1A — SECURITY DEFINER Exposure Audit (two passes), amended by P1-E2-S2 — Controlled Mutation & Transaction Boundary (`trip_assignments` direct-write retirement, ZD-092)
+**Work item:** P1-E2-S1 — Supabase Schema + RLS Foundation, amended by P1-E2-S1A — SECURITY DEFINER Exposure Audit (two passes), amended by P1-E2-S2 — Controlled Mutation & Transaction Boundary (`trip_assignments` direct-write retirement, ZD-092), amended by P1-E2-S3 — Secure Read Models & Driver Minimum-Necessary Projection (6 Driver base-table SELECT policies retired, ZD-096; `current_driver_id()` corrected, ZD-100)
 **Status:** Implemented and tested locally. Not deployed to any remote/production project.
 **Last updated:** 2026-08-31
 
 **P1-E2-S2 update:** `trips.state` (still zero-grant below) is now reachable through the controlled mutation RPCs documented in [mutation-api.md](../data/mutation-api.md)/[mutation-authorization.md](./mutation-authorization.md) — the "intentional, temporary over-restriction" this document originally described is now resolved for lifecycle transitions, assignment, cancellation, and no-show. `trip_assignments` direct INSERT/UPDATE (previously granted below) is now revoked entirely (ZD-092) in favor of `assign_trip`/`reassign_trip`.
+
+**P1-E2-S3 update:** Driver no longer has ANY direct base-table SELECT on `drivers` (own row), `trips`, `trip_assignments`, `vehicles`, or `trip_events` — all 6 retired in favor of the controlled read API ([read-api.md](../data/read-api.md), full rationale in [driver-data-minimization.md](./driver-data-minimization.md), ZD-096). `trip_exceptions_select_assigned_driver` is the one Driver policy deliberately retained (no replacement built this phase). Separately, `current_driver_id()` — used by RLS policies, mutation RPCs, and read RPCs alike — was corrected to also require an active Membership (ZD-100); see that decision for what this fixed.
 
 This document is the security layer on top of [schema.md](../data/schema.md). It implements exactly what [authorization-model.md](../product/authorization-model.md) confirmed. See [rls-test-matrix.md](./rls-test-matrix.md) for how every claim here was actually verified against a running local instance — not asserted from migration syntax alone.
 
@@ -16,7 +18,7 @@ No table anywhere in this schema has any grant to the `anon` role. Public/anonym
 
 ## Policy inventory
 
-52 policies were created in P1-E2-S1; P1-E2-S2 dropped 2 of them as superseded (ZD-092), leaving **50** active across 15 tables, all scoped `TO authenticated` (none to `anon`), none using a blanket `USING (true)`. Full list, table by table (see `supabase/migrations/20260830131700_rls_policies.sql` for the original SQL and `supabase/migrations/20260831100000_trip_assignment_privilege_tightening.sql` for the P1-E2-S2 change):
+52 policies were created in P1-E2-S1; P1-E2-S2 dropped 2 as superseded (ZD-092); P1-E2-S3 dropped 6 more as superseded by the controlled read API (ZD-096), leaving **44** active across 15 tables, all scoped `TO authenticated` (none to `anon`), none using a blanket `USING (true)`. Full list, table by table (see `supabase/migrations/20260830131700_rls_policies.sql` for the original SQL, `20260831100000_trip_assignment_privilege_tightening.sql` for the P1-E2-S2 change, and `20260831110200_driver_base_table_policy_tightening.sql` for the P1-E2-S3 change):
 
 | Table | Policies |
 |---|---|
@@ -24,16 +26,16 @@ No table anywhere in this schema has any grant to the `anon` role. Public/anonym
 | `memberships` | `memberships_select_self`, `memberships_select_org_admin`, `memberships_insert_org_admin`, `memberships_update_org_admin` |
 | `user_profiles` | `user_profiles_select_own`, `user_profiles_select_org_admin`, `user_profiles_insert_own`, `user_profiles_update_own` |
 | `platform_admin_grants` | `platform_admin_grants_select_own`, `platform_admin_grants_select_platform_admin` |
-| `drivers` | `drivers_select_org_operations`, `drivers_select_own`, `drivers_insert_org_admin`, `drivers_update_org_admin` |
+| `drivers` | `drivers_select_org_operations`, `drivers_insert_org_admin`, `drivers_update_org_admin` — **`drivers_select_own` retired in P1-E2-S3 (ZD-096)**, superseded by `driver_get_profile` |
 | `passengers` | `passengers_select_org_operations`, `passengers_insert_org_operations`, `passengers_update_org_operations` — **no Driver policy of any kind** |
 | `facilities` | `facilities_select_org_operations`, `facilities_insert_org_operations`, `facilities_update_org_operations` — no Driver policy |
-| `vehicles` | `vehicles_select_org_operations`, `vehicles_select_assigned_driver`, `vehicles_insert_org_admin`, `vehicles_update_org_admin` |
+| `vehicles` | `vehicles_select_org_operations`, `vehicles_insert_org_admin`, `vehicles_update_org_admin` — **`vehicles_select_assigned_driver` retired in P1-E2-S3 (ZD-096)**, superseded by vehicle summary embedded in the read API |
 | `transportation_requests` | `transportation_requests_select_org_operations`, `_insert_org_operations`, `_update_org_operations` — no anonymous policy of any kind |
-| `trips` | `trips_select_org_operations`, `trips_select_assigned_driver`, `trips_insert_org_operations`, `trips_update_org_operations` |
-| `trip_assignments` | `trip_assignments_select_org_operations`, `trip_assignments_select_own_driver` — **INSERT/UPDATE policies retired in P1-E2-S2 (ZD-092)**; all writes now go through `assign_trip`/`reassign_trip` |
-| `trip_events` | `trip_events_select_org_operations`, `trip_events_select_assigned_driver` — **no INSERT/UPDATE/DELETE policy for any role** |
-| `trip_notes` | `trip_notes_select_operations`, `trip_notes_select_assigned_driver_visible`, `trip_notes_insert_operations`, `trip_notes_insert_assigned_driver`, `trip_notes_update_operations` — no Driver UPDATE |
-| `trip_exceptions` | `trip_exceptions_select_operations`, `trip_exceptions_select_assigned_driver`, `trip_exceptions_insert_operations`, `trip_exceptions_insert_assigned_driver`, `trip_exceptions_update_operations` — no Driver UPDATE (cannot resolve) |
+| `trips` | `trips_select_org_operations`, `trips_insert_org_operations`, `trips_update_org_operations` — **`trips_select_assigned_driver` retired in P1-E2-S3 (ZD-096)**, superseded by `driver_list_active_trips`/`driver_get_trip_detail`/`driver_list_trip_history` (the single largest Driver over-exposure found: every column, indefinitely, even after reassignment) |
+| `trip_assignments` | `trip_assignments_select_org_operations` — **INSERT/UPDATE retired in P1-E2-S2 (ZD-092)**; **`trip_assignments_select_own_driver` retired in P1-E2-S3 (ZD-096)**, superseded by the active list/history RPCs. Driver now has zero direct access to this table |
+| `trip_events` | `trip_events_select_org_operations` — **`trip_events_select_assigned_driver` retired in P1-E2-S3 (ZD-096), no replacement** (work item §24 — no TripEvent timeline is exposed to Driver at all); **no INSERT/UPDATE/DELETE policy for any role** |
+| `trip_notes` | `trip_notes_select_operations`, `trip_notes_insert_operations`, `trip_notes_insert_assigned_driver`, `trip_notes_update_operations` — **`trip_notes_select_assigned_driver_visible` retired in P1-E2-S3 (ZD-096)**, superseded by `driver_notes` embedded in Trip detail (ZD-098). Driver INSERT (writing their own notes) is untouched — this phase is read-only |
+| `trip_exceptions` | `trip_exceptions_select_operations`, `trip_exceptions_select_assigned_driver`, `trip_exceptions_insert_operations`, `trip_exceptions_insert_assigned_driver`, `trip_exceptions_update_operations` — no Driver UPDATE (cannot resolve). **`trip_exceptions_select_assigned_driver` was reviewed in P1-E2-S3 and deliberately retained, not retired** (ZD-096 — no replacement projection was built) |
 | `audit_events` | `audit_events_select_org_admin`, `audit_events_select_platform_admin` — **no INSERT/UPDATE/DELETE policy for any role**; no Dispatcher or Driver SELECT |
 
 Naming convention (authorization-model.md §U): `<table>_<action>_<actor>`.
@@ -56,13 +58,13 @@ Verified directly: `information_schema.column_privileges` for `authenticated` on
 
 ## RLS helper functions
 
-Five functions, `supabase/migrations/20260830131600_rls_helper_functions.sql`. All `SECURITY DEFINER`, all `STABLE`, all with an explicit `SET search_path = public, pg_temp`. Each answers exactly one narrow question and returns only a boolean or an identifier — never a raw tenant row.
+Five functions, originally defined in `supabase/migrations/20260830131600_rls_helper_functions.sql`. All `SECURITY DEFINER`, all `STABLE`, all with an explicit `SET search_path = public, pg_temp`. Each answers exactly one narrow question and returns only a boolean or an identifier — never a raw tenant row.
 
 | Function | Purpose | Returns |
 |---|---|---|
 | `is_org_member(org_id)` | Active membership check for the caller in a specific org | boolean |
 | `has_org_role(org_id, roles[])` | Active membership + role-in-list check | boolean |
-| `current_driver_id(org_id)` | Resolves the caller to their Driver.id **within that specific org** | uuid or null |
+| `current_driver_id(org_id)` | Resolves the caller to their Driver.id **within that specific org** — requires BOTH an active `drivers` row AND an active Membership with role=`driver` (corrected in P1-E2-S3 by `20260831110300_current_driver_id_membership_check.sql`, ZD-100 — originally checked only `drivers.status`, a real gap this fix closed) | uuid or null |
 | `is_driver_assigned_to_trip(trip_id)` | Whether the caller (as a driver) has ever had an assignment (active or historical) on this trip | boolean |
 | `is_platform_admin()` | Whether the caller holds a PlatformAdminGrant | boolean |
 
@@ -128,6 +130,7 @@ No Supabase Storage bucket is created in this phase. Restated as the required in
 
 - ~~Trip lifecycle-transition RPCs~~ — **built in P1-E2-S2**, see [mutation-api.md](../data/mutation-api.md).
 - ~~Assignment/reassignment RPCs~~ — **built in P1-E2-S2** (`assign_trip`/`reassign_trip`); the plain INSERT/UPDATE policies this line used to describe were retired in the same phase (ZD-092).
-- The driver → passenger projection (see above) — still deferred; unaffected by P1-E2-S2.
-- `trip_events`/`audit_events` INSERT for any *human* role directly — still true; both tables are written only from inside the P1-E2-S2 `SECURITY DEFINER` mutation functions, never via a direct client grant to `authenticated`.
-- Public transportation-request intake (no anonymous INSERT policy exists — deferred per ZD-044/ZD-050 and this work item's explicit instruction not to add one merely to support the marketing site). Unaffected by P1-E2-S2.
+- ~~The driver → passenger projection~~ — **built in P1-E2-S3**, see [read-api.md](../data/read-api.md) and [driver-data-minimization.md](./driver-data-minimization.md). Direct Passenger SELECT for Driver remains permanently absent (ZD-080, unchanged) — the projection is the only path, exactly as this section always anticipated.
+- `trip_events`/`audit_events` INSERT for any *human* role directly — still true; both tables are written only from inside the P1-E2-S2 `SECURITY DEFINER` mutation functions, never via a direct client grant to `authenticated`. As of P1-E2-S3, Driver also has no SELECT on `trip_events` (ZD-096) — that table is now fully inaccessible to Driver in every direction.
+- A Driver-facing TripException status/issue view — deliberately deferred (ZD-096); the existing narrowly-scoped `trip_exceptions_select_assigned_driver` base-table policy remains as the only (unchanged) access path.
+- Public transportation-request intake (no anonymous INSERT policy exists — deferred per ZD-044/ZD-050 and this work item's explicit instruction not to add one merely to support the marketing site). Unaffected by P1-E2-S2/S3.

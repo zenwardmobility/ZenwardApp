@@ -1,0 +1,487 @@
+================================================================================
+ZENWARD MOBILITY — WORK ITEM COMPLETION REPORT
+================================================================================
+Project:              Zenward Platform
+Phase:                P1-E2-S3 — Secure Read Models & Driver Minimum-Necessary
+                       Projection
+Repository:           /Users/datamatics/ZenWard
+Environment:           LOCAL SUPABASE ONLY (project id "ZenWard", ports
+                       shifted +10 from CLI defaults). No remote linked.
+Git branch:            main
+Git HEAD before this phase's own work: f8633a2d2341c371e8fb1635f3dd9267ad2f431e
+                       (NOTE: partway through this session, HEAD advanced
+                       from 79f4f76 — the state at the end of P1-E2-S2A — to
+                       f8633a2, titled "Implement secure transactional trip
+                       mutations", containing exactly the P1-E2-S2/P1-E2-S2A
+                       work. This was NOT run by me — I never executed
+                       `git commit` at any point in this session, in either
+                       phase. It reflects the user reviewing and committing
+                       that work themselves, consistent with their own
+                       stated "I will review the report before committing."
+                       Reported here transparently, not silently.)
+Git HEAD now:          f8633a2d2341c371e8fb1635f3dd9267ad2f431e (UNCHANGED —
+                       every file this phase touches remains uncommitted)
+Date/time:             2026-08-31 17:54 UTC
+Pre-work regression baseline (re-run before any new migration, per §2):
+  rls_adversarial_tests.sql             32/32  PASS
+  constraint_tests.sql                  13/13  PASS
+  function_privilege_tests.sql           7/7   PASS
+  security_definer_exposure_tests.sql   20/20  PASS
+  mutation_privilege_tests.sql           7/7   PASS
+  mutation_lifecycle_tests.sql          24/24  PASS
+  mutation_assignment_tests.sql         16/16  PASS
+  mutation_authorization_tests.sql       4/4   PASS
+  mutation_atomicity_tests.sql           2/2   PASS
+  mutation_idempotent_authorization_tests.sql  6/6  PASS
+  mutation_concurrency_test.sh                 PASS
+  TOTAL: 131/131 SQL assertions + concurrency, on a clean `supabase db
+  reset`. Baseline was green; work proceeded. (An initial run without a
+  prior `db reset` showed false failures from leftover fixture state from
+  the previous session's test runs — not a real regression; documented
+  here for transparency since it happened, corrected by resetting first.)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. SCOPE
+--------------------------------------------------------------------------------
+Build the secure Driver read boundary: minimum-necessary projections for
+Driver profile, active/upcoming assigned Trips, assigned Trip detail, and
+limited Trip history — replacing several over-broad Driver base-table SELECT
+policies inherited from P1-E2-S1, without ever widening Organization
+Admin/Dispatcher access. No application/UI code touched (confirmed by final
+`git status`, item 57 below). No public intake. No remote Supabase.
+
+--------------------------------------------------------------------------------
+2. PRE-WORK REGRESSION BASELINE
+--------------------------------------------------------------------------------
+See header above. 131/131 + concurrency, clean reset, before any P1-E2-S3
+migration.
+
+--------------------------------------------------------------------------------
+3. DRIVER DIRECT-READ SURFACE DISCOVERED (full audit: docs/security/driver-data-minimization.md)
+--------------------------------------------------------------------------------
+Inspected all 14 candidate tables against the ACTUAL schema (not inferred).
+Driver held a direct base-table SELECT policy on 8 of them: organizations,
+memberships, user_profiles (all own-row-only, retained), drivers (own row),
+vehicles (assigned-driver-scoped), trips (ever-assigned, ALL columns —
+the single largest over-exposure), trip_assignments (own, any/historical),
+trip_events (ever-assigned, including actor_user_id), trip_notes
+(driver_visible + ever-assigned), and trip_exceptions (ever-assigned).
+Passengers, facilities, transportation_requests, audit_events: zero Driver
+access, confirmed unchanged.
+
+--------------------------------------------------------------------------------
+4/5. BASE-TABLE POLICIES RETAINED / RETIRED
+--------------------------------------------------------------------------------
+RETAINED (own-row or already minimal, no over-exposure identified):
+  organizations_select_members, memberships_select_self,
+  user_profiles_select_own, drivers_select_org_operations (Ops, untouched),
+  trip_exceptions_select_assigned_driver (deliberately retained — no
+  replacement projection built this phase, work item §26; see ZD-096)
+
+RETIRED (6, all superseded by the new read API — ZD-096):
+  drivers_select_own                       -> driver_get_profile
+  trips_select_assigned_driver              -> driver_list_active_trips /
+                                                driver_get_trip_detail /
+                                                driver_list_trip_history
+  trip_assignments_select_own_driver        -> the same three
+  vehicles_select_assigned_driver           -> vehicle summary embedded
+  trip_notes_select_assigned_driver_visible -> driver_notes embedded
+  trip_events_select_assigned_driver        -> retired, NO replacement
+                                                built (work item §24)
+
+Every "_org_operations"/Organization Admin/Dispatcher policy on every
+affected table is completely untouched — confirmed by
+driver_read_privilege_tests.sql "ops-access-untouched".
+
+--------------------------------------------------------------------------------
+6. MIGRATIONS CREATED (4, append-only, no historical migration edited)
+--------------------------------------------------------------------------------
+  20260831110000_driver_read_result_types.sql
+    4 composite types: driver_profile_result, driver_active_trip_summary,
+    driver_trip_detail_result, driver_trip_history_entry.
+
+  20260831110100_driver_read_api.sql
+    The 4 exposed Driver read RPCs (see §7).
+
+  20260831110200_driver_base_table_policy_tightening.sql
+    Drops the 6 retired policies (§5); documents the trip_exceptions
+    non-retirement inline.
+
+  20260831110300_current_driver_id_membership_check.sql
+    CORRECTIVE (see §35 below for the full story): fixes a real,
+    pre-existing gap in current_driver_id() discovered by this phase's own
+    testing — it checked drivers.status but never memberships.status/role.
+
+--------------------------------------------------------------------------------
+7. EXPOSED DRIVER READ RPCS
+--------------------------------------------------------------------------------
+  driver_get_profile(p_organization_id uuid) returns driver_profile_result
+  driver_list_active_trips(p_organization_id uuid) returns setof driver_active_trip_summary
+  driver_get_trip_detail(p_trip_id uuid) returns driver_trip_detail_result
+  driver_list_trip_history(p_organization_id uuid, p_from timestamptz default null, p_to timestamptz default null) returns setof driver_trip_history_entry
+
+Full contract: docs/data/read-api.md.
+
+--------------------------------------------------------------------------------
+8. INTERNAL READ HELPERS
+--------------------------------------------------------------------------------
+None new. All 4 functions call the existing current_driver_id() helper
+(corrected this phase, §35) directly — no new internal-only function was
+needed for this layer, unlike the mutation layer's shared
+_driver_execute_trip_transition (there was no repeated multi-state-machine
+logic here to factor out).
+
+--------------------------------------------------------------------------------
+9-11. FUNCTION SIGNATURES, OWNERS, SECURITY DEFINER USAGE
+--------------------------------------------------------------------------------
+All 4 read functions: owned by postgres, SECURITY DEFINER, STABLE (verified
+provolatile='s' — read-only, confirmed by mutation-suite regression staying
+green and by no writes existing in any function body), explicit
+`search_path = public, pg_temp`.
+
+--------------------------------------------------------------------------------
+12. FUNCTION ACLS
+--------------------------------------------------------------------------------
+All 4: EXECUTE granted to authenticated only. No PUBLIC, no anon (verified
+statically via pg_proc.proacl and, over real HTTP, READ-8 through READ-11
+all correctly return 401/403 for an anonymous call — before any auth-chain
+logic even runs).
+
+--------------------------------------------------------------------------------
+12-15. DRIVER PROFILE / ACTIVE LIST / DETAIL / HISTORY — IMPLEMENTATION
+--------------------------------------------------------------------------------
+driver_get_profile: own-data-only projection of the caller's Driver row +
+  organization name. current_driver_id(org) resolution; ZW002 if none.
+
+driver_list_active_trips: joins trip_assignments (current, ended_at IS
+  NULL) -> trips -> passengers (display_name only) -> vehicles (label/
+  status only, LEFT JOIN since a vehicle is optional), scoped to the
+  caller's own Driver id in the given org. Ordered by scheduled_pickup_at.
+
+driver_get_trip_detail: organization derived from the Trip itself (never a
+  parameter). Requires a CURRENTLY active trip_assignments row — a
+  historical one is never sufficient. Assembles passenger identity/phone,
+  the Trip's own assistance_notes/instructions snapshot, vehicle summary,
+  and driver_visible notes (jsonb_agg of explicit jsonb_build_object
+  values) in one query.
+
+driver_list_trip_history: only ENDED (ended_at IS NOT NULL) assignments,
+  bounded date range (default trailing 90 days, hard cap 180 days),
+  trip_outcome populated only for a terminal Trip state.
+
+--------------------------------------------------------------------------------
+16. ORGANIZATION-CONTEXT BEHAVIOR
+--------------------------------------------------------------------------------
+driver_get_trip_detail: no organization_id parameter — derived from the
+Trip. The other 3: accept organization_id, but it never grants authority —
+every call independently re-validates auth.uid() -> active Membership
+(role=driver) -> linked active Driver row in that specific org, live, every
+time. Verified: MULTIORG-2 (a multi-org user's stronger Org A role grants
+nothing in Org A when they hold no Driver row there) and ORG-CONTEXT-1 (a
+foreign org_id parameter does not grant access to that org).
+
+--------------------------------------------------------------------------------
+17-20. PASSENGER FIELD MATRIX / INCLUDED / EXCLUDED / PHONE / ASSISTANCE
+--------------------------------------------------------------------------------
+Full matrix: docs/security/driver-data-minimization.md. Summary: exactly 2
+of 8 passengers columns are EVER returned, in any function, under any
+condition — display_name (list+detail) and phone (detail only, ZD-097).
+assistance_notes comes from trips.assistance_notes/instructions (the
+existing per-Trip snapshot), never from passengers.assistance_notes.
+Every other passengers column (id, organization_id, status, timestamps) is
+never returned. No wheelchair/companion/medical field exists in the
+schema beyond the free-text assistance_notes/instructions already
+included — none was invented (work item §20, verified against the actual
+schema, not inferred).
+
+--------------------------------------------------------------------------------
+21. PICKUP/DESTINATION RULE
+--------------------------------------------------------------------------------
+Trip's own pickup_description/destination_description snapshot fields are
+used directly in the active list and detail — never a Facility join.
+Facility table remains entirely unreachable by Driver, unchanged.
+
+--------------------------------------------------------------------------------
+23-24. FACILITY-DATA / VEHICLE-DATA RULES
+--------------------------------------------------------------------------------
+Facility: zero exposure, confirmed above. Vehicle: only label+status ever
+returned (embedded, never the base row) — vehicles_select_assigned_driver
+retired (ZD-096).
+
+--------------------------------------------------------------------------------
+25-26. DRIVER-VISIBLE NOTE IMPLEMENTATION / OPERATIONS-ONLY DENIAL
+--------------------------------------------------------------------------------
+driver_notes: jsonb array of {id, body, created_at} only, visibility=
+driver_visible filter applied in the query itself, never author_user_id.
+Verified with both a driver_visible AND an operations_only note on the
+SAME Trip in the same test (NOTE-VISIBILITY-1/2) — the operations_only
+note's text never appears in the response, and each returned note object
+has exactly the 3 allow-listed keys, confirmed via jsonb_object_keys.
+
+--------------------------------------------------------------------------------
+27-28. REQUESTER-DATA / TRANSPORTATIONREQUEST EXPOSURE RESULT
+--------------------------------------------------------------------------------
+Zero. transportation_requests is never queried by any of the 4 read
+functions. Confirmed structurally (MIN-EXCLUDED-CATEGORIES ilike sweep for
+'%requester%' across all 4 return types — none found) and by the functions'
+own SQL bodies, which never reference that table.
+
+--------------------------------------------------------------------------------
+29-30. TRIPEVENT / AUDITEVENT EXPOSURE RESULT
+--------------------------------------------------------------------------------
+Both zero, confirmed structurally (MIN-EXCLUDED-CATEGORIES sweep for
+'%audit%'/'%actor%' — none found) and functionally (no function queries
+trip_events or audit_events at all). trip_events_select_assigned_driver
+retired with no replacement (work item §24) — Driver now has zero access
+to trip_events in any direction, matching AuditEvent's existing posture.
+
+--------------------------------------------------------------------------------
+31-32. HISTORY REDACTION IMPLEMENTATION / QUERY BOUND
+--------------------------------------------------------------------------------
+driver_trip_history_entry carries only 6 fields (§ above); no passenger
+identity/phone/notes/pickup-destination-text/requester data — verified
+structurally (HISTORY-4) as well as behaviorally (HISTORY-1 through
+HISTORY-3B). Range: default trailing 90 days, hard cap 180 days, inverted
+or oversized range rejected as ZW006 (HISTORY-5/6) — documented explicitly
+as a query-cost/privacy safeguard, not a business retention rule (ZD-099);
+no data is deleted or expired by this bound.
+
+--------------------------------------------------------------------------------
+33-38. REASSIGNMENT REVOCATION / INACTIVE MEMBERSHIP / INACTIVE DRIVER /
+MULTI-ORG / NEVER-ASSIGNED / FOREIGN DRIVER RESULTS
+--------------------------------------------------------------------------------
+All CONFIRMED DENY/ALLOW exactly as required (work item §30-35):
+- Reassignment: old Driver denied on their very next call (same token, no
+  refresh); new Driver gains access immediately (DETAIL-3/3B, and over
+  real HTTP: READ-5/5B).
+- Inactive Membership: denied (DETAIL-6) — this is the specific test that
+  surfaced the current_driver_id gap; see §35 below.
+- Inactive Driver row (Membership itself active): denied (DETAIL-7).
+- Multi-org: a stronger role in one org grants nothing in another
+  (MULTIORG-1/2/3).
+- Never-assigned same-org Driver: denied, even knowing the real Trip UUID
+  (DETAIL-4, PHONE-3).
+- Foreign-org Driver: denied, no existence/PII disclosure (DETAIL-5,
+  PHONE-4, and over real HTTP: READ-7B).
+
+--------------------------------------------------------------------------------
+39. GUESSED/NONEXISTENT ID BEHAVIOR
+--------------------------------------------------------------------------------
+A nonexistent Trip UUID produces the exact same ZW002 as a real, foreign,
+inaccessible Trip (DETAIL-11) — no existence oracle, consistent with the
+mutation layer's established convention (ZD-085).
+
+--------------------------------------------------------------------------------
+40. FUTURE-COLUMN LEAK PROTECTION
+--------------------------------------------------------------------------------
+Structural, not just behavioral: each of the 4 return types' exact column
+set is asserted directly against pg_attribute (MIN-KEYS-PROFILE/LIST/
+DETAIL/HISTORY) — a future column added to trips/passengers/vehicles/
+trip_notes literally cannot appear in a response without a human editing
+the type definition. Cross-checked over real HTTP (READ-12): the actual
+PostgREST JSON response's key set matches the documented allow-list
+exactly.
+
+--------------------------------------------------------------------------------
+41-43. EXACT RPC RESULT-KEY TESTS / ANON RPC TESTS / PUBLIC EXECUTE RESULT
+--------------------------------------------------------------------------------
+Key-set: see §40. anon: denied on all 4 functions, both at the SQL level
+(DETAIL-10 and driver_read_privilege_tests' ACL check) and over real HTTP
+(READ-8 through READ-11). PUBLIC EXECUTE: confirmed absent for all 4
+(driver_read_privilege_tests "exposed-rpcs-authenticated-only").
+
+--------------------------------------------------------------------------------
+44. REAL POSTGREST/GOTRUE RESULTS
+--------------------------------------------------------------------------------
+15/15 PASS (driver_read_probe.js, extending the established get_real_
+tokens.js pattern with a real org-b-driver token added this phase). Covers
+profile, active list, detail, history, reassignment revocation (same
+token, no refresh), inactive membership, never-assigned Driver, foreign-
+org Driver, anon (all 4 functions), and the exact-key-set JSON shape
+check.
+
+--------------------------------------------------------------------------------
+45. DIRECT PASSENGER SELECT REGRESSION
+--------------------------------------------------------------------------------
+Confirmed still 0 rows for a Driver, even their own actively-assigned
+passenger (BASE-TABLE-REGRESSION-1), paired in the same test file with the
+SAME Driver, SAME Trip, receiving the passenger's display_name and phone
+through driver_get_trip_detail (BASE-TABLE-REGRESSION-2) — demonstrating
+the base-table-vs-controlled-projection distinction directly, per work
+item §40.
+
+--------------------------------------------------------------------------------
+46. DIRECT TRIP/BASE-TABLE SELECT REGRESSION CHANGES
+--------------------------------------------------------------------------------
+rls_adversarial_tests.sql tests F ("Driver SELECT own assigned Trip") and I
+("Driver SELECT driver_visible note") changed from ALLOW to DENY, per the
+intentional retirement in §5. Per work item §58, this was NOT a silent
+change: both tests now carry an explicit inline OLD CONTRACT / NEW
+CONTRACT comment block documenting exactly what changed, why, and where
+the successor coverage lives, and reference ZD-096.
+
+--------------------------------------------------------------------------------
+47-51. RLS / CONSTRAINT / SECURITY DEFINER / MUTATION / IDEMPOTENT-
+AUTHORIZATION REGRESSION RESULTS
+--------------------------------------------------------------------------------
+  rls_adversarial_tests.sql             32/32  PASS (F/I updated per §46;
+                                                      all 30 others
+                                                      unchanged)
+  constraint_tests.sql                  13/13  PASS
+  function_privilege_tests.sql           7/7   PASS
+  security_definer_exposure_tests.sql   20/20  PASS
+  mutation_privilege_tests.sql           7/7   PASS
+  mutation_lifecycle_tests.sql          24/24  PASS
+  mutation_assignment_tests.sql         16/16  PASS
+  mutation_authorization_tests.sql       4/4   PASS
+  mutation_atomicity_tests.sql           2/2   PASS
+  mutation_idempotent_authorization_tests.sql  6/6  PASS
+  mutation_concurrency_test.sh                 PASS
+All zero regressions beyond the two intentional, documented F/I changes.
+
+--------------------------------------------------------------------------------
+52. CLEAN DB RESET RESULT
+--------------------------------------------------------------------------------
+`supabase db reset` run fresh, immediately before the final full regression
+below (not an accumulated session) — result is fully reproducible from a
+clean state.
+
+--------------------------------------------------------------------------------
+53. PERFORMANCE / INDEX OBSERVATIONS
+--------------------------------------------------------------------------------
+Reviewed query shapes against existing indexes (no `EXPLAIN` output
+captured formally, but structurally reviewed): driver_list_active_trips
+and driver_list_trip_history both filter trip_assignments on
+(organization_id, driver_id, ended_at) — covered by the existing
+trip_assignments_organization_id_idx and trip_assignments_driver_id_idx
+(P1-E2-S1); no composite (driver_id, ended_at) index exists, but assignment
+row-counts per Driver are inherently small (one active row per Driver at
+most, plus a bounded 180-day history window) so this was not judged to
+need a new index this phase. driver_get_trip_detail is a single-Trip
+lookup by primary key plus one indexed trip_assignments lookup — no new
+index needed. No migration adds an index this phase; none was judged
+genuinely necessary at current/foreseeable data volumes, so none was added
+speculatively (work item §67's own caution against premature indexing).
+
+--------------------------------------------------------------------------------
+54-56. DOCUMENTATION CREATED / UPDATED / DECISION-REGISTER ENTRIES
+--------------------------------------------------------------------------------
+Created:
+  docs/security/driver-data-minimization.md (mandatory field matrix)
+  docs/data/read-api.md (mandatory RPC documentation)
+
+Updated:
+  docs/product/decision-register.md (ZD-094 through ZD-100 appended)
+  docs/security/rls-model.md (policy inventory, helper function table,
+    "deliberately NOT solved yet" section, header)
+  docs/security/rls-test-matrix.md (pointer to new suites, F/I note)
+  docs/product/authorization-model.md (forward-reference note on the §U
+    illustrative policy sketch, pointing to the actual current state)
+
+Decision register (ZD-094 through ZD-100, full text in decision-register.md):
+  ZD-094  Driver read API architecture (narrow SECURITY DEFINER
+          projections, explicit composite types, no wildcard serialization)
+  ZD-095  Trip detail requires CURRENT active assignment; uniform ZW002
+          convention for all read denials
+  ZD-096  Driver base-table SELECT retirement (6 retired, trip_exceptions
+          deliberately retained)
+  ZD-097  Passenger minimum-necessary allowlist
+  ZD-098  Driver-visible TripNote embedding rule
+  ZD-099  History redaction model + query bound
+  ZD-100  current_driver_id() corrected to require an active Membership
+          (fixes the pre-existing gap — see §35 below)
+
+--------------------------------------------------------------------------------
+57. FILES CREATED
+--------------------------------------------------------------------------------
+  docs/data/read-api.md
+  docs/security/driver-data-minimization.md
+  docs/reports/P1-E2-S3-completion-report.txt (this file)
+  supabase/migrations/20260831110000_driver_read_result_types.sql
+  supabase/migrations/20260831110100_driver_read_api.sql
+  supabase/migrations/20260831110200_driver_base_table_policy_tightening.sql
+  supabase/migrations/20260831110300_current_driver_id_membership_check.sql
+  supabase/tests/driver_read_authorization_tests.sql
+  supabase/tests/driver_read_history_tests.sql
+  supabase/tests/driver_read_minimization_tests.sql
+  supabase/tests/driver_read_privilege_tests.sql
+
+FILES MODIFIED:
+  docs/product/authorization-model.md
+  docs/product/decision-register.md
+  docs/security/rls-model.md
+  docs/security/rls-test-matrix.md
+  supabase/tests/rls_adversarial_tests.sql (tests F/I, per §46)
+
+No file outside supabase/ and docs/ was touched. /Users/datamatics/Zenward-Web
+was not touched. No Next.js/React/application code of any kind was touched.
+No remote Supabase project was linked. No .env.local/service-role/JWT-
+secret/database-password/production-API-key material was created by me at
+any point (a pre-existing, properly-gitignored .env.local from the
+original Next.js scaffold — dated before this session — remains untouched
+and was not read or altered).
+
+--------------------------------------------------------------------------------
+35. THE current_driver_id() GAP — FULL ACCOUNT (referenced above; detailed here)
+--------------------------------------------------------------------------------
+While writing driver_read_authorization_tests.sql's inactive-Membership
+test (DETAIL-6, work item §31's required "critical test"), the test failed
+unexpectedly: an inactive-Membership Driver still received a successful
+Trip detail response. Root cause: current_driver_id() (a P1-E2-S1 helper,
+already committed at the time this gap was found) resolved auth.uid() to a
+Driver row using only `drivers.status = 'active'` — it never cross-
+referenced the underlying `memberships` table's status or role AT ALL.
+This meant a Driver whose Membership was revoked but whose `drivers` row
+remained active kept full authority, through EVERY function built on
+current_driver_id() — not just this phase's read RPCs, but also
+is_driver_assigned_to_trip and every P1-E2-S2 mutation RPC's authorization
+chain. is_org_member/has_org_role already checked membership status
+correctly; current_driver_id did not, and nothing before this phase's
+specific test happened to exercise that exact combination.
+
+Fixed via a new append-only migration (20260831110300, since the
+defining migration is historical and immutable) that adds an EXISTS check
+against an active, role=driver Membership row, alongside the existing
+drivers.status check. Signature/return type unchanged, so every caller was
+corrected automatically. Full regression re-run immediately after: all 13
+SQL suites (156 assertions at that point) plus the concurrency test — zero
+regressions, and the originally-failing DETAIL-6 test now passes. Recorded
+as ZD-100. This was reported and fixed within this phase rather than
+deferred, consistent with this project's established practice.
+
+================================================================================
+SECURE READ MODEL GATE:  READY
+================================================================================
+MIGRATIONS CREATED:      4 (append-only; no historical migration edited)
+EXPOSED DRIVER READ RPCS: 4 — driver_get_profile, driver_list_active_trips,
+                          driver_get_trip_detail, driver_list_trip_history.
+                          All SECURITY DEFINER, all STABLE, all EXECUTE-
+                          granted to authenticated only (anon/PUBLIC
+                          confirmed absent by static ACL inspection and by
+                          live HTTP test).
+DRIVER DIRECT PASSENGER SELECT: DENIED (unchanged since ZD-080; re-verified
+                          this phase, BASE-TABLE-REGRESSION-1)
+BLOCKERS:                 None
+DEFERRED:
+  - A Driver-facing TripException status/issue view — trip_exceptions_
+    select_assigned_driver retained as-is, no projection built (ZD-096).
+  - A Driver-facing TripEvent timeline — zero exposure, no replacement
+    built (work item §24).
+  - Any UI/application-code integration of this read API — still not
+    built; this phase is the database layer only.
+  - Public transportation-request intake — still not built.
+NEXT RECOMMENDED PHASE:  Application-layer integration of the mutation and
+                          read RPCs built across P1-E2-S1 through P1-E2-S3
+                          into the actual Driver-facing screens (the two
+                          controlled API surfaces now exist and are fully
+                          tested; nothing currently consumes them), OR a
+                          Dispatcher/Organization Admin read-model review
+                          if product priority shifts there first — not
+                          decided in this report, per instruction not to
+                          assume.
+================================================================================
+
+Stopping here per instruction. Not proceeding into application
+integration, public intake, a provider portal, or any deployment step
+without further direction.

@@ -1151,6 +1151,90 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Security
 - **Review Trigger:** Any future actor-scoped (not role-scoped) mutation RPC with idempotent-retry semantics — apply this same "verify the retry via trusted history, never via mere historical relationship" pattern
 
+### ZD-094 — Driver read API architecture: narrow SECURITY DEFINER projections, explicit composite types, no wildcard serialization
+
+- **Date:** 2026-08-31
+- **Category:** Architecture / Security
+- **Decision:** The Driver read boundary (P1-E2-S3) is implemented as 4 narrow, purpose-specific `SECURITY DEFINER` functions (`driver_get_profile`, `driver_list_active_trips`, `driver_get_trip_detail`, `driver_list_trip_history`), each `STABLE` (read-only, verified to never mutate `trips`/`trip_assignments`/`trip_events`/`audit_events`), each returning an explicit composite type (`driver_profile_result`, `driver_active_trip_summary`, `driver_trip_detail_result`, `driver_trip_history_entry`) rather than any canonical table rowtype. No function anywhere in this layer uses `passenger.*`, `to_jsonb(passenger)`, `row_to_json(passenger)`, or any other whole-row serialization — every returned field is named explicitly, including inside the `driver_notes` jsonb array (`jsonb_build_object('id', ..., 'body', ..., 'created_at', ...)`, never a serialized `trip_notes` row).
+- **Status:** CONFIRMED — implemented and verified (`driver_read_privilege_tests.sql`; `driver_read_minimization_tests.sql`'s exact-column-set assertions against `pg_attribute`, which prove this structurally, not merely by inspection; real HTTP cross-validation confirming the PostgREST JSON shape matches exactly)
+- **Reason:** RLS controls rows, not columns (work item §4) — a Driver-facing policy on `passengers` or a widened `trips` policy would still return every column on that row, including any added later. An explicit composite type makes the projection itself the security boundary: a future column added to `trips`/`passengers`/`vehicles`/`trip_notes` cannot appear in a Driver-facing response without a human deliberately editing the type definition.
+- **Affected Product Areas:** All 4 Driver read RPCs and their return types
+- **Dependencies:** ZD-085 (reuses the same 6-code error contract), ZD-089 (same narrow-function-per-purpose pattern as the mutation RPCs)
+- **Owner:** Security
+- **Review Trigger:** Any future Driver-facing (or other role-facing) read capability — apply this same pattern rather than a row-scoped table policy or a whole-row-serializing function
+
+### ZD-095 — Trip detail requires a CURRENTLY active assignment; uniform not_found convention for all read denials
+
+- **Date:** 2026-08-31
+- **Category:** Security
+- **Decision:** `driver_get_trip_detail` requires the caller to hold a currently active (`ended_at IS NULL`) `trip_assignments` row on the specific Trip — a historical assignment alone is never sufficient, and reassignment revokes detailed access on the caller's very next call (live-checked, no JWT refresh needed). Every denial reason for the 4 read RPCs — nonexistent Trip, foreign-org, never-assigned, formerly-assigned-but-reassigned-away, inactive Membership, inactive Driver, zero-membership user, Platform Admin without Driver context — is uniformly `ZW002 not_found`. Unlike the mutation layer (ZD-085's `not_found` vs `unauthorized` distinction, which exists because a Driver retained *read* visibility into a Trip they'd been reassigned away from, via the now-retired `trips_select_assigned_driver`), no such carve-out applies here: since direct base-table Trip access is retired for Driver entirely (ZD-096), a formerly-assigned Driver has zero remaining legitimate visibility into the Trip through any path, so there is no "they can see it, they just can't act on it" case to distinguish — `unauthorized` (ZW001) is simply never reachable from these 4 functions.
+- **Status:** CONFIRMED — implemented and verified (`driver_read_authorization_tests.sql` DETAIL-1 through DETAIL-11, MULTIORG-1/2; real HTTP READ-5/5B for reassignment revocation)
+- **Reason:** Matches the work item's explicit requirement (§15/§30) that reassignment revoke detailed access immediately, and keeps the read boundary simpler and more conservative than the write boundary's necessarily more nuanced convention, since no legitimate reason exists for a Driver to retain any visibility into a Trip they no longer hold.
+- **Affected Product Areas:** `driver_get_trip_detail` (and, by the same reasoning, `driver_list_active_trips`/`driver_list_trip_history`, which are inherently scoped by their own WHERE clauses rather than needing a separate denial-reason distinction)
+- **Dependencies:** ZD-085, ZD-096
+- **Owner:** Security
+- **Review Trigger:** None anticipated
+
+### ZD-096 — Driver base-table SELECT retirement: 6 policies retired, trip_exceptions deliberately retained
+
+- **Date:** 2026-08-31
+- **Category:** Architecture / Security
+- **Decision:** Following the full Driver read-surface audit (docs/security/driver-data-minimization.md), 6 Driver-scoped base-table SELECT policies are retired as superseded by the new read API: `drivers_select_own` (→ `driver_get_profile`), `trips_select_assigned_driver` (→ `driver_list_active_trips`/`driver_get_trip_detail`/`driver_list_trip_history`), `trip_assignments_select_own_driver` (→ the same three), `vehicles_select_assigned_driver` (→ vehicle summary embedded in the read API), `trip_notes_select_assigned_driver_visible` (→ `driver_notes` embedded in `driver_get_trip_detail`), and `trip_events_select_assigned_driver` (retired per work item §24 with no replacement — no TripEvent timeline is exposed to Driver in this phase at all). `trip_exceptions_select_assigned_driver` is deliberately **NOT** retired: no replacement projection is built this phase (work item §26 explicitly defers building one), so retiring it would remove existing, already narrowly-scoped (ever-assigned-Driver-only) functionality with no successor and no independently-identified over-exposure beyond that existing scoping. Organization Admin/Dispatcher SELECT access on every affected table is completely untouched.
+- **Status:** CONFIRMED — implemented and verified (`driver_read_privilege_tests.sql` "retired-policies-gone"/"trip-exceptions-deliberately-retained"/"ops-access-untouched"; `rls_adversarial_tests.sql` tests F/I updated to the new contract per work item §58, with the old/new contract documented inline in that file rather than silently changed)
+- **Reason:** `trips_select_assigned_driver` in particular exposed every column on any Trip a Driver ever held an assignment on, indefinitely, including fields with no Driver-facing need (`request_id`, `cancellation_reason`, etc.) — a textbook case of the exact column-minimization risk RLS alone cannot prevent (work item §4/§5, "do not assume Passenger is the only table with column-minimization risk"). `trip_events_select_assigned_driver` separately exposed `actor_user_id` (identifying which other person performed historical actions) indefinitely, matching the work item's explicit "no internal actor/event metadata without a concrete need" (§24).
+- **Affected Product Areas:** `drivers`, `trips`, `trip_assignments`, `vehicles`, `trip_notes`, `trip_events` RLS policy inventory
+- **Dependencies:** ZD-080 (the same data-minimization principle extended beyond Passenger), ZD-094
+- **Owner:** Security
+- **Review Trigger:** A future Driver-facing TripException status view — would need its own explicit review of whether `trip_exceptions_select_assigned_driver` should then also be retired in favor of a purpose-built projection, consistent with the pattern established here
+
+### ZD-097 — Passenger minimum-necessary allowlist for the Driver read API
+
+- **Date:** 2026-08-31
+- **Category:** Security / Product
+- **Decision:** The Driver read API returns exactly two `passengers` fields, ever: `display_name` (active list and detail) and `phone` (detail only, never list or history). Every other `passengers` column (`id`, `organization_id`, `assistance_notes`, `status`, `created_at`, `updated_at`) is never returned. Assistance/instruction information shown to a Driver comes from `trips.assistance_notes`/`trips.instructions` — the existing immutable per-Trip operational snapshot (schema.md) — never from `passengers.assistance_notes`, to avoid two divergent sources of the same kind of fact for the same Trip.
+- **Status:** CONFIRMED — implemented and verified (`driver_read_minimization_tests.sql` MIN-KEYS-DETAIL, PHONE-1 through PHONE-4, BASE-TABLE-REGRESSION-1/2)
+- **Reason:** Direct base-table Passenger SELECT remains permanently off the table for Driver (ZD-080, untouched by this phase) — this allowlist is the entirety of what a Driver ever receives about a Passenger, reviewed field-by-field rather than assumed.
+- **Affected Product Areas:** `driver_active_trip_summary`, `driver_trip_detail_result`
+- **Dependencies:** ZD-080
+- **Owner:** Product / Security
+- **Review Trigger:** Any proposed new Passenger field — must be independently reviewed against this allowlist before being added to any Driver-facing response, never assumed included
+
+### ZD-098 — Driver-visible TripNote embedding: explicit fields only, author metadata never exposed
+
+- **Date:** 2026-08-31
+- **Category:** Security
+- **Decision:** `driver_get_trip_detail` embeds only `visibility='driver_visible'` `trip_notes` rows, as a `jsonb` array of explicitly-constructed `{id, body, created_at}` objects. `author_user_id`, `visibility`, `organization_id`, and `trip_id` are never included in the note objects (the last two are redundant with the surrounding response; the first two are unnecessary operational/administrative metadata for a Driver). `operations_only` notes are never returned under any condition.
+- **Status:** CONFIRMED — implemented and verified (`driver_read_minimization_tests.sql` NOTE-VISIBILITY-1/2)
+- **Reason:** Matches the same data-minimization principle applied everywhere else in this phase — the existing `trip_notes_select_assigned_driver_visible` policy (retired, ZD-096) was already correctly row-scoped but still exposed the full row including `author_user_id`, which the embedded projection now excludes by construction.
+- **Affected Product Areas:** `driver_get_trip_detail`, `driver_trip_detail_result.driver_notes`
+- **Dependencies:** ZD-048 (TripNote visibility), ZD-096
+- **Owner:** Security
+- **Review Trigger:** None anticipated
+
+### ZD-099 — History redaction model and query bound
+
+- **Date:** 2026-08-31
+- **Category:** Security / Product
+- **Decision:** `driver_list_trip_history` returns only: `trip_id`, `scheduled_pickup_at`, `assignment_started_at`, `assignment_ended_at`, `end_reason`, and `trip_outcome` (populated only when the Trip reached a terminal state — `completed`/`cancelled`/`no_show` — by the time of the query; `null` otherwise). No passenger identity, phone, notes, pickup/destination text, or requester data ever appears in history — materially more restricted than `driver_trip_detail_result`. The query range defaults to the trailing 90 days and is hard-capped at 180 days per call (`ZW006` if exceeded or inverted); this bound is an explicit query-cost/privacy safeguard, not a business data-retention policy, and does not itself delete or expire any underlying `trip_assignments`/`trips` data.
+- **Status:** CONFIRMED — implemented and verified (`driver_read_history_tests.sql` HISTORY-1 through HISTORY-7)
+- **Reason:** A past assignment is fundamentally lower-need than an active one (work item §28) — indefinitely retaining a Driver's access to a Passenger's phone number or driver-visible note text after the assignment has ended has no operational justification. `trip_outcome` being `null` for a non-terminal Trip specifically prevents a past assignment from revealing what a *different*, later Driver has done on the same Trip since — a privacy property beyond what the work item explicitly required, adopted because it followed directly from the same "when uncertain, exclude" principle applied throughout this phase.
+- **Affected Product Areas:** `driver_list_trip_history`, `driver_trip_history_entry`
+- **Dependencies:** None
+- **Owner:** Product / Security
+- **Review Trigger:** If a genuine product need for a longer history window emerges — revisit the 180-day cap explicitly rather than silently widening it
+
+### ZD-100 — current_driver_id() corrected to require an active Membership, not just an active Driver row (fixes a pre-existing P1-E2-S1 gap)
+
+- **Date:** 2026-08-31
+- **Category:** Security
+- **Decision:** `current_driver_id()` (defined in the historical, already-committed `20260830131600_rls_helper_functions.sql`; corrected via the new append-only `20260831110300_current_driver_id_membership_check.sql`, never by editing the historical file) now additionally requires an active `memberships` row with `role='driver'` for the same `(user, organization)` pair, not merely `drivers.status='active'`. Signature and return type are unchanged, so every caller — RLS policies, the P1-E2-S2 mutation RPCs' authorization chain, and this phase's read RPCs — is corrected automatically.
+- **Status:** CONFIRMED — implemented and verified (`driver_read_authorization_tests.sql` DETAIL-6, the specific test that discovered this gap; full regression re-run across all 13 SQL suites plus the concurrency test after the fix, zero regressions)
+- **Reason:** Before this fix, a Driver whose Membership was revoked (`status='inactive'`) but whose `drivers` row remained `status='active'` kept full authority through `current_driver_id()` and everything built on it — a real, previously-undetected violation of the repeatedly-stated principle that an inactive Membership must remove authority immediately and live, on every call (ZD-077), which `is_org_member`/`has_org_role` already correctly implemented but `current_driver_id` did not. Discovered by a new P1-E2-S3 read-authorization test, but the gap itself predates this phase and affected the mutation layer equally — fixed here rather than merely noted, consistent with the project's established practice of fixing a discovered gap rather than deferring it once found.
+- **Affected Product Areas:** `current_driver_id`, and transitively every function that calls it: `is_driver_assigned_to_trip`, `_lock_driver_active_assignment`, all 6 `driver_*` mutation RPCs, all 4 Driver read RPCs, and the `trip_assignments_select_own_driver`/`vehicles_select_assigned_driver` RLS policies (both now retired, ZD-096, but were still live and affected at the time this gap existed)
+- **Dependencies:** ZD-077
+- **Owner:** Security
+- **Review Trigger:** None anticipated — this is now the permanent, correct definition
+
 No decisions have been REJECTED or SUPERSEDED as of this update.
 
-**Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md)
+**Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

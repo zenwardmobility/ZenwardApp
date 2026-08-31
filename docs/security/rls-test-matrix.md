@@ -1,10 +1,14 @@
 # Zenward Platform — RLS Test Matrix
 
-**Work item:** P1-E2-S1 — Supabase Schema + RLS Foundation, amended by P1-E2-S1A — SECURITY DEFINER Exposure Audit, amended by P1-E2-S2 — Controlled Mutation & Transaction Boundary
+**Work item:** P1-E2-S1 — Supabase Schema + RLS Foundation, amended by P1-E2-S1A — SECURITY DEFINER Exposure Audit, amended by P1-E2-S2 — Controlled Mutation & Transaction Boundary, amended by P1-E2-S3 — Secure Read Models & Driver Minimum-Necessary Projection
 **Status:** All tests below were actually executed against a running local Supabase/Postgres instance and passed. This is not a syntax-only claim.
 **Last updated:** 2026-08-31
 
-**P1-E2-S2 note:** the mutation RPC layer's own test results (125 SQL assertions across 5 new suites, a genuine two-process concurrency test, and 12 real-HTTP cross-validation checks) are documented in [mutation-api.md](../data/mutation-api.md) "Testing" and the P1-E2-S2 completion report, not duplicated here. This page's own 4 pre-existing suites (below) were re-run in full after every P1-E2-S2 migration and remain 32/32, 13/13, 7/7, 20/20 — zero regressions.
+**P1-E2-S2 note:** the mutation RPC layer's own test results (131 SQL assertions across 6 suites, a genuine two-process concurrency test, and 15 real-HTTP cross-validation checks — including the P1-E2-S2A idempotent-authorization audit) are documented in [mutation-api.md](../data/mutation-api.md) "Testing" and the P1-E2-S2/P1-E2-S2A completion reports, not duplicated here.
+
+**P1-E2-S3 note:** the Driver read API's own test results (46 SQL assertions across 4 new suites, plus 15 real-HTTP cross-validation checks) are documented in [read-api.md](../data/read-api.md) "Testing" and the P1-E2-S3 completion report. Tests F ("Driver SELECT own assigned Trip") and I ("Driver SELECT driver_visible note") in the adversarial suite below changed from ALLOW to DENY in this phase — the old/new contract is documented inline in `rls_adversarial_tests.sql` itself (work item §58), not silently changed; see ZD-096.
+
+This page's own 4 pre-existing suites (below) were re-run in full after every P1-E2-S2 and P1-E2-S3 migration and remain 32/32, 13/13, 7/7, 20/20 — zero regressions beyond the intentional, documented F/I contract change.
 
 ## Methodology (work item §53 — how actor context was simulated)
 
