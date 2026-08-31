@@ -52,6 +52,8 @@ Only the `/driver` (Today) route exists as a placeholder in this phase; Trips/Hi
 
 ## 7. Public primitives (`src/components/public/`)
 
+> **Planned extraction (ZD-079):** this entire section describes code that still lives in this repository today, but is confirmed to eventually move to a separate, independently deployed marketing repository. Nothing has moved yet — see [public-marketing-separation.md](../product/public-marketing-separation.md) for what moves, what gets replicated (not shared) into the new repo, and what cleanup follows in this repo once that repository exists.
+
 `PublicHeader`, `PublicFooter`, `MarketingButton`, `SectionContainer`, `HeroContainer`, `PublicFormInput` — primitives only, no homepage. `PublicHeader`/`PublicFooter` take nav links and contact info as props with no defaults; **`PublicFooter` renders contact info only if explicitly supplied** — public contact information is still UNKNOWN (ZD-027), so nothing is fabricated. `HeroContainer` has two flat background tones (`app`, `mist`) and deliberately no gradient option.
 
 **PublicLayout** (`src/app/(public)/layout.tsx`, added at the P0-E2-S3A gate fix): a `(public)` route group renders `PublicHeader`/`PublicFooter` once for every public route (`/`, `/request-transportation`, `/healthcare-providers`) instead of each page wrapping itself individually, as the original single homepage did. Route groups don't affect the URL, so these stay unprefixed.

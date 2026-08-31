@@ -442,10 +442,607 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Engineering
 - **Review Trigger:** A future decision to support phone-width dispatch use
 
+### ZD-038 — RLS-first, deny-by-default tenant isolation
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Security
+- **Decision:** Tenant isolation is enforced at the database layer via PostgreSQL/Supabase Row Level Security, never only in UI, route guards, or client-side checks. Every tenant-owned and system-owned table has RLS enabled in the same migration that creates it, starting from deny-by-default (zero policies = zero access).
+- **Status:** CONFIRMED
+- **Reason:** The system must remain secure even when the UI is bypassed (direct API calls, forged payloads, guessed UUIDs) — the only sound way to guarantee that is enforcement at the data layer itself.
+- **Affected Product Areas:** All future schema, all future APIs
+- **Dependencies:** None
+- **Owner:** Engineering / Security
+- **Review Trigger:** Any future migration touching a tenant-owned table (mandatory RLS review, see ZD-042)
+
+### ZD-039 — Organization / Membership as the tenancy root
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** "Organization" is the canonical term for the tenant root (not "Workspace"). Tenant access is derived from a Membership table (user × organization × role × status), never from a single `users.organization_id` column, since a user may belong to more than one organization.
+- **Status:** CONFIRMED
+- **Reason:** A single organization_id on the user table cannot express multi-organization membership and would need to be redesigned the moment it's needed; the membership pattern costs nothing now and avoids that rework.
+- **Affected Product Areas:** All tenant-owned schema, auth/session logic
+- **Dependencies:** ZD-038
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated — foundational naming/pattern
+
+### ZD-040 — Direct organization_id on every tenant-owned table
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Security
+- **Decision:** Every tenant-owned table (including Trip's child records — TripAssignment, TripEvent, TripNote, TripException) carries a direct `organization_id` column, denormalized where necessary, rather than relying on multi-hop joins (e.g., event → trip → assignment → driver → membership → organization) to reach the tenant key.
+- **Status:** CONFIRMED
+- **Reason:** Fragile join chains make RLS policies slow, hard to reason about, and easy to get subtly wrong; a direct column keeps every policy a single-hop check.
+- **Affected Product Areas:** Trip, TripAssignment, TripEvent, TripNote, TripException, and all other tenant-owned tables
+- **Dependencies:** ZD-038, ZD-039
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-041 — Composite foreign keys for tenant consistency
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Security
+- **Decision:** Cross-tenant-relevant relationships (assignment→driver/vehicle/trip, trip→facility/passenger, event/note/exception→trip) will be enforced with composite foreign keys anchored on a unique `(id, organization_id)` per parent table, so a cross-tenant mismatch (e.g., a Trip in Org A referencing a Driver in Org B) is a schema-level impossibility, not something RLS alone is trusted to catch.
+- **Status:** CONFIRMED (as the future implementation strategy — not yet built)
+- **Reason:** Relational constraints reinforce RLS and catch mistakes RLS bugs or bypasses would otherwise let through; composite FKs are the simplest mechanism that achieves this without validation triggers.
+- **Affected Product Areas:** Every tenant-owned child table's schema design
+- **Dependencies:** ZD-040
+- **Owner:** Engineering
+- **Review Trigger:** Schema design (P1-E1-S2)
+
+### ZD-042 — RLS and table creation happen together; isolation testing is a phase gate
+
+- **Date:** 2026-08-30
+- **Category:** Process / Security
+- **Decision:** No table is created without its RLS policies in the same implementation stage — tables are never "secured later." No data-layer phase is considered complete until the cross-tenant adversarial test matrix (domain-model.md §O) passes.
+- **Status:** CONFIRMED
+- **Reason:** A tenant-owned table with no policies yet is a live data leak the moment it goes live, even briefly; making the test matrix a phase gate is the only way to guarantee this is actually verified, not assumed.
+- **Affected Product Areas:** All future schema/data-layer work
+- **Dependencies:** ZD-038
+- **Owner:** Engineering / Security
+- **Review Trigger:** Every future data-layer phase
+
+### ZD-043 — Service-role credential boundary
+
+- **Date:** 2026-08-30
+- **Category:** Security
+- **Decision:** The Supabase service-role credential exists only in trusted server-side code (route handlers, server actions, server components) — never in browser code, client bundles, the driver PWA, localStorage, frontend-readable cookies, or public (`NEXT_PUBLIC_`) environment variables.
+- **Status:** CONFIRMED
+- **Reason:** The service-role key bypasses RLS entirely; any client-side exposure defeats every other tenancy guarantee in this document at once.
+- **Affected Product Areas:** All backend/API implementation
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** Any code review touching Supabase client initialization
+
+### ZD-044 — Public intake boundary for TransportationRequest
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Security
+- **Decision:** Unauthenticated transportation-request submission is handled through a trusted server-side path (route handler / server action / controlled RPC) that validates input and assigns `organization_id` itself. No anonymous SELECT, UPDATE, or DELETE policy is ever created for TransportationRequest, and the client never supplies a trusted `organization_id` for the insert.
+- **Status:** CONFIRMED
+- **Reason:** An anon-insert RLS policy is the easy, wrong way to support public intake; it's a short step from an anon-insert policy to an accidental anon-select policy, and either allows enumeration/scraping of passenger-adjacent data.
+- **Affected Product Areas:** Public request intake, TransportationRequest
+- **Dependencies:** ZD-038, ZD-043
+- **Owner:** Engineering / Security
+- **Review Trigger:** Public intake implementation (P1 API design)
+
+### ZD-045 — Trip domain separations: Request, Assignment, Event, Exception
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Four separations are confirmed as the canonical domain model: (1) TransportationRequest is a distinct entity from Trip, related 1:N, not consumed by Trip creation; (2) TripAssignment is a separate, append-only entity from Trip, not plain `driver_id`/`vehicle_id` columns; (3) TripEvent is separate from Trip's `current_state` field — Trip carries current state directly, TripEvent retains history; (4) TripException is separate from Trip status — exceptions coexist with, rather than replace, a normal trip state.
+- **Status:** CONFIRMED
+- **Reason:** Each separation was evaluated against a concrete requirement this domain must support (multiple trips per request, reassignment history, current-state performance, exceptions coexisting with normal status) and each requirement is real, not speculative.
+- **Affected Product Areas:** Trip, TransportationRequest, TripAssignment, TripEvent, TripException schema design
+- **Dependencies:** None
+- **Owner:** Product / Engineering
+- **Review Trigger:** Schema design (P1-E1-S2)
+
+### ZD-046 — Driver/Passenger separated from auth identity
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Driver is an operational resource with an optional, nullable link to an auth user (`user_id`, `ON DELETE SET NULL`) — never merged with the auth identity. Passenger has no auth link at all in the current model; no passenger self-service login is assumed.
+- **Status:** CONFIRMED
+- **Reason:** Driver records and their assignment/trip history must remain valid even if login access is revoked or the linked auth account is deleted; Passenger accounts aren't part of any confirmed product scope.
+- **Affected Product Areas:** Driver, Passenger schema design; driver auth flow
+- **Dependencies:** ZD-039
+- **Owner:** Engineering
+- **Review Trigger:** Any future decision to add passenger self-service accounts (would need its own RLS review)
+
+### ZD-047 — Location strategy: immutable snapshot, no generic Location table
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Trip stores its own pickup/destination as plain, immutable fields captured at creation/scheduling time, plus optional soft (nullable, `ON DELETE SET NULL`) references to Facility for reporting linkage only. No generic reusable `Location` entity is introduced at MVP.
+- **Status:** CONFIRMED
+- **Reason:** Historical trips must not silently change if a Passenger's or Facility's address is edited later; a snapshot-on-Trip model guarantees this without the over-normalization risk a generic Location table would introduce this early.
+- **Affected Product Areas:** Trip schema design
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** A future need for structured, queryable location data beyond what a text snapshot provides
+
+### ZD-048 — TripNote visibility: two fixed classes
+
+- **Date:** 2026-08-30
+- **Category:** Product / Security
+- **Decision:** TripNote supports exactly two visibility classes at MVP: `operations_only` (Organization Admin, Dispatcher, approved Operations Staff role if retained — never Driver, Passenger, requester, or unauthenticated users) and `driver_visible` (the same operations roles, plus the Driver legitimately assigned to that trip). Only authorized operations roles may create or change a note's visibility classification. No additional classes (`patient_visible`, `requester_visible`, `facility_visible`, `private_driver`, etc.) are added at MVP. Public transportation-request notes remain intake data on TransportationRequest, not TripNote.
+- **Status:** CONFIRMED
+- **Reason:** Resolves the blocking open question from P1-E1-S1 (Q1) that prevented finalizing TripNote's RLS policy shape; two classes cover the concrete operational need (internal coordination vs. driver instruction) without inventing unused taxonomy.
+- **Affected Product Areas:** TripNote schema design and RLS
+- **Dependencies:** ZD-045
+- **Owner:** Product / Security
+- **Review Trigger:** A concrete product need for a third visibility class (e.g., facility-visible) once facility portal access is designed
+
+### ZD-049 — Platform Admin as a system-owned grant, not a Membership role
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Security
+- **Decision:** Platform Admin is represented by a new system-owned entity, PlatformAdminGrant, keyed to the authenticated user and entirely independent of Organization Membership. `Membership.role = platform_admin` is explicitly rejected as the model. The grant is managed only through a trusted, privileged path — never writable by Organization Admins, never a self-service profile field. A future `is_platform_admin()` helper, if built, follows the same SECURITY DEFINER rules as any other helper (ZD-041's sibling pattern); the database grant remains canonical even if a cached/JWT claim is considered later.
+- **Status:** CONFIRMED
+- **Reason:** Resolves the blocking open question from P1-E1-S1 (Q5). Organization Membership is inherently organization-scoped; platform-wide privilege is deliberately not, so conflating the two into one role system would make Membership's own RLS harder to reason about and create a privilege-escalation path through org-admin-manageable data.
+- **Affected Product Areas:** New PlatformAdminGrant entity; any future cross-organization read/support path
+- **Dependencies:** ZD-039
+- **Owner:** Security
+- **Review Trigger:** Schema design (P1-E1-S2) — the grant's exact storage shape
+
+### ZD-050 — Public request tenant resolution: server-determined, single operator at MVP
+
+- **Date:** 2026-08-30
+- **Category:** Security
+- **Decision:** For the MVP single-operator launch, a public TransportationRequest's `organization_id` is resolved entirely server-side by the trusted intake path to the one configured Zenward operating organization. A client-supplied `organization_id` is never trusted, whether or not one happens to be present in the request payload. Future multi-organization intake would need server-controlled service-area/operating-rule routing — not designed now.
+- **Status:** CONFIRMED
+- **Reason:** Removes any ambiguity in the P1-E1-S1 public-intake boundary about where tenant ownership comes from; makes explicit that this remains true even as the product scales beyond one operating organization.
+- **Affected Product Areas:** Public intake implementation (P1 API design)
+- **Dependencies:** ZD-044
+- **Owner:** Security
+- **Review Trigger:** Multi-organization expansion (service-area routing design)
+
+### ZD-051 — TripAssignment is the sole assignment source of truth (supersedes prior denormalization recommendation)
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Trip does **not** carry denormalized `current_driver_id`/`current_vehicle_id` fields. TripAssignment alone is the source of truth for current assignment; the active assignment for a trip is the row with `ended_at IS NULL`. At schema-design time, evaluate a PostgreSQL partial unique index (or equivalent) enforcing one active assignment per trip.
+- **Status:** CONFIRMED — **supersedes** the P1-E1-S1 domain-model.md §G recommendation to denormalize current-assignment fields onto Trip
+- **Reason:** One unambiguous source of truth removes a Trip/TripAssignment synchronization risk, simplifies audit history, and avoids duplicated privileged references; MVP-scale query performance is expected to be sufficient with proper indexing. A future, *proven* performance need would be a separate, deliberate decision, not a default.
+- **Affected Product Areas:** Trip, TripAssignment schema design
+- **Dependencies:** ZD-045
+- **Owner:** Engineering
+- **Review Trigger:** A measured performance problem with the non-denormalized query pattern at real scale
+
+### ZD-052 — Driver assignment access, restated precisely
+
+- **Date:** 2026-08-30
+- **Category:** Security
+- **Decision:** A Driver may eventually read their own active/relevant TripAssignment, the Trip necessary to perform it, permitted passenger/trip details required for transportation, and `driver_visible` TripNotes. A Driver must not: browse all assignments in the organization, read another driver's assignment by default, self-reassign or change `driver_id`, change `vehicle_id` (unless a separately approved future vehicle-acknowledgement workflow allows it), mutate `organization_id`, access `operations_only` notes, or access another organization's data in any form.
+- **Status:** CONFIRMED
+- **Reason:** Restates the P1-E1-S1 §17 driver-assignment principle precisely enough to design RLS policies directly from it, removing any ambiguity about edge cases (vehicle changes, note visibility) that the original pass left implicit.
+- **Affected Product Areas:** TripAssignment, TripNote RLS design
+- **Dependencies:** ZD-041, ZD-048
+- **Owner:** Security
+- **Review Trigger:** Schema design (P1-E1-S2)
+
 ---
+
+**Open / undecided (domain-model.md §Q) — none of these are confirmed decisions. TripNote visibility (ZD-048), Platform Admin representation (ZD-049), and Dispatcher vs. Operations Staff (now ZD-072) are resolved and removed from this list:**
+
+- **Public facility/service-area directory for intake** — UNKNOWN, additionally gated on ZD-016 (launch territory still unknown).
+- **Requester as a persistent entity** (vs. per-request snapshot) — UNKNOWN; deferred, not blocking current schema design.
+- **Facility self-service portal shape** — UNKNOWN; already POST-MVP per the scope register.
+
+### ZD-053 — Five separate lifecycle concepts; no unified status field
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Zenward has five distinct lifecycle concepts — TransportationRequest, Trip, TripAssignment, TripException, and TripEvent (the last being history, not a stateful lifecycle) — and a status on one entity is never used to represent another's lifecycle. UI labels are analyzed individually rather than mechanically converted into stored states.
+- **Status:** CONFIRMED
+- **Reason:** Conflating these (e.g., letting assignment presence live on Trip, or letting a delay condition become a Trip state) was identified as the single most likely path to an unmaintainable, ambiguous state machine.
+- **Affected Product Areas:** All lifecycle/state schema design
+- **Dependencies:** ZD-045
+- **Owner:** Product / Engineering
+- **Review Trigger:** Schema design (P1-E1-S3)
+
+### ZD-054 — TransportationRequest lifecycle: pending / accepted / declined / cancelled
+
+- **Date:** 2026-08-30
+- **Category:** Product / Architecture
+- **Decision:** TransportationRequest has exactly four states. `pending → accepted` is system-driven, triggered atomically by the creation of the first Trip against the request — never a separate manual action. Child Trip outcomes (cancellation, completion) never write back onto Request.state.
+- **Status:** CONFIRMED
+- **Reason:** Smallest state model that captures every real behavioral distinction the product needs (submitted-vs-reviewed carries no distinct behavior, so was collapsed into `pending`).
+- **Affected Product Areas:** TransportationRequest schema design
+- **Dependencies:** ZD-045
+- **Owner:** Product
+- **Review Trigger:** Schema design (P1-E1-S3)
+
+### ZD-055 — Trip lifecycle: 9 canonical states, En Route/Arrived disambiguated
+
+- **Date:** 2026-08-30
+- **Category:** Product / Architecture
+- **Decision:** Trip.state is one of exactly 9 values: `scheduled`, `en_route_to_pickup`, `arrived_at_pickup`, `passenger_onboard`, `en_route_to_destination`, `arrived_at_destination`, `completed`, `cancelled`, `no_show`. The backend never stores a bare `en_route` or `arrived` value — always the pickup-leg or destination-leg variant. `completed` is reachable only from `arrived_at_destination`.
+- **Status:** CONFIRMED
+- **Reason:** Resolves the ambiguity flagged in the work item directly; keeping `passenger_onboard` distinct from `en_route_to_destination` captures a real NEMT-specific loading-time gap, not an arbitrary split.
+- **Affected Product Areas:** Trip schema design, driver execution UI
+- **Dependencies:** ZD-045
+- **Owner:** Product / Engineering
+- **Review Trigger:** Schema design (P1-E1-S3)
+
+### ZD-056 — No Draft Trip state at MVP
+
+- **Date:** 2026-08-30
+- **Category:** Product
+- **Decision:** Trip is created directly into `scheduled` once minimum required data is valid. No `draft` state is introduced.
+- **Status:** CONFIRMED
+- **Reason:** No approved draft-trip workflow exists; an unassigned `scheduled` Trip already represents "not yet fully arranged" without a separate concept.
+- **Affected Product Areas:** Trip creation flow
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** A future, explicitly approved multi-step/draft trip-creation workflow
+
+### ZD-057 — Assignment presence stays fully derived, never stored on Trip
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** "Needs Assignment" and "Assigned" remain UI-only presentations derived from TripAssignment's existence, never a field on Trip.
+- **Status:** CONFIRMED
+- **Reason:** Direct continuation of ZD-051 (TripAssignment as sole source of truth) — storing a redundant status on Trip would reintroduce the exact synchronization risk that decision eliminated.
+- **Affected Product Areas:** Trip, TripAssignment schema design
+- **Dependencies:** ZD-051
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-058 — TripAssignment lifecycle stays timestamp-based; no enum added
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** No additional lifecycle enum is added to TripAssignment. Creation, ending, and reassignment remain fully expressed through `assigned_at`/`ended_at`/`end_reason` and row insertion.
+- **Status:** CONFIRMED
+- **Reason:** Timestamps and row history already express every state transition TripAssignment needs; an enum would duplicate what the timestamps already say.
+- **Affected Product Areas:** TripAssignment schema design
+- **Dependencies:** ZD-051
+- **Owner:** Engineering
+- **Review Trigger:** Schema design (P1-E1-S3)
+
+### ZD-059 — Driver execution actions and their event/state mapping
+
+- **Date:** 2026-08-30
+- **Category:** Product
+- **Decision:** Six driver actions are state-changing (each maps 1:1 to a Trip transition and a TripEvent): Start Trip, Arrived at Pickup, Passenger Onboard, Depart to Destination, Arrived at Destination, Complete Trip. "Call Passenger" is a utility action that does not change Trip.state but does generate an informational TripEvent (audit value for no-show/contact-attempt history). "View Trip" and "Navigate" generate no event. "Flag Exception" creates a TripException, not a Trip state change.
+- **Status:** CONFIRMED
+- **Reason:** Distinguishes state-changing actions (which need the full controlled-transition boundary) from utility actions (which don't), directly informing which future endpoints need the heaviest verification.
+- **Affected Product Areas:** Driver execution flow, TripEvent taxonomy
+- **Dependencies:** ZD-055
+- **Owner:** Product / Engineering
+- **Review Trigger:** Schema design (P1-E1-S3)
+
+### ZD-060 — Controlled transition boundary as the mandatory mutation pattern
+
+- **Date:** 2026-08-30
+- **Category:** Security
+- **Decision:** No future client (driver or operations) is ever granted generic `UPDATE trips SET state = <value>` capability. Every lifecycle mutation passes through a controlled boundary verifying auth user → membership → linked Driver (where applicable) → active TripAssignment → organization consistency → current Trip state → transition legality, before writing state + TripEvent + AuditEvent atomically.
+- **Status:** CONFIRMED
+- **Reason:** Direct continuation of the RLS-first, deny-by-default principle (ZD-038) applied specifically to lifecycle mutations, which are more complex than simple CRUD and need transition-specific validation RLS alone can't fully express.
+- **Affected Product Areas:** All future lifecycle-mutation APIs/RPCs
+- **Dependencies:** ZD-038
+- **Owner:** Engineering / Security
+- **Review Trigger:** API/RPC design (P1-E2)
+
+### ZD-061 — Atomic state + event + audit writes
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Every state-changing mutation writes Trip.state, its TripEvent, and any required AuditEvent in a single database transaction. The system must never be observable with one written and not the others.
+- **Status:** CONFIRMED
+- **Reason:** A Trip state change without a corresponding event (or vice versa) would break the auditability the whole event/audit model exists for.
+- **Affected Product Areas:** All future lifecycle-mutation implementation
+- **Dependencies:** ZD-060
+- **Owner:** Engineering
+- **Review Trigger:** RPC/transaction implementation (P1-E2)
+
+### ZD-062 — Concurrency strategy: expected-state validation + row locking, no idempotency keys at MVP
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Concurrency is handled via expected-current-state validation plus row-level locking within the transition transaction, a future partial unique index enforcing one active TripAssignment per trip, and treating a repeated identical transition (retry) as an idempotent no-op success. Client-supplied idempotency keys and `updated_at`/version optimistic-concurrency columns are explicitly not adopted at MVP.
+- **Status:** CONFIRMED
+- **Reason:** Covers the realistic race conditions (simultaneous cancel/arrival, simultaneous reassignment, driver retry on poor connectivity) without the added protocol complexity of idempotency keys or version columns, which would be redundant given row locking.
+- **Affected Product Areas:** All future lifecycle-mutation implementation
+- **Dependencies:** ZD-051, ZD-060
+- **Owner:** Engineering
+- **Review Trigger:** A demonstrated real-world case the simpler approach doesn't cover
+
+### ZD-063 — TripEvent categories; TripAssignment vs. TripEvent relationship
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** TripEvent entries fall into four categories — state-transition, assignment, informational, system — illustrative, not a finalized enum. TripAssignment remains the canonical, queryable source of truth for current/historical assignment; TripEvent additionally carries human-readable assignment-change entries so the timeline reads naturally without a separate query.
+- **Status:** CONFIRMED
+- **Reason:** Keeps TripAssignment's RLS-critical role (domain-model.md §17) separate from TripEvent's narrative role, while still giving dispatchers a single readable timeline.
+- **Affected Product Areas:** TripEvent schema design
+- **Dependencies:** ZD-051
+- **Owner:** Engineering
+- **Review Trigger:** Schema design (P1-E1-S3)
+
+### ZD-064 — TripException lifecycle: open/resolved only; driver create-only
+
+- **Date:** 2026-08-30
+- **Category:** Product / Security
+- **Decision:** TripException has exactly two states, `open` and `resolved` — no separate `dismissed` state. Driver may create an exception only on their own actively-assigned trip; only Dispatcher/Organization Admin may resolve one. An open exception does not automatically block Trip transitions at MVP.
+- **Status:** CONFIRMED
+- **Reason:** A third state would track a distinction the resolution note already carries; the create/resolve split matches the same driver-narrow-write pattern already established for TripNote.
+- **Affected Product Areas:** TripException schema design
+- **Dependencies:** ZD-045
+- **Owner:** Product / Security
+- **Review Trigger:** A specific, approved need for exception types to hard-block transitions
+
+### ZD-065 — Running Late is a derived condition, never a Trip state
+
+- **Date:** 2026-08-30
+- **Category:** Product / Architecture
+- **Decision:** "Running Late" is computed from scheduled time vs. current time and is never stored as a Trip field or Trip state. A delay significant enough to need tracking or action is recorded as a TripException, not a Trip.state change.
+- **Status:** CONFIRMED
+- **Reason:** A stored "late" field would immediately go stale; a Trip.state value would conflict with the trip's genuine operational state (e.g., simultaneously `en_route_to_pickup` and "late"), which the work item explicitly identified as the failure mode to avoid.
+- **Affected Product Areas:** Trip presentation layer, TripException
+- **Dependencies:** ZD-055, ZD-064
+- **Owner:** Product
+- **Review Trigger:** None anticipated
+
+### ZD-066 — No-show is a distinct Trip terminal state, separate from the related exception
+
+- **Date:** 2026-08-30
+- **Category:** Product
+- **Decision:** `no_show` is a Trip terminal state, reachable only from `en_route_to_pickup` or `arrived_at_pickup`, and always a deliberate human decision — never automatic or time-triggered. `passenger_unavailable` (a TripException) may precede it as an in-progress attention flag but does not automatically become a no-show.
+- **Status:** CONFIRMED
+- **Reason:** NEMT operations need an unambiguous, queryable no-show outcome distinct from a routine cancellation; automatic time-based triggering isn't possible yet since wait-time policy (ZD-020) remains unresolved, so the decision is deliberately kept human-driven.
+- **Affected Product Areas:** Trip schema design, driver/dispatcher execution UI
+- **Dependencies:** ZD-055
+- **Owner:** Product
+- **Review Trigger:** Resolution of ZD-020 (wait-time rules), which may enable a future assisted/automatic no-show suggestion — not automatic execution
+
+### ZD-067 — Cancellation model
+
+- **Date:** 2026-08-30
+- **Category:** Product / Security
+- **Decision:** Only Dispatcher/Organization Admin execute a `→ cancelled` transition (from any non-terminal state); a driver may request one via a TripException but never executes it; a public requester's request goes through operations, not a direct mutation. The active TripAssignment is closed (never deleted); a reason is mandatory; `cancelled` is terminal with no normal-actor reopening.
+- **Status:** CONFIRMED
+- **Reason:** Matches the established driver-narrow-write pattern and keeps cancellation fully auditable with a mandatory reason, consistent with the no-silent-history-rewrite principle.
+- **Affected Product Areas:** Trip, TripAssignment schema design
+- **Dependencies:** ZD-055, ZD-058
+- **Owner:** Product / Security
+- **Review Trigger:** Schema design (P1-E1-S3)
+
+### ZD-068 — Write-once terminal timestamps may be denormalized on Trip
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Fields like `completed_at` (and analogously `cancelled_at`) may exist directly on Trip despite ZD-051's rejection of denormalizing *current* assignment fields. These are distinguished as write-once historical facts, never subsequently changed, unlike a "current driver" pointer, which represents a changing relationship that can drift out of sync with its source of truth.
+- **Status:** CONFIRMED
+- **Reason:** Clarifies that ZD-051 is about avoiding duplicated *mutable* state, not about avoiding all denormalization — a distinction worth making explicit so schema design doesn't over-apply ZD-051 to unrelated cases.
+- **Affected Product Areas:** Trip schema design
+- **Dependencies:** ZD-051
+- **Owner:** Engineering
+- **Review Trigger:** Schema design (P1-E1-S3)
+
+### ZD-069 — Return transportation as a second Trip row; optional `leg` label
+
+- **Date:** 2026-08-30
+- **Category:** Product / Architecture
+- **Decision:** Return transportation is a second, ordinary Trip row sharing `request_id` with the outbound Trip — no new relational entity. A not-yet-arranged return is the absence of a second Trip row, not a state on anything. A lightweight optional `leg` label (`outbound`/`return`/`unspecified`) on Trip is recommended for display grouping.
+- **Status:** CONFIRMED for the core model (second Trip row, shared request_id, independent timing); the `leg` field itself is **PROVISIONAL**, pending confirmation it's wanted
+- **Reason:** Confirms and extends the P1-E1-S1 1:N Request→Trip cardinality decision (ZD-045) directly to the outbound/return case, which was its original motivating example.
+- **Affected Product Areas:** Trip schema design
+- **Dependencies:** ZD-045
+- **Owner:** Product
+- **Review Trigger:** Schema design (P1-E1-S3) — confirm the `leg` field before or during
+
+### ZD-070 — Driver availability confirmed out of Trip-lifecycle scope
+
+- **Date:** 2026-08-30
+- **Category:** Product / Architecture
+- **Decision:** Driver operational availability (`Available`/`On Trip`/`Break`/`Unavailable`) is confirmed as a separate concept from Trip lifecycle, not designed in this phase, and never derived from or stored as a Trip field.
+- **Status:** CONFIRMED (as a scope boundary — the availability system itself remains undesigned)
+- **Reason:** Not required for the clarity of the five lifecycle concepts this phase defines; designing it now would be speculative without an approved driver-scheduling workflow.
+- **Affected Product Areas:** Future driver availability/shift design
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** A future work item scoped specifically to driver availability/scheduling
+
+### ZD-071 — Public request-state wording must never imply Trip/Assignment facts
+
+- **Date:** 2026-08-30
+- **Category:** Product / Security
+- **Decision:** Public-facing copy for TransportationRequest states must never imply driver assignment, vehicle confirmation, or a locked pickup time — those are Trip/TripAssignment facts, which the public surface has no read access to. "Ride Confirmed" is never permitted copy driven by Request state alone.
+- **Status:** CONFIRMED as a principle; exact copy for each state is **deferred** (content decision, not architecture)
+- **Reason:** Directly follows from Public having zero read access to Trip/TripAssignment (domain-model.md §M) — any UI implying otherwise would be describing data the requester was never actually shown.
+- **Affected Product Areas:** Public website request-status messaging
+- **Dependencies:** ZD-054
+- **Owner:** Product
+- **Review Trigger:** Public request-status UI design
+
+---
+
+**Open / undecided from P1-E1-S2 (lifecycle-model.md, Open product questions) — none of these are confirmed decisions, and none block the Lifecycle Security Gate:**
+
+- **Driver acknowledgement of assignment** — recommended useful-but-deferred (not required MVP behavior); needs explicit product confirmation before schema design treats it as present or absent.
+- **Driver assignment-decline capability** — not designed; UNKNOWN whether it exists at all.
+- **`leg` field adoption** (ZD-069) — PROVISIONAL, needs confirmation.
+- **Exact public-facing Request-state copy** (ZD-071) — deferred content decision.
+- **Exact cancellation-reason taxonomy** — free text assumed sufficient at MVP; confirm.
+
+### ZD-072 — Operations Staff removed; Dispatcher is the one canonical operations role
+
+- **Date:** 2026-08-30
+- **Category:** Product / Architecture
+- **Decision:** `operations_staff` is not introduced as a Membership role. `dispatcher` is the sole canonical operations-tier role. This resolves the item deferred from P1-E1-S1A/S2.
+- **Status:** CONFIRMED
+- **Reason:** Every permission evaluated for "Dispatcher" and "Operations Staff" across P1-E1-S1 and P1-E1-S2 was identical; no genuine permission difference was ever identified, only a title difference in prior UI copy. Per the explicit instruction to collapse identical-permission roles, a second role was not preserved by default.
+- **Affected Product Areas:** Membership role enum, all operations-facing permissions
+- **Dependencies:** ZD-039
+- **Owner:** Product / Security
+- **Review Trigger:** A concretely identified, approved permission difference between operations staff tiers
+
+### ZD-073 — MVP organization role set finalized
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Security
+- **Decision:** Membership.role is exactly one of `{organization_admin, dispatcher, driver}`. No other value is valid, including anything resembling platform admin (which is never expressed via Membership at all — see ZD-049).
+- **Status:** CONFIRMED
+- **Reason:** Smallest role set that covers every distinct permission tier identified across the domain, lifecycle, and authorization passes; avoids speculative role proliferation.
+- **Affected Product Areas:** Membership schema design
+- **Dependencies:** ZD-039, ZD-072
+- **Owner:** Product / Security
+- **Review Trigger:** Schema design (P1-E2)
+
+### ZD-074 — Platform Admin direct read is scoped to four tables
+
+- **Date:** 2026-08-30
+- **Category:** Security
+- **Decision:** Platform Admin receives standing, RLS-level, cross-organization SELECT only on Organization, PlatformAdminGrant, Membership, and AuditEvent. All other tenant-operational tables (Passenger, Trip, TripAssignment, TripEvent, TripNote, TripException, TransportationRequest, Driver, Vehicle, Facility) require a specific, controlled, audited support action if cross-organization access is ever genuinely needed — never a blanket SELECT policy.
+- **Status:** CONFIRMED
+- **Reason:** Directly implements the instruction not to assume platform admins need unrestricted browser-level SELECT on every tenant table; the four granted tables are genuinely platform-level or low-sensitivity/high-support-value, while operational and passenger data stay behind an audited, deliberate path even for platform admins.
+- **Affected Product Areas:** RLS policy design for all 15 entities
+- **Dependencies:** ZD-049
+- **Owner:** Security
+- **Review Trigger:** RLS policy design (P1-E2); any future concrete need for cross-org operational-data support access, which should be designed as its own audited action, not a policy widening
+
+### ZD-075 — Least-privilege split between Organization Admin and Dispatcher
+
+- **Date:** 2026-08-30
+- **Category:** Security
+- **Decision:** Driver profile management (create/deactivate) and Vehicle administration (create/update) belong to Organization Admin, not Dispatcher. Dispatcher gets read-only access to Driver and Vehicle records for assignment purposes.
+- **Status:** CONFIRMED
+- **Reason:** Both have access-management or fleet-liability implications beyond routine day-to-day dispatch; keeping them with Organization Admin is a deliberate least-privilege choice, not an oversight.
+- **Affected Product Areas:** Driver, Vehicle RLS design
+- **Dependencies:** ZD-073
+- **Owner:** Security
+- **Review Trigger:** RLS policy design (P1-E2)
+
+### ZD-076 — Named transition actions replace a generic transition action
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** There is no generic `transition_trip_state` action. Each driver-initiated Trip transition is its own named action (`start_trip_to_pickup`, `mark_arrived_at_pickup`, `mark_passenger_onboard`, `start_trip_to_destination`, `mark_arrived_at_destination`, `complete_trip`).
+- **Status:** CONFIRMED
+- **Reason:** Matches the "small, single-purpose" policy-shape principle directly — one action name standing for six different real operations would be exactly the ambiguity this whole model set out to avoid.
+- **Affected Product Areas:** Driver execution API/RPC design
+- **Dependencies:** ZD-055, ZD-060
+- **Owner:** Engineering
+- **Review Trigger:** API/RPC design (P1-E2)
+
+### ZD-077 — Membership status stays binary (active/inactive); no cached authorization claims
+
+- **Date:** 2026-08-30
+- **Category:** Security
+- **Decision:** Membership.status is exactly `active` or `inactive` — no `invited`/`pending`/`suspended` domain states. RLS authorization checks query live Membership state on every request; no custom JWT claim is trusted as authoritative for the active/inactive gate.
+- **Status:** CONFIRMED
+- **Reason:** An invitation-not-yet-accepted nuance is better captured by a nullable timestamp than a new state; a cached claim would reintroduce exactly the "session still valid after revocation" risk the whole membership-lifecycle rule exists to prevent.
+- **Affected Product Areas:** Membership schema design, RLS helper design
+- **Dependencies:** ZD-039
+- **Owner:** Security
+- **Review Trigger:** Schema design (P1-E2)
+
+### ZD-078 — Hard delete philosophy: presumptively denied for historically significant entities
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** No ordinary hard DELETE, for any role, on Trip, TripAssignment, TripEvent, TripNote, TripException, AuditEvent, TransportationRequest, Driver (with any assignment history), or Passenger (with any trip history). Narrow exceptions (a Vehicle/Facility/Membership row with provably zero historical references) remain Organization Admin/Platform Admin actions, not routine capabilities.
+- **Status:** CONFIRMED (as philosophy — no archive-field mechanism is introduced yet)
+- **Reason:** Consistent with the append-only/no-silent-history-rewrite principle already established for TripEvent and AuditEvent, extended to every entity with plausible historical significance.
+- **Affected Product Areas:** All entity schema design
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** Schema design (P1-E2)
+
+---
+
+**Open / undecided from P1-E1-S3 (authorization-model.md, Open questions) — none of these are confirmed decisions, and none block the Authorization Security Gate:**
+
+- **Exact Passenger field-level visibility for Driver** — which specific columns, vs. the full record Organization Admin/Dispatcher see. Schema-design-time question.
+- **Driver acknowledgement/decline capability** — carried over from lifecycle-model.md, still unresolved.
+- **Narrow hard-delete edge cases for Vehicle/Facility** — minor implementation convenience, not a security requirement either way.
+- **Future JWT claim caching for performance** — if ever introduced, must be paired with the live-check discipline in ZD-077; not needed at MVP.
+
+**Addendum to ZD-015 (2026-08-30, lifecycle model):** ZD-015's provisional trip-status list is now superseded for backend purposes by the canonical Trip state model in ZD-055/lifecycle-model.md §C. The visual system's status *presentation* categories (StatusBadge, TripStatus) remain valid at the UI layer — the label→category mapping in `src/components/ui/TripStatus.tsx` should be revisited against the confirmed canonical states during schema design, but no UI code is changed in this phase.
 
 **Addendum to ZD-015 (2026-08-29, design gate):** Design review reaffirmed that the trip status list stays PROVISIONAL. The visual system may define status *presentation* categories, but the actual Zenward trip state machine is established during transportation workflow/domain modelling — the provisional list must not be converted into application logic before that.
 
+### ZD-079 — Public marketing site becomes a separate repository
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Deployment
+- **Decision:** The public Zenward marketing/acquisition website will become a separate Next.js project in its own independently deployable repository. This repository (`ZenWard`) remains the product application, ultimately containing only `/operations/...`, `/driver/...`, and minimal application-level routes (e.g. authentication, once designed) — no marketing pages. The standalone marketing repository (not yet created) will own `/`, `/request-transportation`, `/healthcare-providers`, `/services`, `/about`, `/contact`, and required legal pages. `PublicHeader`/`PublicFooter` and other marketing-specific components belong to that repository, not this one.
+- **Status:** CONFIRMED (the separation itself). Execution is explicitly **not** performed yet — see public-marketing-separation.md for what moves, what's shared, and what's cleaned up once the standalone repository exists.
+- **Reason:** The marketing site needs to launch and evolve independently of the operational platform's development pace; separation also reduces the public-facing surface's proximity to operational systems and gives each surface its own deployment lifecycle.
+- **Affected Product Areas:** `src/app/(public)/`, `src/components/public/`, deployment/DNS strategy, README structure
+- **Dependencies:** None
+- **Owner:** Engineering / Product
+- **Review Trigger:** Creation of the standalone marketing repository — at which point the cleanup list in public-marketing-separation.md §4 executes
+
+**Open / undecided from this decision (public-marketing-separation.md §6) — non-blocking for recording the decision itself, but must resolve before executing the cleanup:**
+
+- What `/` serves in the product app once marketing moves out.
+- Domain/subdomain strategy for the two deployments (compounds ZD-027, production domain still UNKNOWN).
+- Whether design tokens eventually warrant a shared, versioned package instead of two manually-synced `globals.css` copies.
+
+### ZD-080 — Driver has no generic Passenger table SELECT; passenger data is minimum-necessary and assignment-scoped
+
+- **Date:** 2026-08-30
+- **Category:** Security
+- **Decision:** The Driver role does not receive generic direct SELECT access to the canonical Passenger table, under any RLS policy shape — not even one scoped to "the passenger on my assigned trip." Driver-required passenger information (potentially: display name, phone number where operationally required, pickup/destination information, permitted assistance requirements, companion information, driver-visible instructions) is delivered only through a controlled, assignment-scoped read model — a narrowly defined security-invoker view, a carefully scoped RPC, or a trusted server query returning explicit fields — chosen at schema/API design time, not decided here. No universal Passenger read helper is created. The authorization chain remains: auth user → active Membership → linked Driver → active/relevant TripAssignment → same Organization → permitted Trip → minimum-necessary driver data projection. Direct knowledge of a `passenger_id` or `trip_id` grants no access on its own.
+- **Status:** CONFIRMED
+- **Reason:** Row Level Security controls which rows a query can see, but does not by itself guarantee minimum-necessary *column* exposure — a row-scoped Driver SELECT policy on Passenger would still return every column in that row. Removing table-level SELECT entirely, in favor of an explicit field-projecting mechanism, removes that failure mode by construction rather than relying on a second, easy-to-forget column-privilege layer.
+- **Affected Product Areas:** Passenger, Trip, TripAssignment RLS/API design
+- **Dependencies:** ZD-041, ZD-060 (amends the Driver-Passenger access description in authorization-model.md §M/§I, which had described a row-scoped table SELECT)
+- **Owner:** Security
+- **Review Trigger:** Schema/API design (P1-E2) — choice of view vs. RPC vs. trusted-query mechanism, and the exact minimum-necessary field list
+
+### ZD-081 — CHECK constraints, not native ENUM types, for canonical states
+
+- **Date:** 2026-08-30
+- **Category:** Architecture
+- **Decision:** Every canonical state/role/visibility column (`memberships.role`/`status`, `transportation_requests.state`, `trips.state`, `trip_notes.visibility`, `trip_exceptions.status`) is implemented as `text` + a `CHECK` constraint, not a native PostgreSQL `ENUM` type.
+- **Status:** CONFIRMED
+- **Reason:** Adding a new allowed value to a CHECK constraint is a plain, transaction-safe migration; altering a native ENUM has real migration friction (values can't be added and used in the same transaction in the way DDL elsewhere in a migration can). Several of these lists are documented as likely to evolve (e.g., trip exception taxonomy), so migration maintainability was prioritized without sacrificing "no unconstrained free text for canonical states."
+- **Affected Product Areas:** All canonical-state columns across the schema
+- **Dependencies:** ZD-053 through ZD-055 (lifecycle states), ZD-048 (note visibility), ZD-064 (exception states)
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-082 — Composite foreign keys implemented via UNIQUE(id, organization_id)
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Security
+- **Decision:** ZD-041's composite-FK strategy is now implemented exactly as specified: every tenant-owned parent table (`drivers`, `passengers`, `facilities`, `vehicles`, `transportation_requests`, `trips`) carries `UNIQUE (id, organization_id)`, and every cross-entity child reference (trip→passenger/request/facility, trip_assignment→trip/driver/vehicle, trip_events/trip_notes/trip_exceptions→trip) is a composite FK against that pair — never a plain single-column FK for these relationships.
+- **Status:** CONFIRMED — implemented and verified (adversarial tests V/W/X and the full constraint-test suite, all passing)
+- **Reason:** Makes a cross-tenant relationship a schema-level impossibility rather than something RLS alone is trusted to prevent, exactly as ZD-041 anticipated.
+- **Affected Product Areas:** All tenant-owned table relationships
+- **Dependencies:** ZD-041
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-083 — Column-level GRANT/REVOKE for field-level mutation enforcement
+
+- **Date:** 2026-08-30
+- **Category:** Architecture / Security
+- **Decision:** Where authorization-model.md §K distinguishes field groups with different owners (planning vs. lifecycle vs. tenant vs. reference fields), this is enforced at the Postgres column-privilege level (`REVOKE UPDATE ... ; GRANT UPDATE (col1, col2, ...) ...`), not by policy logic alone. Applied to `trips`, `trip_assignments`, `memberships`, and `organizations`. On `trips` specifically, this phase is deliberately more conservative than the approved model strictly requires: `state` and all terminal timestamp/reason fields are not grantable to any authenticated role at all yet, since the controlled transition RPC that would need them is explicitly out of scope for this phase (ZD-060/ZD-061 not yet built).
+- **Status:** CONFIRMED
+- **Reason:** RLS controls row visibility, not column exposure — column-level privilege is the correct, native Postgres mechanism for the field-level distinctions authorization-model.md §K already called for, and closes the gap without waiting for RPCs that don't exist yet.
+- **Affected Product Areas:** `trips`, `trip_assignments`, `memberships`, `organizations` RLS design
+- **Dependencies:** ZD-060, ZD-061
+- **Owner:** Security
+- **Review Trigger:** Lifecycle-transition RPC design (a later phase) — at that point, `trips.state`/terminal fields may become reachable only through that RPC's SECURITY DEFINER context, still never through a direct client GRANT
+
+### ZD-084 — Future SECURITY DEFINER/RPC function privilege convention (mandatory migration rule, not ALTER DEFAULT PRIVILEGES)
+
+- **Date:** 2026-08-31
+- **Category:** Security / Process
+- **Decision:** Every future migration that creates a `SECURITY DEFINER` function, or any function intended to be Supabase-RPC-callable, must explicitly `REVOKE EXECUTE ... FROM PUBLIC` and then `GRANT EXECUTE ... TO <only the roles that genuinely need it>` in the **same migration** that creates the function. `ALTER DEFAULT PRIVILEGES` is deliberately **not** used to pre-harden this project-wide, because that command is scoped to a specific creator role, and the local migration-runner role (`postgres`, in this Docker-based local setup) cannot be safely assumed identical to whatever role runs migrations in a future hosted/deployed environment — applying a role-specific default-privilege rule against the wrong role would silently protect nothing.
+- **Status:** CONFIRMED
+- **Reason:** Discovered via direct audit (P1-E2-S1A) that two trigger-support functions from the very first migration had never had PostgreSQL's default PUBLIC EXECUTE grant revoked — not exploitable in practice (both are `RETURNS trigger` functions, callable neither directly nor via PostgREST's RPC schema cache), but a real minimum-privilege gap all the same, and exactly the kind of gap a per-migration convention prevents at the source rather than requiring a later corrective audit to catch.
+- **Affected Product Areas:** All future SECURITY DEFINER/RPC function migrations
+- **Dependencies:** ZD-038 (RLS-first), the SECURITY DEFINER rules already established in authorization-model.md §T
+- **Owner:** Security
+- **Review Trigger:** Every future migration adding a SECURITY DEFINER or RPC-reachable function — reviewed against this convention before merge
+
 No decisions have been REJECTED or SUPERSEDED as of this update.
 
-**Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md)
+**Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md)

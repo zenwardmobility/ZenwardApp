@@ -1,0 +1,481 @@
+Project:
+Zenward Platform
+
+Phase:
+P1-E2-S1A — SECURITY DEFINER Exposure Audit
+
+Repository:
+/Users/datamatics/ZenWard
+
+Supabase environment:
+LOCAL ONLY (project-local Docker stack, ports shifted +10 from CLI
+defaults to avoid an unrelated already-running local Supabase project
+("Maaklin") on this machine — see supabase/config.toml). No remote project
+linked. No production database touched at any point.
+
+Git branch:
+main
+
+Git HEAD before this work:
+9e96741bc4b3154a5b20b42322af45b345a6a93a (unchanged throughout — nothing
+was committed during this audit; all P1-E2 work remains staged as
+uncommitted files for review)
+
+Date/time:
+2026-08-31 08:22 UTC
+
+This report covers TWO passes over the same scope: an initial audit and a
+deeper follow-up that added a dedicated permanent test suite, formal
+documentation of new security rules, and a decision-register entry. Both
+passes' findings are consolidated below; nothing from the first pass was
+superseded, only extended.
+
+================================================================================
+1. LIVE FUNCTION ACL INVENTORY
+================================================================================
+
+Queried directly against pg_proc.proacl / has_function_privilege() — not
+inferred from migration source.
+
+  function                       | anon | authenticated | PUBLIC | service_role | postgres
+  --------------------------------+------+---------------+--------+--------------+---------
+  is_org_member                   | NO   | YES           | NO     | NO           | YES
+  has_org_role                    | NO   | YES           | NO     | NO           | YES
+  current_driver_id               | NO   | YES           | NO     | NO           | YES
+  is_driver_assigned_to_trip      | NO   | YES           | NO     | NO           | YES
+  is_platform_admin               | NO   | YES           | NO     | NO           | YES
+  set_updated_at                  | NO   | NO             | NO     | NO           | YES
+  prevent_organization_id_change  | NO   | NO             | NO     | NO           | YES
+
+Raw proacl for the 5 helpers: {postgres=X/postgres,authenticated=X/postgres}
+Raw proacl for the 2 trigger functions (after the corrective migration):
+{postgres=X/postgres}
+
+================================================================================
+2. FUNCTION OWNERS
+================================================================================
+
+All 7 public-schema functions are owned by `postgres` — the trusted
+migration-runner role in this local setup. None is owned by anon,
+authenticated, or service_role. Verified via pg_get_userbyid(p.proowner)
+for every function, and re-asserted as a permanent regression check
+(security_definer_exposure_tests.sql test 18, function_privilege_tests.sql
+"trusted-ownership").
+
+================================================================================
+3. SECURITY DEFINER FLAGS
+================================================================================
+
+  is_org_member                  prosecdef = true
+  has_org_role                   prosecdef = true
+  current_driver_id              prosecdef = true
+  is_driver_assigned_to_trip     prosecdef = true
+  is_platform_admin              prosecdef = true
+  set_updated_at                 prosecdef = false (ordinary trigger function)
+  prevent_organization_id_change prosecdef = false (ordinary trigger function)
+
+All 5 SECURITY DEFINER helpers are also STABLE (provolatile = 's') — no
+helper is VOLATILE, consistent with each being a pure read of
+already-committed state with no side effects.
+
+================================================================================
+4. SEARCH_PATH VALUES
+================================================================================
+
+All 5 SECURITY DEFINER helpers: proconfig = {"search_path=public, pg_temp"}
+— explicit on every one, confirmed live, not merely present in the CREATE
+FUNCTION source (a function's proconfig could in principle diverge from
+its source if altered out-of-band; it does not here).
+
+The two trigger functions carry no search_path setting at all — they don't
+need one; they are never callable directly (see section 11) and Postgres
+resolves their body's fully-qualified references (they touch only NEW/OLD
+record fields, no table/function lookups) regardless.
+
+================================================================================
+5. PUBLIC EXECUTE FINDINGS
+================================================================================
+
+FINDING (both passes agree): before the corrective migration, `PUBLIC` had
+EXECUTE on `set_updated_at()` and `prevent_organization_id_change()` — the
+two shared trigger-support functions from the very first migration —
+because PostgreSQL grants EXECUTE to PUBLIC by default on function
+creation, and these two (unlike the 5 RLS helpers) never had that default
+explicitly revoked. All 5 RLS helpers already had PUBLIC correctly revoked
+from P1-E2-S1.
+
+This was NOT left open. Fixed via a new, append-only migration (section 15).
+
+================================================================================
+6. ANON EXECUTE FINDINGS
+================================================================================
+
+`anon` has EXECUTE on none of the 7 public-schema functions, before or
+after the corrective migration. Confirmed via:
+  - has_function_privilege('anon', ..., 'EXECUTE') = false for all 7
+  - Direct SQL invocation as anon: permission denied for all 5 helpers
+  - Live HTTP RPC calls via the real PostgREST endpoint, using the actual
+    anon key: HTTP 401, {"code":"42501","message":"permission denied for
+    function ..."} for all 5 helpers, reproduced twice (before/after the
+    corrective migration) with identical results.
+
+================================================================================
+7. AUTHENTICATED EXECUTE FINDINGS
+================================================================================
+
+`authenticated` has EXECUTE on exactly the 5 RLS helpers — required
+because RLS policies invoke them under the calling statement's own
+authorization context (e.g. `organizations_select_members` calls
+`is_org_member(id)`, which must be executable by whichever authenticated
+user is running that SELECT). `authenticated` does NOT have EXECUTE on
+either trigger function (confirmed after the corrective migration —
+before it, PUBLIC's default grant meant authenticated inherited it too;
+now explicitly absent).
+
+This is the minimum necessary set: removing EXECUTE from authenticated on
+any of the 5 helpers would break the RLS policies that call them (not
+tested destructively, since the policy dependency is by direct SQL
+inspection — every one of the 52 RLS policies that references a helper
+does so under `TO authenticated`, so authenticated executing the helper
+is a precondition for those policies to evaluate at all).
+
+================================================================================
+8. SERVICE_ROLE FINDINGS
+================================================================================
+
+`service_role` has no explicit EXECUTE grant on any of the 7 functions.
+This is correct, not a gap: service_role has BYPASSRLS and would never
+need to call these RLS-evaluation helpers — any server-side/trusted code
+path needing equivalent logic would query the underlying tables directly,
+under a role that already sees everything. No grant was added.
+
+================================================================================
+9. SCHEMA PUBLIC ACLS
+================================================================================
+
+public schema nspacl:
+  pg_database_owner=UC/pg_database_owner (USAGE+CREATE)
+  postgres=U/pg_database_owner (USAGE only — CREATE comes via
+    pg_database_owner membership, confirmed separately, see below)
+  anon=U/pg_database_owner (USAGE only)
+  authenticated=U/pg_database_owner (USAGE only)
+  service_role=U/pg_database_owner (USAGE only)
+
+================================================================================
+10. SCHEMA CREATE FINDINGS
+================================================================================
+
+has_schema_privilege() results, queried directly for every relevant role:
+
+  role            | USAGE on public | CREATE on public
+  -----------------+------------------+-------------------
+  PUBLIC (bare)    | true             | false
+  anon             | true             | false
+  authenticated    | true             | false
+  service_role     | true             | false
+  postgres         | true             | true  (via pg_database_owner)
+
+No untrusted role (anon, authenticated, or bare PUBLIC) can CREATE objects
+in the `public` schema. This is the precondition that makes
+`search_path = public, pg_temp` safe for every SECURITY DEFINER
+function — no client-controlled object can ever be created in `public` to
+shadow an unqualified reference inside a SECURITY DEFINER function body.
+No migration was needed to fix this — it was already correctly configured,
+verified rather than assumed, and re-asserted as a permanent regression
+check (tests 15/16/17 in the new suite).
+
+================================================================================
+11. DIRECT INVOCATION RESULTS
+================================================================================
+
+Two independent methodologies were used and cross-validated:
+
+(a) SQL-level, via `SET ROLE`/`SET request.jwt.claim.sub` against the
+    local Postgres instance directly (the same technique the existing
+    32-test RLS suite uses) — supabase/tests/security_definer_exposure_tests.sql,
+    22/22 PASS. Full scenario list: anon (all 5 helpers); an authenticated
+    user with zero memberships; an active driver, own org and foreign org;
+    a dispatcher, own org and foreign org; an organization admin, own org
+    and foreign org; an inactive membership; a guessed/non-existent
+    organization UUID; a guessed/non-existent trip UUID; a dedicated
+    current_driver_id() cross-driver/cross-org disclosure check; a
+    platform admin positive check; an organization admin's inability to
+    influence is_platform_admin(); public-schema CREATE denial for
+    PUBLIC/anon/authenticated; function ownership; search_path; ACL shape
+    for both the helpers and the trigger functions; a forged/non-canonical
+    role-array probe against has_org_role(); and a multi-org user's
+    driver-resolution correctness across both of their organizations.
+
+(b) HTTP-level, via the real local PostgREST endpoint using genuinely
+    GoTrue-issued access tokens (obtained through the actual
+    /auth/v1/token?grant_type=password flow — not manually-minted JWTs).
+    Building this required fixing two real, permanent gaps discovered in
+    supabase/seed.sql (auth.users token columns were NULL, which GoTrue's
+    Go client cannot scan; auth.identities rows for the email provider
+    were missing entirely) — both now fixed for any future session.
+    Results were identical to (a) for every actor and every helper,
+    reproduced twice (before and after the corrective migration).
+
+No divergence was found between the two methodologies.
+
+================================================================================
+12. CURRENT_DRIVER_ID() DISCLOSURE REVIEW
+================================================================================
+
+Given particular attention as the one helper returning an identifier
+rather than a boolean. Confirmed, via a dedicated deep test (test 12) using
+TWO different drivers in the SAME organization plus a THIRD, foreign-org
+probe:
+
+  - Driver A1's user, queried in their own org       -> Driver A1's own id
+  - Driver A1's user, queried in a foreign org        -> null
+  - Driver A2's user (different driver, same org),
+    queried in that same org                          -> Driver A2's own id
+                                                          (never Driver A1's)
+
+Also confirmed via the multi-org user (test 22): admin-in-Org-A/driver-in-
+Org-B correctly gets null when queried against Org A (no Driver row there)
+and their own real driver id when queried against Org B.
+
+No path was found, in either the SQL-level or HTTP-level testing, by which
+a caller can obtain any driver identifier other than their own, for any
+organization they do not have a linked Driver row in. Guessed/non-existent
+organization UUIDs behave identically to real foreign organizations (null,
+no error) — there is no existence oracle.
+
+================================================================================
+13. CROSS-TENANT HELPER TESTS
+================================================================================
+
+Every helper was tested with a foreign-org argument by an actor who is a
+genuine member of a DIFFERENT organization (Org A actors against Org B,
+and the reverse via the multi-org user). All returned false/null
+consistently — no helper ever returns true, a real identifier, or any
+distinguishing error for a relationship the caller does not actually have.
+See sections 11/12 and the RLS suite's own pre-existing cross-tenant
+coverage (tests B, D, G, H, K, AF), which these function-level tests
+directly complement rather than duplicate.
+
+================================================================================
+14. PLATFORM ADMIN HELPER REVIEW
+================================================================================
+
+is_platform_admin() depends exclusively on the platform_admin_grants
+table. Confirmed:
+  - Returns true only for the one seeded user holding a genuine grant row
+    (test 13).
+  - Returns false for an Organization Admin — the single most privileged
+    ORG-scoped role that exists — proving Membership.role has zero
+    influence on this function (test 14).
+  - No user_profile field of any kind is read by this function (confirmed
+    by inspecting the function body: it queries only
+    platform_admin_grants.user_id = auth.uid()).
+  - An Organization Admin cannot mutate platform_admin_grants at all — no
+    INSERT/UPDATE/DELETE grant exists for authenticated at the table
+    level (pre-existing finding, RLS suite test S, re-confirmed unchanged).
+  - Revocation behavior: since the check is a live EXISTS query against
+    platform_admin_grants on every call, removing a grant row takes effect
+    on the very next call — no caching, same live-evaluation discipline as
+    is_org_member()/has_org_role().
+
+================================================================================
+15. MIGRATION CREATED
+================================================================================
+
+supabase/migrations/20260831090000_revoke_public_execute_trigger_functions.sql
+
+  REVOKE EXECUTE ON FUNCTION public.set_updated_at() FROM PUBLIC;
+  REVOKE EXECUTE ON FUNCTION public.prevent_organization_id_change() FROM PUBLIC;
+
+New file, append-only — the original migration
+(20260830130000_extensions_and_shared_functions.sql) was not edited.
+
+================================================================================
+16. NEW PRIVILEGE RULES (documented in docs/security/rls-model.md)
+================================================================================
+
+  - RPC exposure policy: EXECUTE is presumed exposed as an RPC route the
+    moment any role has it; "returns a safe value" and "should be public
+    API surface" are treated as two separate claims, never conflated.
+  - Public schema CREATE rule: verified (not assumed) that anon,
+    authenticated, service_role, and bare PUBLIC all lack CREATE on
+    public — the explicit precondition documented for why
+    search_path=public,pg_temp is safe.
+  - Function ownership rule: every SECURITY DEFINER function must be
+    owned by the trusted migration role, never an application-facing role
+    — restated explicitly, verified live.
+  - search_path rule: every SECURITY DEFINER function sets an explicit,
+    minimal search_path; safety is conditional on public CREATE being
+    denied to untrusted roles (verified above), not assumed by default.
+
+================================================================================
+17. FUTURE DEFAULT PRIVILEGE RULE
+================================================================================
+
+ALTER DEFAULT PRIVILEGES was deliberately NOT applied. Reason: that
+command is scoped to a specific creator role, and this project cannot
+safely assume the local Docker migration-runner role (`postgres`) is
+identical to whatever role will run migrations in a future hosted/
+deployed environment — applying a role-specific rule against a role that
+turns out to be the wrong one would silently protect nothing while
+appearing to have fixed the problem.
+
+Instead, a MANDATORY MIGRATION CONVENTION is now documented in
+docs/security/rls-model.md ("Future function privilege convention") and
+recorded as decision ZD-084:
+
+  Every future migration that creates a SECURITY DEFINER function, or any
+  function intended to be Supabase-RPC-callable, must explicitly, in the
+  SAME migration:
+    revoke execute on function <exact_signature> from public;
+    grant execute on function <exact_signature> to <only roles that need it>;
+  Never left to a later "hardening" migration. Never assumed safe because
+  of Supabase's table auto-exposure default (auto_expose_new_tables),
+  which governs TABLE exposure, not a function's own PostgreSQL EXECUTE
+  ACL — that still defaults to PUBLIC per standard PostgreSQL behavior
+  unless explicitly revoked, which is exactly the gap this audit found.
+
+================================================================================
+18. NEW TESTS CREATED
+================================================================================
+
+supabase/tests/security_definer_exposure_tests.sql — 22 tests, covering
+all 20 categories requested plus 2 extras (non-canonical role-array probe;
+multi-org user driver resolution). Full results in section 11 and in
+docs/security/rls-test-matrix.md "SECURITY DEFINER exposure test results".
+
+(From the prior pass, already existing and re-run clean this pass too:
+supabase/tests/function_privilege_tests.sql — 7 tests.)
+
+================================================================================
+19. RLS REGRESSION RESULT
+================================================================================
+
+supabase/tests/rls_adversarial_tests.sql: 32/32 PASS. Unchanged from the
+P1-E2-S1 baseline; re-run after the corrective migration with zero
+regressions.
+
+================================================================================
+20. CONSTRAINT REGRESSION RESULT
+================================================================================
+
+supabase/tests/constraint_tests.sql: 13/13 PASS. Unchanged from the
+P1-E2-S1 baseline; re-run after the corrective migration with zero
+regressions.
+
+================================================================================
+21. SECURITY-DEFINER TEST RESULT
+================================================================================
+
+supabase/tests/security_definer_exposure_tests.sql: 22/22 PASS (see
+section 11/18).
+supabase/tests/function_privilege_tests.sql: 7/7 PASS (carried over from
+the first pass, re-run clean this pass too).
+
+Combined across all four suites this session: 32 + 13 + 7 + 22 = 74/74
+PASS, zero failures, zero regressions.
+
+================================================================================
+22. DOCUMENTATION UPDATED
+================================================================================
+
+docs/security/rls-model.md:
+  - New section "RPC exposure policy"
+  - New section "Public schema CREATE — verified, not assumed"
+  - New section "Future function privilege convention (mandatory)"
+  - "SECURITY DEFINER review" table's abuse-test-coverage row updated to
+    reference the new exposure suite
+  - "Security assumptions" section: added the service_role finding (no
+    explicit grant, none needed) and referenced the new multi-org test
+
+docs/security/rls-test-matrix.md:
+  - New section "SECURITY DEFINER exposure test results (P1-E2-S1A) —
+    22/22 PASS" with the full per-test table
+  - New section "Corrective migration and its regression impact"
+  - New section "Cross-validation against real PostgREST/GoTrue"
+
+docs/product/decision-register.md:
+  - New entry ZD-084 (future function privilege convention)
+
+================================================================================
+23. DECISION-REGISTER CHANGES
+================================================================================
+
+ZD-084 — Future SECURITY DEFINER/RPC function privilege convention
+(mandatory migration rule, not ALTER DEFAULT PRIVILEGES). Status:
+CONFIRMED. No historical decision was overwritten or superseded.
+
+================================================================================
+24. REMAINING RISKS
+================================================================================
+
+None identified as blocking. Noted for awareness, not required to act on
+now:
+
+  - The mandatory per-migration REVOKE/GRANT convention (ZD-084) is a
+    documented process rule, not a database-enforced constraint — it
+    relies on future migration authors (human or AI) actually following
+    it. No automated CI check enforces it yet; the regression test suites
+    built today (function_privilege_tests.sql,
+    security_definer_exposure_tests.sql) would catch a violation
+    retroactively (they assert the CURRENT expected ACL shape), but
+    nothing currently blocks a bad migration from being written in the
+    first place. Worth considering as a lightweight CI/lint check in a
+    later phase, not urgent now.
+  - This audit's local environment (Docker-based Supabase CLI project) is
+    not guaranteed identical in role-naming/configuration to a future
+    hosted Supabase project — the ALTER DEFAULT PRIVILEGES decision (§17)
+    already accounts for this, but it's worth re-verifying the same ACL
+    inventory once a real hosted project exists, rather than assuming
+    local-environment findings transfer unchanged.
+
+================================================================================
+25. SECURITY DEFINER GATE STATUS
+================================================================================
+
+SECURITY DEFINER GATE — READY
+
+================================================================================
+26. RECOMMENDED NEXT PLATFORM PHASE
+================================================================================
+
+P1-E2-S2, as originally planned by the platform's own phase sequence —
+this audit found and closed one narrow gap (an unrevoked default PUBLIC
+grant on two non-exploitable trigger functions) and otherwise reconfirmed
+the P1-E2-S1 baseline is sound. No architectural rework is indicated. Not
+begun in this session, per instruction.
+
+================================================================================
+27. FILES CREATED
+================================================================================
+
+supabase/migrations/20260831090000_revoke_public_execute_trigger_functions.sql
+supabase/tests/function_privilege_tests.sql          (prior pass)
+supabase/tests/security_definer_exposure_tests.sql   (this pass, new)
+docs/reports/P1-E2-S1A-security-definer-audit.txt    (this file)
+
+================================================================================
+28. FILES MODIFIED
+================================================================================
+
+supabase/seed.sql (auth.users token columns fixed; auth.identities rows
+  added — both needed for real-token cross-validation, both permanent
+  fixture-quality fixes, not test-only scaffolding)
+docs/security/rls-model.md
+docs/security/rls-test-matrix.md
+docs/product/decision-register.md (ZD-084 added)
+
+================================================================================
+SECURITY DEFINER GATE:
+READY
+
+MIGRATION CREATED:
+YES — supabase/migrations/20260831090000_revoke_public_execute_trigger_functions.sql
+
+BLOCKERS:
+None.
+
+NEXT RECOMMENDED PHASE:
+P1-E2-S2 (not begun; awaiting explicit instruction per this task's stop
+condition).
+================================================================================
