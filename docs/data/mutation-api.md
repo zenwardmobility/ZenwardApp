@@ -1,7 +1,7 @@
 # Zenward Platform — Controlled Mutation API
 
-**Work item:** P1-E2-S2 — Controlled Mutation & Transaction Boundary
-**Status:** Implemented and verified against a running local Supabase/Postgres instance. Not a syntax-only claim — 125 SQL test assertions, a genuine two-process concurrency test, and 12 real PostgREST/GoTrue HTTP checks all pass.
+**Work item:** P1-E2-S2 — Controlled Mutation & Transaction Boundary, amended by P1-E3-S0A — Controlled Internal Trip Creation Boundary (`create_trip`, ZD-101/ZD-102)
+**Status:** Implemented and verified against a running local Supabase/Postgres instance. Not a syntax-only claim — 204 SQL test assertions, a genuine two-process concurrency test, and 18 real PostgREST/GoTrue HTTP checks all pass.
 **Last updated:** 2026-08-31
 
 This document is the contract for every mutation RPC added in P1-E2-S2. It complements [mutation-authorization.md](../security/mutation-authorization.md) (the authorization architecture and reasoning) and [rls-model.md](../security/rls-model.md) (the underlying table/column privilege posture, unchanged except where noted below).
@@ -38,7 +38,42 @@ Two composite types (`supabase/migrations/20260831100100_mutation_result_types.s
 ```
 trip_transition_result: { trip_id, previous_state, current_state, changed }
 trip_assignment_result: { trip_id, assignment_id, driver_id, vehicle_id, changed }
+trip_creation_result:   { trip_id, organization_id, state, created }
 ```
+
+---
+
+## Trip creation
+
+### `create_trip(p_organization_id uuid, p_passenger_id uuid, p_pickup_description text, p_destination_description text, p_scheduled_pickup_at timestamptz default null, p_appointment_at timestamptz default null, p_pickup_facility_id uuid default null, p_destination_facility_id uuid default null, p_assistance_notes text default null, p_instructions text default null, p_request_id uuid default null) returns trip_creation_result`
+
+Organization Admin / Dispatcher only (`has_org_role`, same `ZW002` convention as every other ops function — a Driver, an inactive Membership, and a foreign organization all produce the identical error). The sole controlled path to create a Trip — **`state` is never a parameter**, hard-coded `'scheduled'` internally, so a caller has no mechanism to request any other initial state (ZD-102).
+
+**Validates, all `ZW006 invalid_input` on failure (no existence oracle — nonexistent and foreign-tenant are indistinguishable):**
+- `pickup_description`/`destination_description`: required, non-blank, ≤2000 chars each
+- if both timestamps are given, `appointment_at >= scheduled_pickup_at`
+- `passenger_id`: required; must exist, same organization, `status='active'`
+- `pickup_facility_id`/`destination_facility_id` (optional): if given, must exist, same organization, `status='active'`
+- `request_id` (optional): if given, must exist, same organization, and be `state` `pending` or `accepted` (a `declined`/`cancelled` request is not usable)
+
+**Request lifecycle side effect:** when `request_id` is supplied and that request is currently `pending`, it is atomically transitioned to `accepted` in the same transaction — the system-driven transition the `transportation_requests` table's own original comment anticipated but nothing implemented until this phase. An already-`accepted` request (e.g. creating a return-leg Trip) is left untouched — Request→Trip is never assumed 1:1.
+
+**Does not assign a Driver/Vehicle.** Trip creation and assignment remain separate commands by design (ZD-102) — call `assign_trip` afterward.
+
+**Writes:** `trips` INSERT (`state='scheduled'`, all terminal timestamps `NULL`); the conditional `transportation_requests` UPDATE above; one `trip_events` row (`request_converted_to_trip` if `request_id` was supplied, `trip_scheduled` otherwise — both already-existing values in the event-type vocabulary, no schema change needed); one `audit_events` row (`trip_created`, minimal metadata — `state`/`passenger_id`/`request_id` only, no Passenger PII, no free-text address).
+
+**Idempotency:** none. `create_trip` is deliberately non-idempotent (ZD-102) — two legitimate Trips can share the same passenger/time/address, so no duplicate-detection heuristic is attempted. `created` in the response is always `true`; application code is responsible for preventing accidental double-submission (e.g. disabling the submit button while the request is in flight).
+
+**Example:**
+```
+POST /rest/v1/rpc/create_trip
+{ "p_organization_id": "...", "p_passenger_id": "...", "p_pickup_description": "...", "p_destination_description": "..." }
+→ 200 { "trip_id": "...", "organization_id": "...", "state": "scheduled", "created": true }
+```
+
+### Direct table access is retired (ZD-101)
+
+As of this phase, `authenticated` has **no** direct INSERT grant on `trips` at all — `create_trip` is the only creation path. The existing planning-column UPDATE grant (from P1-E2-S1) and SELECT are completely unchanged.
 
 ---
 
@@ -130,7 +165,11 @@ As of this phase, `authenticated` has **no** direct INSERT/UPDATE grant on `trip
 | `supabase/tests/mutation_assignment_tests.sql` | 16 | assign_trip/reassign_trip positive+negative, eligible states, conflict boundary, driver/vehicle validation, anon denial, direct-table regression |
 | `supabase/tests/mutation_authorization_tests.sql` | 4 | Platform Admin non-bypass, inactive membership, multi-org role scoping |
 | `supabase/tests/mutation_atomicity_tests.sql` | 2 | Forced-failure rollback |
+| `supabase/tests/mutation_idempotent_authorization_tests.sql` | 6 | Actor-verified idempotency edge cases (P1-E2-S2A) |
+| `supabase/tests/create_trip_tests.sql` | 20 | Full role/membership matrix, cross-tenant Passenger/Facility/Request denial, Request lifecycle transition, initial-state impossibility, direct-INSERT regression |
+| `supabase/tests/create_trip_privilege_tests.sql` | 5 | Static ACL/ownership/search_path audit; direct-INSERT-revoked; SELECT/UPDATE untouched |
+| `supabase/tests/create_trip_atomicity_tests.sql` | 2 | Forced-failure rollback (Trip + TripEvent + AuditEvent + conditional Request update) |
 | `supabase/tests/mutation_concurrency_test.sh` | 1 | Genuine two-process concurrency (timing-based proof) |
-| Real HTTP (`rpc_probe.js` pattern, see completion report) | 12 | PostgREST/GoTrue cross-validation of one representative RPC per family |
+| Real HTTP (`rpc_probe.js`/`create_trip_probe.js` pattern, see completion reports) | 18 | PostgREST/GoTrue cross-validation of one representative RPC per family, plus create_trip's full authorization matrix |
 
 All run against `supabase db reset` fresh-seeded data; see each file's header for exact run instructions.

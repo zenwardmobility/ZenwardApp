@@ -1,0 +1,375 @@
+================================================================================
+ZENWARD MOBILITY — WORK ITEM COMPLETION REPORT
+================================================================================
+Project:               Zenward Platform
+Phase:                  P1-E3-S0A — Controlled Internal Trip Creation Boundary
+Repository:             /Users/datamatics/ZenWard
+Environment:            LOCAL SUPABASE ONLY (project id "ZenWard", ports
+                        shifted +10 from CLI defaults). No remote linked.
+Git branch:             main
+Git HEAD before work:   7bbdb18433bdd8dec03a9912b7dc020312cd4ff7
+Date/time:              2026-08-31 20:48 UTC
+================================================================================
+
+--------------------------------------------------------------------------------
+1. PRE-WORK BASELINE
+--------------------------------------------------------------------------------
+Run fresh on a clean `supabase db reset`, before any new migration:
+  rls_adversarial_tests.sql             32/32  PASS
+  constraint_tests.sql                  13/13  PASS
+  function_privilege_tests.sql           7/7   PASS
+  security_definer_exposure_tests.sql   20/20  PASS
+  mutation_privilege_tests.sql           7/7   PASS
+  mutation_lifecycle_tests.sql          24/24  PASS
+  mutation_assignment_tests.sql         16/16  PASS
+  mutation_authorization_tests.sql       4/4   PASS
+  mutation_atomicity_tests.sql           2/2   PASS
+  mutation_idempotent_authorization_tests.sql  6/6  PASS
+  driver_read_privilege_tests.sql        8/8   PASS
+  driver_read_authorization_tests.sql  17/17   PASS
+  driver_read_minimization_tests.sql   13/13   PASS
+  driver_read_history_tests.sql          8/8   PASS
+  TOTAL: 177/177 SQL assertions, zero failures. Baseline was green; work
+  proceeded.
+
+--------------------------------------------------------------------------------
+2. ORIGINAL DIRECT TRIP INSERT EXPOSURE
+--------------------------------------------------------------------------------
+Confirmed by direct migration inspection (not inferred): `supabase/
+migrations/20260830131700_rls_policies.sql` line ~267 granted
+`select, insert, update on public.trips to authenticated` — a single
+combined grant. UPDATE was subsequently revoked and re-granted only for
+8 specific planning columns (same migration, later section). INSERT
+received no equivalent narrowing anywhere, ever — gated only by the
+`trips_insert_org_operations` RLS policy, which checks org role but not
+which columns a client sets. A raw INSERT under that policy could
+therefore set `state` to any of the 9 canonical values, or populate
+`completed_at`/`cancelled_at`/`no_show_at` directly, at creation time —
+a real, currently-exploitable bypass of the lifecycle model, not merely
+a missing feature. This is exactly what P1-E3-S0 (GAP-1) found and this
+phase exists to close.
+
+--------------------------------------------------------------------------------
+3. MIGRATIONS CREATED (2, append-only, no historical migration edited)
+--------------------------------------------------------------------------------
+  20260831120000_controlled_trip_creation.sql
+    trip_creation_result composite type; create_trip() function + grants.
+
+  20260831120100_retire_direct_trip_insert.sql
+    Drops trips_insert_org_operations; revokes INSERT on trips from
+    authenticated. SELECT and the existing UPDATE grant untouched.
+
+--------------------------------------------------------------------------------
+4. CREATE_TRIP SIGNATURE
+--------------------------------------------------------------------------------
+create_trip(
+  p_organization_id uuid, p_passenger_id uuid,
+  p_pickup_description text, p_destination_description text,
+  p_scheduled_pickup_at timestamptz default null,
+  p_appointment_at timestamptz default null,
+  p_pickup_facility_id uuid default null,
+  p_destination_facility_id uuid default null,
+  p_assistance_notes text default null,
+  p_instructions text default null,
+  p_request_id uuid default null
+) returns trip_creation_result
+
+No `state`/`created_by_user_id`/`actor_user_id` parameter exists anywhere
+in the signature — structurally, not merely by runtime validation.
+
+--------------------------------------------------------------------------------
+5. AUTHORIZATION CHAIN
+--------------------------------------------------------------------------------
+auth.uid() present -> has_org_role(p_organization_id, [organization_admin,
+dispatcher]) live-checked (ZW002 uniformly for wrong role, inactive
+Membership, or foreign organization — no distinction, matching the
+established anti-oracle convention) -> Passenger exists, same org,
+active (ZW006) -> Facility references (if supplied) exist, same org,
+active (ZW006) -> Request (if supplied) exists, same org, state in
+(pending, accepted) (ZW006) -> INSERT -> conditional Request state
+transition -> TripEvent -> AuditEvent -> typed result. organization_id
+is a REQUESTED context throughout, never trusted authority on its own —
+identical treatment to every check that follows it.
+
+--------------------------------------------------------------------------------
+6. INITIAL-STATE ENFORCEMENT
+--------------------------------------------------------------------------------
+'scheduled' is a fixed literal inside the function body's INSERT
+statement — there is no code path, correct or malicious input, by which
+a caller can influence it. Verified structurally (create_trip_tests.sql
+TEST STATE-1: the function's own pg_proc.proargnames contains no
+state-named parameter) and behaviorally (TEST STATE-2: every Trip this
+suite created is state='scheduled', with no exception).
+
+--------------------------------------------------------------------------------
+7. PASSENGER VALIDATION
+--------------------------------------------------------------------------------
+Required (ZW006 if null). Must exist, same organization_id as the
+validated context, status='active'. Foreign-org and nonexistent
+passenger_id produce the identical ZW006 — no existence oracle. Verified:
+create_trip_tests.sql TEST VAL-1.
+
+--------------------------------------------------------------------------------
+8. FACILITY VALIDATION
+--------------------------------------------------------------------------------
+Optional on both pickup and destination (the canonical model permits
+address snapshots with no Facility reference at all — trips.
+pickup_facility_id/destination_facility_id are both nullable). Where
+supplied, validated for tenant consistency and active status, same ZW006
+categorization as Passenger. Verified: TEST VAL-2.
+
+--------------------------------------------------------------------------------
+9. REQUEST VALIDATION
+--------------------------------------------------------------------------------
+Optional (request_id is nullable on trips, exactly as the canonical model
+specifies). When supplied: must exist, same organization, and be in state
+pending or accepted (declined/cancelled rejected as no-longer-usable,
+ZW006). Locked FOR UPDATE for the duration of the transaction. 1:N
+Request->Trip is explicitly preserved — an already-accepted request (a
+return-leg scenario) is a legitimate second create_trip call, not an
+error. Verified: TEST VAL-3 (pending, transitions to accepted), TEST
+VAL-3B (TripEvent + state transition confirmed), TEST VAL-4 (already-
+accepted, second Trip allowed), TEST VAL-5 (declined, rejected), TEST
+VAL-6 (foreign-org request, rejected), TEST VAL-7 (no request at all,
+allowed, schema permits this per domain-model.md).
+
+--------------------------------------------------------------------------------
+10. ADDRESS SNAPSHOT VALIDATION
+--------------------------------------------------------------------------------
+pickup_description/destination_description: required (matches the NOT
+NULL schema constraint), non-blank after trimming, capped at 2000
+characters. No structured Location entity was introduced — the existing
+free-text snapshot model is preserved exactly as-is (work item §12).
+
+--------------------------------------------------------------------------------
+11. TIME VALIDATION
+--------------------------------------------------------------------------------
+Both scheduled_pickup_at and appointment_at remain optional (neither has
+a NOT NULL constraint in the actual schema — verified by inspection, not
+assumed). The one rule enforced: if both are supplied, appointment_at
+must not precede scheduled_pickup_at (a logically-impossible-ordering
+check, not an invented business rule). No minimum-notice, maximum-
+advance-booking, or service-hours rule was added — none is documented
+anywhere as canonical, per explicit instruction not to invent one.
+
+--------------------------------------------------------------------------------
+12. TRIPEVENT BEHAVIOR
+--------------------------------------------------------------------------------
+Exactly one event per successful call, reusing the EXISTING allow-listed
+vocabulary (no schema/CHECK-constraint change was needed):
+'request_converted_to_trip' when request_id was supplied,
+'trip_scheduled' otherwise. Not treated as a lifecycle *transition* event
+(no prior state existed) — deliberately distinct in kind from the 6
+driver_* progression events, though sharing the same table.
+
+--------------------------------------------------------------------------------
+13. AUDITEVENT BEHAVIOR
+--------------------------------------------------------------------------------
+One AuditEvent per successful call: entity_type='trip', action=
+'trip_created', actor_user_id=auth.uid(), before_data=null (nothing
+existed before), after_data={state, passenger_id, request_id} only — no
+Passenger name/phone, no free-text pickup/destination, matching the
+"metadata must be minimal" instruction and every other AuditEvent's
+existing minimalism in this codebase.
+
+--------------------------------------------------------------------------------
+14. ATOMICITY
+--------------------------------------------------------------------------------
+Trip INSERT + conditional Request UPDATE + TripEvent INSERT + AuditEvent
+INSERT all occur in one PL/pgSQL function with no internal exception
+handler — a failure anywhere rolls back everything. Proven, not asserted:
+a temporary trigger (installed and removed within the same test run, never
+a permanent object) forced the AuditEvent insert to fail for a dedicated
+atomicity-test Passenger; the result confirmed zero Trip rows, zero
+TripEvent rows, and the TransportationRequest still 'pending' (not
+advanced) after the forced failure. create_trip_atomicity_tests.sql,
+2/2 PASS.
+
+--------------------------------------------------------------------------------
+15. IDEMPOTENCY DECISION
+--------------------------------------------------------------------------------
+Deliberately NON-idempotent (ZD-102). No duplicate-submission heuristic
+based on Passenger/time/address was implemented — two legitimate Trips
+can share all three, and a false-positive "duplicate" rejection would be
+a real product harm. `created` is always `true` in the response.
+Preventing accidental double-submission is explicitly left to future
+application code (e.g. disable-on-submit), not solved at the database
+layer in this phase, per explicit instruction not to invent weak
+detection logic.
+
+--------------------------------------------------------------------------------
+16. DIRECT INSERT RETIREMENT
+--------------------------------------------------------------------------------
+`revoke insert on public.trips from authenticated;` + `drop policy
+trips_insert_org_operations`. SELECT and the existing narrowed UPDATE
+grant (8 planning columns, unchanged from P1-E2-S1) are completely
+untouched — verified directly via information_schema.column_privileges,
+matching byte-for-byte the pre-existing column set. Dispatcher/Admin
+legitimate reads are unaffected (rls_adversarial_tests.sql remains
+32/32).
+
+--------------------------------------------------------------------------------
+17. RLS/POLICY CHANGES
+--------------------------------------------------------------------------------
+1 policy dropped (trips_insert_org_operations). 0 policies added — no new
+RLS policy was needed anywhere, since create_trip is entirely SECURITY
+DEFINER-mediated and never relies on RLS to protect its own writes (the
+same architecture as every P1-E2-S2 mutation RPC).
+
+--------------------------------------------------------------------------------
+18. FUNCTION ACLS
+--------------------------------------------------------------------------------
+create_trip: owned by postgres, SECURITY DEFINER, VOLATILE (correct — it
+writes), explicit search_path=public, pg_temp, EXECUTE granted to
+authenticated only (anon/PUBLIC confirmed absent both statically and over
+real HTTP).
+
+--------------------------------------------------------------------------------
+19. REAL HTTP TEST RESULTS
+--------------------------------------------------------------------------------
+6/6 PASS (create_trip_probe.js, extending the established get_real_
+tokens.js pattern): Dispatcher successful create_trip; Driver denied
+(ZW002); inactive Membership denied (ZW002); foreign organization denied
+(ZW002); anon denied; a direct REST table INSERT attempt against `trips`
+denied outright (confirming the retirement holds over the real PostgREST
+path, not merely the SQL-simulation path).
+
+--------------------------------------------------------------------------------
+20. ROLE TEST RESULTS
+--------------------------------------------------------------------------------
+Org Admin own org: ALLOW. Dispatcher own org: ALLOW. Driver own org:
+DENY. Inactive Admin: DENY. Inactive Dispatcher: DENY. Foreign Org Admin:
+DENY. Foreign Dispatcher: DENY. Random authenticated user: DENY. anon:
+DENY. All 9/9 PASS (create_trip_tests.sql TEST ROLE-1 through ROLE-9).
+
+--------------------------------------------------------------------------------
+21. CROSS-TENANT TESTS
+--------------------------------------------------------------------------------
+Foreign Passenger: DENY (ZW006). Foreign Facility: DENY (ZW006). Foreign
+Request: DENY (ZW006). All 3/3 PASS, all safe-inaccessible (no existence
+oracle — identical error to a genuinely nonexistent id).
+
+--------------------------------------------------------------------------------
+22. DIRECT INSERT REGRESSION
+--------------------------------------------------------------------------------
+PASS at both layers: SQL-simulation (create_trip_tests.sql TEST
+DIRECT-INSERT, a Dispatcher's raw INSERT denied with insufficient_
+privilege) and real HTTP (create_trip_probe.js CT-6, a raw REST POST to
+/rest/v1/trips denied).
+
+--------------------------------------------------------------------------------
+23. FULL REGRESSION COUNTS
+--------------------------------------------------------------------------------
+Final run, clean `supabase db reset` immediately before this report:
+  rls_adversarial_tests.sql             32/32  PASS
+  constraint_tests.sql                  13/13  PASS
+  function_privilege_tests.sql           7/7   PASS
+  security_definer_exposure_tests.sql   20/20  PASS
+  mutation_privilege_tests.sql           7/7   PASS
+  mutation_lifecycle_tests.sql          24/24  PASS
+  mutation_assignment_tests.sql         16/16  PASS
+  mutation_authorization_tests.sql       4/4   PASS
+  mutation_atomicity_tests.sql           2/2   PASS
+  mutation_idempotent_authorization_tests.sql  6/6  PASS
+  driver_read_privilege_tests.sql        8/8   PASS
+  driver_read_authorization_tests.sql  17/17   PASS
+  driver_read_minimization_tests.sql   13/13   PASS
+  driver_read_history_tests.sql          8/8   PASS
+  create_trip_tests.sql                20/20   PASS  (NEW, this phase)
+  create_trip_privilege_tests.sql        5/5   PASS  (NEW, this phase)
+  create_trip_atomicity_tests.sql        2/2   PASS  (NEW, this phase)
+  TOTAL: 204/204 SQL assertions, zero failures.
+  mutation_concurrency_test.sh (genuine two-process test): PASS —
+    unaffected by this phase's changes, re-run to confirm no regression.
+  Real HTTP: 18/18 across both probes (rpc_probe.js 12/12,
+    driver_read_probe.js unaffected/not re-verified this phase since no
+    read-model code changed, create_trip_probe.js 6/6).
+  Zero regressions anywhere.
+
+--------------------------------------------------------------------------------
+24. CLEAN RESET RESULT
+--------------------------------------------------------------------------------
+`supabase db reset` run fresh immediately before both the baseline (item
+1) and the final regression (item 23) — both from a genuinely clean
+state, migration history reproduced from zero each time.
+
+--------------------------------------------------------------------------------
+25. DOCS UPDATED
+--------------------------------------------------------------------------------
+  docs/data/mutation-api.md              create_trip contract added,
+                                          Testing table updated
+  docs/security/mutation-authorization.md "Trip creation authorization"
+                                          section added
+  docs/security/rls-model.md             policy inventory, header,
+                                          "deliberately NOT solved yet"
+                                          section updated
+  docs/security/rls-test-matrix.md       pointer to new suites added
+  docs/product/ui-backend-gap-register.md GAP-1/GAP-2 marked RESOLVED
+                                          with resolution detail
+  docs/product/ui-data-action-map.md     "Create Trip" rows updated in
+                                          both field tables and the
+                                          no-direct-mutation flag section;
+                                          request-to-trip gap status
+                                          updated to RESOLVED
+  docs/product/decision-register.md      ZD-101/ZD-102 appended
+
+--------------------------------------------------------------------------------
+26. DECISION ENTRIES
+--------------------------------------------------------------------------------
+  ZD-101  Direct trips INSERT retired in favor of create_trip
+  ZD-102  create_trip architecture: no caller-supplied state, separate
+          from assignment, non-idempotent by design
+
+--------------------------------------------------------------------------------
+27. GAP-1 STATUS
+--------------------------------------------------------------------------------
+RESOLVED. (GAP-2, the closely related Request-to-Trip conversion finding,
+is also RESOLVED as part of the same work — both are one coupled backend
+change, exactly as GAP-2's own original recommendation anticipated.)
+
+--------------------------------------------------------------------------------
+28. FILES CREATED
+--------------------------------------------------------------------------------
+  supabase/migrations/20260831120000_controlled_trip_creation.sql
+  supabase/migrations/20260831120100_retire_direct_trip_insert.sql
+  supabase/tests/create_trip_tests.sql
+  supabase/tests/create_trip_privilege_tests.sql
+  supabase/tests/create_trip_atomicity_tests.sql
+  docs/reports/P1-E3-S0A-controlled-trip-creation-report.txt (this file)
+
+--------------------------------------------------------------------------------
+29. FILES MODIFIED
+--------------------------------------------------------------------------------
+  docs/data/mutation-api.md
+  docs/security/mutation-authorization.md
+  docs/security/rls-model.md
+  docs/security/rls-test-matrix.md
+  docs/product/ui-backend-gap-register.md
+  docs/product/ui-data-action-map.md
+  docs/product/decision-register.md
+
+No file outside supabase/ and docs/ was touched — confirmed via `git
+status --short` (zero src/ entries). /Users/datamatics/Zenward-Web was not
+touched (no tool call in this session targeted it). No remote Supabase
+project was linked. Nothing was committed or pushed — git HEAD is
+unchanged at 7bbdb18433bdd8dec03a9912b7dc020312cd4ff7.
+
+--------------------------------------------------------------------------------
+30. BLOCKERS
+--------------------------------------------------------------------------------
+NONE.
+
+================================================================================
+CONTROLLED TRIP CREATION GATE:  READY
+================================================================================
+GAP-1:                  RESOLVED
+DIRECT TRIPS INSERT:    DENIED
+BLOCKERS:                NONE
+NEXT RECOMMENDED PHASE:  P1-E3-S1 — Authentication, Session & Role Routing
+                          Foundation. Every screen mapped in P1-E3-S0 is now
+                          backend-ready (Internal New Trip's own blocker is
+                          resolved as of this phase); the auth/session layer
+                          remains the sole common blocker for all of them.
+================================================================================
+
+Stopping here per instruction. Not beginning P1-E3-S1. Waiting for review.

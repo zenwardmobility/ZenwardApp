@@ -1235,6 +1235,30 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Security
 - **Review Trigger:** None anticipated — this is now the permanent, correct definition
 
+### ZD-101 — Direct `trips` INSERT retired in favor of `create_trip`
+
+- **Date:** 2026-08-31
+- **Category:** Security / Architecture
+- **Decision:** The `trips` INSERT grant to `authenticated` (unrestricted by column, unlike UPDATE) and its supporting policy `trips_insert_org_operations` — both present since P1-E2-S1's very first migration — are revoked/dropped outright. `create_trip()` (ZD-102) is now the sole path to create a Trip. SELECT and the existing narrowed UPDATE grant are completely unchanged.
+- **Status:** CONFIRMED — implemented and verified (`create_trip_privilege_tests.sql` "direct-insert-revoked"/"select-and-update-untouched"/"superseded-policy-dropped"; `create_trip_tests.sql` "TEST DIRECT-INSERT"; real HTTP `create_trip_probe.js` CT-6)
+- **Reason:** This grant was found, during P1-E3-S0's UI-mapping work (GAP-1), to be a genuine, currently-exploitable gap: unlike every other lifecycle-sensitive column (already locked down since P1-E2-S1/S2), a raw INSERT could set `trips.state` to any value at creation, bypassing the lifecycle model this project otherwise carefully protects. Exactly the same retirement pattern as ZD-092 (`trip_assignments`) and ZD-096 (6 Driver base-table SELECT policies) — once a controlled RPC exists for a mutation, the raw path that predated it is retired, not left as a silent bypass.
+- **Affected Product Areas:** `trips` RLS/grants
+- **Dependencies:** ZD-084, ZD-092, ZD-102
+- **Owner:** Security
+- **Review Trigger:** None anticipated
+
+### ZD-102 — `create_trip` architecture: no caller-supplied state, separate from assignment, non-idempotent by design
+
+- **Date:** 2026-08-31
+- **Category:** Architecture / Security
+- **Decision:** `create_trip` accepts no `state`/`initial_state` parameter at all — the initial value (`'scheduled'`) is a fixed literal inside the function body, not merely validated input, so a caller has no mechanism to request any other value regardless of what they send. `create_trip` never touches `trip_assignments` — Trip creation and assignment remain separate commands (`assign_trip` is still the only path to an active assignment), a deliberate command-boundary decision, not an oversight. `create_trip` is deliberately **non-idempotent**: no duplicate-submission heuristic is attempted (matching passenger/time/address is not reliable evidence of an accidental resubmit — two legitimate Trips can share all three), so the `created` field in its result is always `true`, and preventing accidental double-submission is left to application code (e.g. disabling the submit control while a request is in flight), not solved at the database layer in this phase. When `p_request_id` is supplied and the referenced request is `pending`, it is atomically transitioned to `accepted` in the same transaction as the Trip INSERT (the system-driven transition `transportation_requests`' own original comment anticipated but nothing implemented before this decision); an already-`accepted` request is left untouched, preserving 1:N Request→Trip.
+- **Status:** CONFIRMED — implemented and verified (`create_trip_tests.sql`, 20 assertions covering the full role/membership/cross-tenant/state-impossibility/request-lifecycle matrix; `create_trip_atomicity_tests.sql`, forced-failure rollback of Trip+TripEvent+AuditEvent+conditional Request update; real HTTP `create_trip_probe.js`, 6/6)
+- **Reason:** Matches this project's established RPC-architecture principles (ZD-089: narrow, intention-revealing functions; ZD-090: idempotency is deliberate and documented, never assumed) extended to the one operation — creation — that has no natural "current state" to check idempotency against, unlike every transition RPC. Structurally eliminating the state parameter (rather than merely rejecting an unexpected value) closes the exact class of gap GAP-1 identified, by construction rather than by convention.
+- **Affected Product Areas:** `create_trip`, `trip_creation_result`
+- **Dependencies:** ZD-085 (error contract, reused), ZD-089 (RPC architecture pattern), ZD-090 (idempotency-is-deliberate principle, applied here as "deliberately absent"), ZD-101
+- **Owner:** Security
+- **Review Trigger:** If application usage reveals accidental double-submission is a real, recurring problem — revisit whether a deliberate, durable idempotency key belongs in a future revision, rather than adding one reactively without review
+
 No decisions have been REJECTED or SUPERSEDED as of this update.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

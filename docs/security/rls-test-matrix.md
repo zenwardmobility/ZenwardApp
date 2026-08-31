@@ -1,8 +1,10 @@
 # Zenward Platform — RLS Test Matrix
 
-**Work item:** P1-E2-S1 — Supabase Schema + RLS Foundation, amended by P1-E2-S1A — SECURITY DEFINER Exposure Audit, amended by P1-E2-S2 — Controlled Mutation & Transaction Boundary, amended by P1-E2-S3 — Secure Read Models & Driver Minimum-Necessary Projection
+**Work item:** P1-E2-S1 — Supabase Schema + RLS Foundation, amended by P1-E2-S1A — SECURITY DEFINER Exposure Audit, amended by P1-E2-S2 — Controlled Mutation & Transaction Boundary, amended by P1-E2-S3 — Secure Read Models & Driver Minimum-Necessary Projection, amended by P1-E3-S0A — Controlled Internal Trip Creation Boundary
 **Status:** All tests below were actually executed against a running local Supabase/Postgres instance and passed. This is not a syntax-only claim.
 **Last updated:** 2026-08-31
+
+**P1-E3-S0A note:** `create_trip`'s own test results (27 SQL assertions across 3 new suites, plus 6 real-HTTP cross-validation checks) are documented in [mutation-api.md](../data/mutation-api.md) "Testing" and the P1-E3-S0A completion report, not duplicated here.
 
 **P1-E2-S2 note:** the mutation RPC layer's own test results (131 SQL assertions across 6 suites, a genuine two-process concurrency test, and 15 real-HTTP cross-validation checks — including the P1-E2-S2A idempotent-authorization audit) are documented in [mutation-api.md](../data/mutation-api.md) "Testing" and the P1-E2-S2/P1-E2-S2A completion reports, not duplicated here.
 

@@ -62,8 +62,17 @@ Every check re-evaluates `memberships.status`/`role` and `drivers.status`/`trip_
 
 `has_org_role`/Driver-assignment checks are always evaluated against the *specific* `organization_id` resolved from the Trip row being acted on — never "does this user hold this role anywhere." A user who is `organization_admin` in Org A and `driver` in Org B gets `ZW002` attempting either role's mutation actions against the other organization's Trips (verified: `mutation_authorization_tests.sql` D3/D4).
 
+## Trip creation authorization (P1-E3-S0A, ZD-101/ZD-102)
+
+`create_trip` closes a gap that predates every phase above it: `trips` INSERT was granted to `authenticated` without column restriction from the very first schema migration (P1-E2-S1) — unlike UPDATE, which was narrowed to specific planning columns in the same phase. A raw client INSERT could set `state` to any value at creation, bypassing the entire lifecycle model this document otherwise describes. This was found, not designed around, during P1-E3-S0's UI mapping work (GAP-1) when a real "New Trip" screen exposed the question of how Trip creation should actually be authorized.
+
+The fix follows the identical pattern as every function above it, with one important structural difference: **the resource being authorized does not exist yet.** Every other function in this document resolves its organization from an existing row (`SELECT ... FOR UPDATE`, then check the row's `organization_id`). `create_trip` cannot do that — `p_organization_id` is a caller-*requested* context, not yet an authoritative fact about anything. The same `has_org_role` live check applies regardless, and the same consequence follows: **the caller choosing an organization UUID never grants authority over it** — a foreign-org Admin/Dispatcher gets the identical `ZW002 not_found` as a Driver or an inactive Membership, exactly as it would if the resource already existed.
+
+Every referenced entity supplied by the caller — Passenger, Facility, TransportationRequest — is independently validated for tenant consistency (same `organization_id` as the validated context) before the Trip is ever inserted, using the same `ZW006 invalid_input`, no-existence-oracle categorization already established for `assign_trip`'s Driver/Vehicle checks (ZD-085). `state` itself is not merely validated — it is not a parameter at all, so there is no input to reject; the initial value is a Postgres literal inside the function body, structurally unreachable by any caller regardless of what they send.
+
 ## What this phase deliberately does not change
 
-- No RLS policy was broadened, and no `USING (true)` policy exists anywhere (work item §41) — every existing policy is untouched except the two `trip_assignments` policies retired in ZD-092, which removed privilege, never added it.
+- No RLS policy was broadened, and no `USING (true)` policy exists anywhere (work item §41) — every existing policy is untouched except the two `trip_assignments` policies retired in ZD-092 and the `trips` INSERT policy retired in ZD-101, all of which removed privilege, never added it.
 - Driver still has no direct-table path to `passengers` (ZD-080) — nothing in this phase touches that boundary; a future minimum-necessary Driver projection remains a separate, deferred piece of work (P1-E2-S3 in the original phase numbering).
-- No UI/application code was touched — this phase is the database mutation layer only.
+- Trip *assignment* remains entirely separate from Trip *creation* (ZD-102) — `create_trip` never touches `trip_assignments`; `assign_trip` is still the only path to an active assignment.
+- No UI/application code was touched — this phase, like every phase above it, is the database mutation layer only.

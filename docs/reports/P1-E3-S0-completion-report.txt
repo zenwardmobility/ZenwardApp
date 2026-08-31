@@ -1,0 +1,421 @@
+================================================================================
+ZENWARD MOBILITY — WORK ITEM COMPLETION REPORT
+================================================================================
+Project:               Zenward Platform
+Phase:                 P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping
+Repository:             /Users/datamatics/ZenWard
+Stitch reference dir:   /Users/datamatics/ZenWard/docs/design/stitch/references/
+Git branch:             main
+Git HEAD before work:   7bbdb18433bdd8dec03a9912b7dc020312cd4ff7
+                        (NOTE: partway through this session HEAD also
+                        advanced from 79f4f76 -> f8633a2 -> 7bbdb18,
+                        titled "Implement secure transactional trip
+                        mutations" and "Implement secure driver read
+                        models" respectively — the P1-E2-S2/S2A and
+                        P1-E2-S3 work being committed by the user
+                        themselves, per their own stated "I will review
+                        the report before committing." I never ran
+                        `git commit` at any point in this session, in any
+                        phase. Reported transparently, as with the prior
+                        report.)
+Date/time:              2026-08-31 20:XX UTC (session-local; see final
+                        `git status` timestamp for precision if needed)
+References discovered:  7 (all 7 screens named in the work item's own
+                        §5 expected list are present; none missing)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. STITCH REFERENCE FILES DISCOVERED
+--------------------------------------------------------------------------------
+01-todays-operations.png, 02-trip-detail.png, 03-dispatch-board.png,
+04-driver-active-trip.png, 05-internal-new-trip.png, 06-driver-today.png,
+07-driver-trips.png — all in docs/design/stitch/references/, all inspected
+directly (image content read, not inferred from filenames), none modified,
+none regenerated. Full per-file inventory:
+docs/design/stitch/stitch-reference-index.md.
+
+Note on directory casing: git reports the directory as `docs/design/Stitch/`
+(capital S); the actual path on disk (and every reference throughout this
+work item and prior phases) is lowercase `stitch/`. Same directory on
+macOS's case-insensitive filesystem — not two locations, not a rename.
+Documented in the reference index per work item §58.
+
+--------------------------------------------------------------------------------
+2. SCREENS IDENTIFIED
+--------------------------------------------------------------------------------
+Today's Operations, Trip Detail, Dispatch Board, Driver Active Trip,
+Internal New Trip, Driver Today, Driver Trips — exactly the 7 the work item
+anticipated. No screen was invented; no reference was absent.
+
+--------------------------------------------------------------------------------
+3. ROLES BY SCREEN
+--------------------------------------------------------------------------------
+organization_admin/dispatcher: Today's Operations, Trip Detail, Dispatch
+Board, Internal New Trip.
+driver: Driver Active Trip, Driver Today, Driver Trips.
+No screen in this batch is Platform-Admin-facing or public/unauthenticated.
+
+--------------------------------------------------------------------------------
+4/5. OPERATIONS SURFACES / DRIVER SURFACES
+--------------------------------------------------------------------------------
+Operations (desktop/tablet): 01, 02, 03, 05 — all share the existing
+OperationsShell/Sidebar/AppHeader chrome.
+Driver (mobile/PWA): 04, 06, 07 — all share the existing bottom-tab-bar
+chrome, already implemented at 390-430px-appropriate density.
+No UNRESOLVED-classification screen — every reference cleanly sorted into
+Operations or Driver; none needed the SHARED AUTH/UTILITY bucket either
+(no reference showed sign-in/shared utility screens — see gap register
+GAP-4).
+
+--------------------------------------------------------------------------------
+6. RESPONSIVE CLASSIFICATION
+--------------------------------------------------------------------------------
+Operations: desktop/tablet primary, intended minimum width ~1024px
+(Dispatch Board's 3-column density is the binding constraint). No
+automatic mobile morph — a deliberate below-minimum fallback is documented
+as a future decision, not implemented (work item §8).
+Driver: mobile-first, must work at 390/430px and common Android/iPhone
+widths — already correctly demonstrated by all 4 driver references and
+the existing DriverPrimaryAction/DriverRoute/DriverTripCard components.
+
+--------------------------------------------------------------------------------
+7/8. NAVIGATION ARCHITECTURE / ROUTE PLAN
+--------------------------------------------------------------------------------
+Full detail: docs/product/application-route-map.md. Summary: the route
+tree this plan needs ALREADY EXISTS as placeholder stubs
+(src/app/operations/*, src/app/driver/*, confirmed by direct inspection —
+explicit "Placeholder only" comments in every stub page, from the prior
+P0-E2-S3/S3A phase). This phase reconciles the Stitch requirements against
+that existing scaffold rather than proposing routes from scratch. No new
+route was created.
+
+--------------------------------------------------------------------------------
+9/10. FIELD-TO-DATA / ACTION-TO-RPC MAPPINGS
+--------------------------------------------------------------------------------
+Full detail: docs/product/ui-data-action-map.md §3/§4. Every visible field
+across all 7 screens mapped to a real domain entity/source field, or
+flagged as a gap. Every actionable control mapped to an actual RPC name
+from docs/data/mutation-api.md/read-api.md, a sanctioned direct-table path
+(trip_notes/trip_exceptions INSERT, Trip planning-column UPDATE), a
+client-side-only action (Contact Driver, Navigate), or flagged as blocked
+(Create Trip).
+
+--------------------------------------------------------------------------------
+11/12. LIFECYCLE-STATE MAPPING / DERIVED-CONDITION MAPPING
+--------------------------------------------------------------------------------
+Full detail: ui-data-action-map.md §1/§2. Every Stitch status label
+resolved against the canonical 9-state Trip lifecycle where it maps
+cleanly (Scheduled/En Route/Completed etc.); every UI-only derived
+condition (Needs Assignment, Assigned, Running Late, Pending Confirmation,
+Potential timing conflict) explicitly NOT treated as a new Trip state,
+consistent with the established "derived conditions are not states"
+principle. 2 of 5 derived conditions (Needs Assignment, Assigned) are
+already fully formula-defined and AVAILABLE NOW; 3 (Running Late,
+Pending Confirmation, timing conflict) need a product-defined threshold/
+formula before they can be built — recorded as PRODUCT DECISION REQUIRED,
+not guessed.
+
+--------------------------------------------------------------------------------
+13. DRIVER READ-MODEL MAPPING
+--------------------------------------------------------------------------------
+Every Driver-screen field mapped exclusively to the 4 P1-E2-S3 read RPCs
+(driver_get_profile, driver_list_active_trips, driver_get_trip_detail,
+driver_list_trip_history) — never to passengers/trips/trip_notes/
+facilities/vehicles directly. Full detail: ui-data-action-map.md §6.
+
+--------------------------------------------------------------------------------
+14. DRIVER MINIMUM-DATA CONFLICTS
+--------------------------------------------------------------------------------
+3 found (ui-data-action-map.md §7): Companion (no schema field exists at
+all, on any entity), "Pickup updated from X" change-tracking (no
+field-level history exists, and TripEvent/AuditEvent remain zero-exposure
+to Driver by design), and an implied TripEvent-style Driver timeline (not
+confirmed, "Trip Details" button destination unclear). NONE widened the
+projection to resolve — all 3 recorded in the gap register instead, per
+explicit instruction not to solve minimization gaps in this phase.
+
+--------------------------------------------------------------------------------
+15. OPERATIONS DATA MAPPING
+--------------------------------------------------------------------------------
+Every Operations field mapped to existing RLS-protected tables — no new
+Operations read model is required to implement any of the 4 Operations
+screens. One overfetching caution recorded (date-scope the trips query
+rather than fetching the whole table) — not a gap, a query-shape
+recommendation. Full detail: ui-data-action-map.md §8.
+
+--------------------------------------------------------------------------------
+16. TODAY'S OPERATIONS ANALYSIS
+--------------------------------------------------------------------------------
+Headline metrics: derivable now (client-aggregated from the same
+day-scoped query the tables need). Needs Attention table: 1 of 3 issue
+types available now (Needs Assignment), 2 need a product decision (Running
+Late threshold, Pending Confirmation's very definition). Upcoming Trips
+table: fully available now. Driver Availability panel: BACKEND GAP /
+DEFERRED (GAP-6). Active Trips panel: available now. Activity Log: direct,
+clean match to TripEvent — available now, and a good validation that
+TripEvent's original design purpose is being fulfilled exactly as
+intended.
+
+--------------------------------------------------------------------------------
+17. TRIP DETAIL ANALYSIS
+--------------------------------------------------------------------------------
+Nearly fully available now. Passenger/pickup/destination/driver/vehicle/
+state/notes/exceptions: all available (Operations has full-row Passenger
+access, unlike Driver). Trip Type and Requested-By/Reference fields are
+CONDITIONAL on the Trip having a linked TransportationRequest (request_id
+is nullable) and, for Reference specifically, blocked entirely — no
+reference-code field exists anywhere in the schema (GAP, non-blocking to
+the rest of the screen). Companion: no field exists at all (same gap as
+Driver Active Trip). Add Note/Report Issue/Edit Trip/Contact Driver: all
+available now via existing direct-write or column-grant paths, none of
+them RPCs (correctly so — trip_notes/trip_exceptions were never brought
+under the controlled-RPC umbrella, and planning-column UPDATE was already
+grantable from P1-E2-S1). "More" menu contents: unresolved, not guessed.
+
+--------------------------------------------------------------------------------
+18. DISPATCH BOARD ANALYSIS
+--------------------------------------------------------------------------------
+Queue, grid, and capacity data all map cleanly to existing sources.
+"Potential timing conflict"/CONFLICT: PRODUCT DECISION REQUIRED, same
+underlying gap as Running Late (no formula exists). The spatial time-grid
+strongly implies drag-and-drop but no drag affordance is confirmed in a
+static image — treated as implied, not assumed; a click-to-assign
+interaction is fully backend-ready today via assign_trip/reassign_trip
+without needing drag-and-drop at all, and is the recommended first
+implementation (see implementation plan).
+
+--------------------------------------------------------------------------------
+19. DRIVER ACTIVE TRIP ANALYSIS
+--------------------------------------------------------------------------------
+The single most backend-ready screen in the set: every field maps to
+driver_get_trip_detail, every lifecycle action maps to one of the 6
+driver_* RPCs (only "I'VE ARRIVED" is directly shown, but the full
+6-action set was mapped from the established RPC contract since a real
+Trip in progress cycles through all of them). Only gaps: Companion (no
+field) and "Trip Details" button's exact destination (unresolved).
+
+--------------------------------------------------------------------------------
+20. DRIVER TODAY ANALYSIS
+--------------------------------------------------------------------------------
+Fully maps to driver_list_active_trips (+ a client-side "next trip" vs.
+"later today" split by scheduled_pickup_at). "Completed Today" section:
+also available — driver_list_active_trips naturally excludes it once a
+Trip's assignment closes on completion, so "Completed Today" would need
+either a same-day slice of driver_list_trip_history or a product decision
+on whether same-day-completed Trips should remain in the active list
+briefly — flagged as a minor open question in the mapping doc, not a
+blocking gap. "Pickup updated from X": BACKEND GAP, no change-tracking
+exists.
+
+--------------------------------------------------------------------------------
+21. DRIVER TRIPS ANALYSIS
+--------------------------------------------------------------------------------
+Confirmed as the ACTIVE/UPCOMING list (driver_list_active_trips), not
+history — every row shown is "Assigned," spans only today+tomorrow, and no
+date-range control is visible. The separate "History" tab (no reference
+image provided, GAP-3) is where driver_list_trip_history's materially
+redacted results belong instead — explicitly NOT conflated with this
+screen.
+
+--------------------------------------------------------------------------------
+22. INTERNAL NEW TRIP ANALYSIS
+--------------------------------------------------------------------------------
+The most architecturally significant reference in the set. Confirmed via
+direct migration inspection: `trips` INSERT is granted to `authenticated`
+WITHOUT column restriction (unlike UPDATE, which was properly narrowed in
+P1-E2-S1) — a raw client INSERT could set `state` to any value at
+creation, bypassing the entire lifecycle model this project has otherwise
+carefully protected. This is GAP-1, the top BLOCKING finding of this
+phase. The screen's "Import request details" affordance additionally
+requires GAP-2 (no atomic create-Trip-and-accept-Request mechanism
+exists). Passenger search/creation is unaffected and already backend-
+ready (Passenger has no lifecycle machine to protect). This screen is the
+one BLOCKS SPECIFIC SCREEN item in the whole matrix.
+
+--------------------------------------------------------------------------------
+23/24. TRANSPORTATIONREQUEST/TRIP DISTINCTION / REQUEST-TO-TRIP GAP STATUS
+--------------------------------------------------------------------------------
+Domain separation confirmed intact and preserved — not collapsed. Request-
+to-Trip conversion is a confirmed gap (GAP-2), correctly understood as 1:N
+(a Request may produce zero, one, or multiple Trips — e.g. outbound +
+return), not assumed 1:1 anywhere in this analysis.
+
+--------------------------------------------------------------------------------
+25/26/27/28. COMPONENT INVENTORY / DESIGN TOKEN FINDINGS / ICON MAPPING /
+ACCESSIBILITY ADAPTATIONS
+--------------------------------------------------------------------------------
+Component inventory: docs/design/component-inventory.md. Confirmed the
+existing component library (built in P0-E2-S3/S3A) already anticipates
+these exact Stitch labels — TripStatus.tsx's own TRIP_STATUS_MAP already
+lists "Requested"/"Pending Confirmation"/"Needs Assignment", and
+DriverStatus.tsx's DRIVER_STATUS_MAP already lists "Available"/"On Trip"/
+"Break"/"Unavailable" — verified by direct file inspection, not assumed.
+~14 existing primitives reused as-is; ~11 new screen/feature-level
+components identified (DispatchAssignmentGrid, TripRouteTimeline,
+RequestSourceSelector, etc.), none proposed as a generic abstraction
+merely for reuse.
+
+Design tokens: Care Navy/Route Teal/Interactive Teal/Calm Mist/Arrival
+Gold/white palette, Manrope/Inter typography split, and the existing
+StatusBadge category system all visually match the Stitch references —
+no VISUAL EXCEPTION requiring a new one-off style was found across any of
+the 7 screens.
+
+Icons: every icon concept in the references maps to an existing or
+directly-available Phosphor icon; the existing icons.ts mapping already
+documents the one known substitution (Path for the absent Route glyph,
+ZD-035) and needs no new exception for this batch.
+
+Accessibility: contrast, touch-target sizing, and status-not-relying-on-
+color-alone all already look consistent with the design system's existing
+approach; specific implementation-phase adaptations needed: form labels
+for the New Trip screen's radio-card group, keyboard/focus order for the
+Dispatch grid (especially if drag-and-drop is added later — a keyboard-
+operable alternative will be required then, not designed now), and
+explicit status text (not just badge color) throughout, which the
+existing StatusBadge component's text-label pattern already satisfies.
+
+--------------------------------------------------------------------------------
+29/30/31. EMPTY STATES / LOADING STATES / ERROR-STATE MAPPING
+--------------------------------------------------------------------------------
+Empty states identified: no trips today, no assigned Trip, no history, no
+matching Dispatch results, no active assignment, no open exceptions
+(already shown in reference 02 as an example of the pattern). Loading:
+recommended local skeletons per panel/table rather than full-screen
+spinners, not implemented. Error-state mapping: the existing 6-code
+contract (ZW001-ZW006) mapped to specific future UI behaviors — see
+docs/product/application-implementation-plan.md "Error-state mapping".
+
+--------------------------------------------------------------------------------
+32. DATA-REFRESH STRATEGY
+--------------------------------------------------------------------------------
+Per-screen recommendations in the implementation plan. Realtime marked as
+a POSSIBLE FOLLOW-UP for the Dispatch Board only, not added or assumed
+elsewhere, and not implemented in this phase.
+
+--------------------------------------------------------------------------------
+33/34/35/36. FRONTEND ARCHITECTURE / AUTH ARCHITECTURE / ORG-CONTEXT /
+ENVIRONMENT PLAN
+--------------------------------------------------------------------------------
+All four: docs/product/application-implementation-plan.md and
+application-route-map.md. Frontend architecture builds on the EXISTING
+Next.js App Router scaffold, not a new structure. Auth architecture and
+org-context are conceptual only (nothing implemented) — no Supabase client
+of any kind currently exists in src/ (confirmed: `grep -rl "supabase"
+src/` returns nothing). Environment plan: the 3 needed variables ALREADY
+EXIST in .env.local (confirmed by inspection, not created by this phase)
+— no new env var was added, no secret was added or read.
+
+--------------------------------------------------------------------------------
+37/38/39/40. BACKEND GAPS / SCREEN IMPLEMENTABILITY MATRIX / BLOCKING /
+NON-BLOCKING GAPS
+--------------------------------------------------------------------------------
+Full register: docs/product/ui-backend-gap-register.md. 9 gaps + 9 product
+decisions found, none newly built or resolved. Implementability matrix:
+docs/product/application-implementation-plan.md "Screen implementability
+matrix" — every one of the 7 screens listed, backend-read/mutation/auth
+readiness scored independently per work item §51's exact required
+columns.
+
+BLOCKING (specific screen): GAP-1 (controlled Trip creation) and GAP-2
+(request-to-Trip conversion) — both block only Internal New Trip.
+BLOCKING (all screens equally, structural): GAP-5 (no Supabase client
+wiring yet) — this is P1-E3-S1's own defined scope, not a surprise.
+NON-BLOCKING: GAP-3 (missing History/Profile reference images), GAP-4 (no
+sign-in reference), GAP-6 (Driver Availability, deferred), GAP-7
+(TripException Driver view, deferred), GAP-8/GAP-9 (Overview aggregate
+RPC, Export Day Sheet — both optional).
+
+--------------------------------------------------------------------------------
+41. RECOMMENDED IMPLEMENTATION ORDER
+--------------------------------------------------------------------------------
+P1-E3-S1 Application shell + Auth + role routing (unconditional first —
+every screen needs it) -> P1-E3-S2 Driver Active Trip + Today + Trips
+(reordered ahead of Operations: fewest gaps, exercises the full hardened
+RPC/read-model surface, lower interaction complexity) -> P1-E3-S3
+Operations Overview + Trip Detail -> P1-E3-S4 Dispatch Board
+(click-to-assign, not drag-and-drop yet) -> P1-E3-S5 Controlled internal
+Trip creation (backend-only, GAP-1/GAP-2, built to the same standard as
+every P1-E2-S2 RPC) -> P1-E3-S6 Internal New Trip (UI, now unblocked) ->
+P1-E3-S7 Dispatch Board drag-and-drop (deliberate follow-up). Full
+reasoning: application-implementation-plan.md.
+
+--------------------------------------------------------------------------------
+42. NEXT RECOMMENDED PHASE
+--------------------------------------------------------------------------------
+P1-E3-S1 — Application shell + Auth + role routing.
+
+--------------------------------------------------------------------------------
+43. DOCS CREATED
+--------------------------------------------------------------------------------
+  docs/design/stitch/stitch-reference-index.md
+  docs/product/ui-data-action-map.md
+  docs/product/application-route-map.md
+  docs/design/component-inventory.md
+  docs/product/ui-backend-gap-register.md
+  docs/product/application-implementation-plan.md
+  docs/reports/P1-E3-S0-completion-report.txt (this file)
+
+--------------------------------------------------------------------------------
+44. DOCS MODIFIED
+--------------------------------------------------------------------------------
+None. Per work item §57, existing domain/security documents were left
+untouched — every conflict or gap found is recorded in the 6 new documents
+above, not by editing canonical architecture docs.
+
+--------------------------------------------------------------------------------
+45. APPLICATION FILES MODIFIED
+--------------------------------------------------------------------------------
+NONE. Confirmed by `git status --short` — zero files under src/ appear.
+Existing application code (routes, components, layouts) was read for
+inspection only, never written to.
+
+--------------------------------------------------------------------------------
+46. SUPABASE FILES MODIFIED
+--------------------------------------------------------------------------------
+NONE. Confirmed by `git status --short` — zero files under supabase/
+appear. No migration created, edited, or applied; no test file changed; no
+`supabase db reset` was run in this phase (not needed — no database change
+was made).
+
+--------------------------------------------------------------------------------
+47. ZENWARD-WEB FILES MODIFIED
+--------------------------------------------------------------------------------
+NONE. No tool call in this session targeted /Users/datamatics/Zenward-Web
+at any point.
+
+================================================================================
+UI INGESTION GATE:  READY
+================================================================================
+SCREENS READY FOR IMPLEMENTATION (pending P1-E3-S1 auth/session plumbing,
+which blocks all of them equally):
+  Driver Active Trip, Driver Today, Driver Trips, Today's Operations,
+  Trip Detail, Dispatch Board (click-to-assign variant)
+
+BLOCKING BACKEND GAPS:
+  GAP-1 — Controlled internal Trip creation (blocks Internal New Trip only)
+  GAP-2 — Request-to-Trip conversion (blocks the request-import half of
+          Internal New Trip only; depends on GAP-1)
+  GAP-5 — No Supabase client/session wiring exists yet (blocks every
+          screen equally — this is P1-E3-S1's own defined scope)
+
+NON-BLOCKING GAPS:
+  GAP-3 — Missing Driver History/Profile visual references
+  GAP-4 — No sign-in visual reference
+  GAP-6 — Driver Availability system (deferred, reconfirmed)
+  GAP-7 — TripException Driver-facing view (deferred, reconfirmed)
+  GAP-8 — Operations Overview aggregate RPC (optional optimization)
+  GAP-9 — "Export Day Sheet" (optional, low priority)
+  Plus 9 PRODUCT DECISIONS REQUIRED (Running Late threshold, timing-
+  conflict formula, "Pending Confirmation" definition, change-tracking,
+  Companion field, reference codes, structured address fields, requester
+  organization field, multi-org UX) — see ui-backend-gap-register.md for
+  the full list; none block any screen's basic implementation, all affect
+  full visual/functional fidelity.
+
+NEXT RECOMMENDED PHASE:  P1-E3-S1 — Application shell + Auth + role
+                          routing.
+================================================================================
+
+Stopping here per instruction. Not beginning P1-E3-S1 coding. Waiting for
+review.
