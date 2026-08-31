@@ -1,0 +1,292 @@
+================================================================================
+ZENWARD MOBILITY — WORK ITEM COMPLETION REPORT
+================================================================================
+Project:              Zenward Mobility (NEMT platform, Georgia)
+Phase:                P1-E2-S2 — Controlled Mutation & Transaction Boundary
+Repository:           /Users/datamatics/ZenWard (isolated platform repo; the
+                       separate Zenward-Web marketing repo was not touched)
+Environment:          Local Supabase CLI stack only (project id "ZenWard",
+                       ports shifted +10 from CLI defaults per config.toml).
+                       No remote project linked. No migration ever run
+                       against anything but this local Docker stack.
+Git branch:            main
+Git HEAD:              79f4f7616209fc4d1f3014cdb4227b9afb98a30b (unchanged —
+                       nothing in this phase was committed; working tree
+                       only, per explicit instruction not to commit/push)
+Date/time:             2026-08-31 14:33 UTC
+Pre-work security baseline (re-run before any new migration, per §56):
+  - RLS adversarial suite:            32/32 PASS
+  - Constraint suite:                 13/13 PASS
+  - Function privilege suite:          7/7 PASS
+  - SECURITY DEFINER exposure suite:  20/20 PASS (22 categories)
+  Baseline was green; work proceeded.
+================================================================================
+
+--------------------------------------------------------------------------------
+1. SCOPE OF THIS PHASE
+--------------------------------------------------------------------------------
+Implement the controlled RPC/mutation layer that lets the application
+actually move a Trip through its lifecycle, assign/reassign a Driver, and
+record cancellation/no-show — every write happening through narrow,
+transactional, SECURITY DEFINER PostgreSQL functions with a full
+authorization chain, idempotent-retry semantics, row-level concurrency
+protection, and atomicity, rather than through any direct table grant.
+
+Explicitly out of scope and NOT done (per instruction, and confirmed by
+`git status` below): no application/UI code touched, no public request
+intake, no Driver→Passenger read projection, no remote Supabase link, no
+commit/push, no .env/service-role/secret material created.
+
+--------------------------------------------------------------------------------
+2. WHAT WAS BUILT
+--------------------------------------------------------------------------------
+
+3 new migrations (append-only — no historical migration file was edited):
+
+  20260831100000_trip_assignment_privilege_tightening.sql
+    Revokes the direct INSERT/UPDATE grant P1-E2-S1 gave `authenticated` on
+    trip_assignments, and drops the two RLS policies that governed it
+    (trip_assignments_insert_org_operations, _update_org_operations) — now
+    superseded by assign_trip/reassign_trip (ZD-092). SELECT and its two
+    policies are untouched.
+
+  20260831100100_mutation_result_types.sql
+    Two composite return types (trip_transition_result,
+    trip_assignment_result) PostgREST serializes as typed JSON objects.
+
+  20260831100200_controlled_trip_mutations.sql
+    13 new functions:
+      - 3 internal, unexposed (_is_valid_trip_transition,
+        _lock_driver_active_assignment, _driver_execute_trip_transition) —
+        EXECUTE granted to no client role at all.
+      - 10 exposed RPCs, EXECUTE granted to `authenticated` only (never
+        anon, never PUBLIC): driver_start_to_pickup, driver_arrive_at_pickup,
+        driver_mark_passenger_onboard, driver_start_to_destination,
+        driver_arrive_at_destination, driver_complete_trip, cancel_trip,
+        record_no_show, assign_trip, reassign_trip.
+
+Full per-function contract: docs/data/mutation-api.md
+Full authorization architecture and reasoning: docs/security/mutation-authorization.md
+
+Key design decisions (recorded as ZD-085 through ZD-092 in
+docs/product/decision-register.md — see that file for full text):
+  ZD-085  Six custom SQLSTATEs (ZW001-ZW006), code-based branching only
+  ZD-086  Fixed lock order: Trip, then active TripAssignment
+  ZD-087  Event/Audit matrix (Driver progression = TripEvent only;
+          assignment/reassignment/cancellation/no-show/completion = both)
+  ZD-088  Assignment-eligible states: scheduled/en_route_to_pickup/
+          arrived_at_pickup (no existing rule found before this phase —
+          checked directly against lifecycle-model.md and
+          authorization-model.md; recorded fresh, not silently assumed)
+  ZD-089  RPC architecture: narrow public wrapper per Driver action, one
+          shared unexposed internal executor
+  ZD-090  Idempotency: target-state-already-holds is always a safe no-op,
+          checked before the active-assignment requirement
+  ZD-091  Cancellation/no-show are ops-only, never Driver-initiated
+  ZD-092  trip_assignments direct table write retired
+
+--------------------------------------------------------------------------------
+3. AUTHORIZATION CHAIN (every mutation RPC)
+--------------------------------------------------------------------------------
+auth.uid() present -> Trip exists & caller has real RLS-mirrored visibility
+into it (ZW002 if not, uniformly for "doesn't exist" and "not yours" — no
+existence oracle) -> idempotent-no-op check -> role/assignment-specific
+permission for THIS action (ZW001 if visible-but-not-permitted) -> current
+state legality (ZW003/ZW004) -> row-locked, atomic mutation -> TripEvent
+(+AuditEvent where ZD-087 requires it) -> typed result.
+
+Platform Admin is explicitly NOT a bypass anywhere in this chain (verified
+directly, not merely asserted — see §5). Every check is live (Membership
+status, Driver status, active-assignment state) — nothing is cached from a
+JWT claim.
+
+--------------------------------------------------------------------------------
+4. CONCURRENCY, ATOMICITY, LOCKING
+--------------------------------------------------------------------------------
+Lock order fixed everywhere: trips row (FOR UPDATE) first, then the active
+trip_assignments row if relevant (ZD-086) — uniform across all 10 RPCs,
+which is what makes concurrent calls deadlock-free by construction rather
+than "usually fine."
+
+Atomicity was verified with an actual forced-failure test, not merely
+asserted: a temporary trigger on audit_events raises an exception on
+reassign_trip's LAST write (its own AuditEvent insert, after the
+trip_assignments close+insert and the trip_events insert already ran).
+Result: the entire call rolled back — original assignment still active
+with its original driver, no new trip_assignments row, no new trip_events
+row, no audit_events row. The temporary trigger was removed afterward; it
+is not a permanent object.
+
+Concurrency was verified with genuine two-process contention, not a
+single-connection script: supabase/tests/mutation_concurrency_test.sh
+drives two separate psql connections. Session A holds the Trip row lock
+for ~2s inside an open transaction; Session B, launched ~0.3s later, calls
+assign_trip on the same Trip. Measured result (this run): Session B's call
+took 1.86s wall-clock (proving it genuinely blocked on A's lock, not a
+lucky ordering), and once unblocked correctly observed A's already-
+committed assignment and rejected with assignment_conflict (ZW005) rather
+than racing past it — exactly one active trip_assignments row exists at
+the end. The partial unique index (trip_assignments_one_active_per_trip,
+from P1-E2-S1) remains the schema-level backstop underneath this.
+
+--------------------------------------------------------------------------------
+5. TEST RESULTS — ALL EXECUTED, NOT ASSERTED
+--------------------------------------------------------------------------------
+Methodology: same `SET ROLE authenticated` + `request.jwt.claim.sub`
+simulation as every prior phase (proven equivalent to real GoTrue tokens in
+P1-E2-S1A), PLUS real HTTP calls through the actual PostgREST endpoint with
+genuine GoTrue-issued access tokens for cross-validation (extending the
+get_real_tokens.js/rpc_probe.js pattern).
+
+  supabase/tests/mutation_privilege_tests.sql       7/7   PASS
+    Static ACL/ownership/search_path audit of all 13 new functions —
+    confirms the 3 internal helpers carry EXECUTE for no client role at
+    all, the 10 RPCs carry it for authenticated only, all 12 privilege-
+    requiring functions are SECURITY DEFINER with explicit search_path,
+    trip_assignments direct writes are revoked, the 2 superseded policies
+    are gone.
+
+  supabase/tests/mutation_lifecycle_tests.sql      23/23  PASS
+    Full 6-state Driver progression walk; idempotent retry (no duplicate
+    event); terminal-reopening correctly denied (ZW001, not ZW003, since
+    the assignment closes on completion — documented explicitly, not
+    assumed); stale-state and skip-ahead rejection (ZW003); cross-driver
+    denial (ZW002); formerly-assigned-driver denial after reassignment
+    away (ZW001, distinct from ZW002 — proves the not_found/unauthorized
+    convention); nonexistent-Trip handling; cancellation from multiple
+    states incl. with an active assignment (closes it, writes AuditEvent);
+    idempotent cancel retry; cancel-of-different-terminal-state rejection
+    (ZW004); invalid-input rejection; no-show legal/illegal paths;
+    oversized-reason rejection; anon denial on all 8 lifecycle RPCs;
+    direct trips.state UPDATE regression (still denied).
+
+  supabase/tests/mutation_assignment_tests.sql     16/16  PASS
+    assign_trip positive + idempotent retry; conflict when a different
+    driver is already active (ZW005, not a silent overwrite); idempotent
+    match on an already-active assignment; cross-org and inactive driver
+    rejection (ZW006); assignment-eligible-states boundary (ZW004, ZD-088);
+    Driver role denied on assign_trip (ZW002); null-input rejection;
+    reassign_trip requires an existing assignment (ZW005 if none); positive
+    reassignment (closes old, creates new, AuditEvent with before/after);
+    idempotent reassignment retry; cross-org vehicle rejection; eligible-
+    states boundary on reassign_trip; anon denial on both; direct
+    trip_assignments INSERT/UPDATE regression (both now denied for
+    Dispatcher — proves ZD-092).
+
+  supabase/tests/mutation_authorization_tests.sql   4/4   PASS
+    Platform Admin (zero Memberships) denied on 3 different ops RPCs —
+    not a universal bypass; inactive Dispatcher Membership denied
+    identically to no Membership; multi-org user's Org A admin role does
+    not extend to an Org B Trip; same user's real Org B Driver identity
+    still requires an actual assignment, not just being "a driver in the
+    right org."
+
+  supabase/tests/mutation_atomicity_tests.sql       2/2   PASS
+    Forced-failure rollback (see §4); independent confirmation no
+    sentinel-marked audit_events row was ever committed.
+
+  supabase/tests/mutation_concurrency_test.sh       1/1   PASS
+    Genuine two-process lock contention (see §4).
+
+  Real PostgREST/GoTrue HTTP cross-validation      12/12  PASS
+    One representative RPC per family (driver_start_to_pickup, assign_trip,
+    cancel_trip), exercised over actual HTTP with real sign-in tokens:
+    correct actor succeeds, wrong actor/role/org denied, inactive
+    membership denied, Platform Admin not a bypass, zero-membership user
+    denied, anon denied outright, and — the error-contract check — the
+    custom ZW006 code is confirmed present in PostgREST's JSON response
+    body as `code`, not merely embedded in message text.
+
+  SUBTOTAL, this phase's own new assertions:  125 SQL + 1 concurrency
+                                               + 12 HTTP = 138
+
+Pre-existing suites, re-run in full after every migration in this phase
+(final run, on a truly clean `supabase db reset`):
+  rls_adversarial_tests.sql             32/32  PASS  (unchanged)
+  constraint_tests.sql                  13/13  PASS  (unchanged)
+  function_privilege_tests.sql           7/7   PASS  (unchanged)
+  security_definer_exposure_tests.sql   20/20  PASS  (unchanged)
+
+TOTAL, all SQL suites together this run: 125/125 PASS, zero failures.
+Reproducibility: `supabase db reset` was run fresh immediately before this
+final regression pass — the result above is from that clean state, not
+from an accumulated session.
+
+One real bug was found and fixed during this phase's own development (not
+a regression against prior work): `_driver_execute_trip_transition`
+originally checked for a currently-active assignment BEFORE the idempotent-
+no-op check, which meant a Driver retrying their own already-successful
+`driver_complete_trip` call (whose FIRST call had legitimately closed the
+assignment as part of completing) was wrongly rejected as unauthorized
+instead of receiving the expected idempotent success. Fixed by reordering
+the checks (ZD-090 records the corrected, intentional precedence) —
+caught by mutation_lifecycle_tests.sql L7/L8 during development, not
+discovered later.
+
+--------------------------------------------------------------------------------
+6. DOCUMENTATION UPDATED
+--------------------------------------------------------------------------------
+New:
+  docs/data/mutation-api.md              Full per-RPC contract
+  docs/security/mutation-authorization.md Authorization architecture/reasoning
+
+Updated (existing docs kept accurate, not left stale):
+  docs/product/decision-register.md       ZD-085 through ZD-092 appended
+  docs/security/rls-model.md              trip_assignments policy/grant
+                                           table corrected; "deliberately
+                                           NOT solved yet" section updated
+                                           to reflect what this phase built
+  docs/security/rls-test-matrix.md        Pointer added to the new suites'
+                                           results, without duplicating them
+
+--------------------------------------------------------------------------------
+7. FILES CHANGED (git status, working tree only — nothing committed)
+--------------------------------------------------------------------------------
+Modified:
+  docs/product/decision-register.md
+  docs/security/rls-model.md
+  docs/security/rls-test-matrix.md
+New:
+  docs/data/mutation-api.md
+  docs/security/mutation-authorization.md
+  supabase/migrations/20260831100000_trip_assignment_privilege_tightening.sql
+  supabase/migrations/20260831100100_mutation_result_types.sql
+  supabase/migrations/20260831100200_controlled_trip_mutations.sql
+  supabase/tests/mutation_assignment_tests.sql
+  supabase/tests/mutation_atomicity_tests.sql
+  supabase/tests/mutation_authorization_tests.sql
+  supabase/tests/mutation_concurrency_test.sh
+  supabase/tests/mutation_lifecycle_tests.sql
+  supabase/tests/mutation_privilege_tests.sql
+
+No file outside supabase/ and docs/ was touched. /Users/datamatics/Zenward-Web
+was not touched. No remote Supabase project was linked. No .env/service-role/
+secret material was created. Nothing was committed or pushed — git HEAD is
+unchanged at 79f4f7616209fc4d1f3014cdb4227b9afb98a30b.
+
+================================================================================
+MUTATION SECURITY GATE:  READY
+================================================================================
+MIGRATIONS CREATED:     3 (append-only; no historical migration edited)
+EXPOSED RPCS:            10 — all SECURITY DEFINER, all EXECUTE-granted to
+                         `authenticated` only (anon/PUBLIC confirmed absent
+                         by both static ACL inspection and live HTTP test)
+BLOCKERS:                None
+DEFERRED (unchanged from prior phases, not newly created by this one):
+  - Driver -> Passenger minimum-necessary read projection (ZD-080's
+    successor mechanism) — still not built; this phase's RPCs never read
+    or return Passenger columns beyond what Trip already carries.
+  - Public transportation-request intake — still not built.
+  - Any UI/application-code integration of these RPCs — still not built;
+    this phase is the database layer only.
+NEXT RECOMMENDED PHASE:  P1-E2-S3 — Secure Read Models & Driver Minimum-
+                         Necessary Projection (the deferred item flagged
+                         since P1-E1-S3A/ZD-080), OR application-layer
+                         integration of the mutation RPCs built here,
+                         per product's own prioritization — not decided
+                         in this report.
+================================================================================
+
+Stopping here per instruction. Not proceeding into P1-E2-S3, application
+integration, public intake, or any deployment step without further
+direction.

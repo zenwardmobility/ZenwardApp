@@ -1,8 +1,10 @@
 # Zenward Platform — RLS Model
 
-**Work item:** P1-E2-S1 — Supabase Schema + RLS Foundation, amended by P1-E2-S1A — SECURITY DEFINER Exposure Audit (two passes: an initial pass and a deeper follow-up)
+**Work item:** P1-E2-S1 — Supabase Schema + RLS Foundation, amended by P1-E2-S1A — SECURITY DEFINER Exposure Audit (two passes), amended by P1-E2-S2 — Controlled Mutation & Transaction Boundary (`trip_assignments` direct-write retirement, ZD-092)
 **Status:** Implemented and tested locally. Not deployed to any remote/production project.
 **Last updated:** 2026-08-31
+
+**P1-E2-S2 update:** `trips.state` (still zero-grant below) is now reachable through the controlled mutation RPCs documented in [mutation-api.md](../data/mutation-api.md)/[mutation-authorization.md](./mutation-authorization.md) — the "intentional, temporary over-restriction" this document originally described is now resolved for lifecycle transitions, assignment, cancellation, and no-show. `trip_assignments` direct INSERT/UPDATE (previously granted below) is now revoked entirely (ZD-092) in favor of `assign_trip`/`reassign_trip`.
 
 This document is the security layer on top of [schema.md](../data/schema.md). It implements exactly what [authorization-model.md](../product/authorization-model.md) confirmed. See [rls-test-matrix.md](./rls-test-matrix.md) for how every claim here was actually verified against a running local instance — not asserted from migration syntax alone.
 
@@ -14,7 +16,7 @@ No table anywhere in this schema has any grant to the `anon` role. Public/anonym
 
 ## Policy inventory
 
-52 policies across 15 tables, all scoped `TO authenticated` (none to `anon`), none using a blanket `USING (true)`. Full list, table by table (see `supabase/migrations/20260830131700_rls_policies.sql` for the exact SQL):
+52 policies were created in P1-E2-S1; P1-E2-S2 dropped 2 of them as superseded (ZD-092), leaving **50** active across 15 tables, all scoped `TO authenticated` (none to `anon`), none using a blanket `USING (true)`. Full list, table by table (see `supabase/migrations/20260830131700_rls_policies.sql` for the original SQL and `supabase/migrations/20260831100000_trip_assignment_privilege_tightening.sql` for the P1-E2-S2 change):
 
 | Table | Policies |
 |---|---|
@@ -28,7 +30,7 @@ No table anywhere in this schema has any grant to the `anon` role. Public/anonym
 | `vehicles` | `vehicles_select_org_operations`, `vehicles_select_assigned_driver`, `vehicles_insert_org_admin`, `vehicles_update_org_admin` |
 | `transportation_requests` | `transportation_requests_select_org_operations`, `_insert_org_operations`, `_update_org_operations` — no anonymous policy of any kind |
 | `trips` | `trips_select_org_operations`, `trips_select_assigned_driver`, `trips_insert_org_operations`, `trips_update_org_operations` |
-| `trip_assignments` | `trip_assignments_select_org_operations`, `trip_assignments_select_own_driver`, `trip_assignments_insert_org_operations`, `trip_assignments_update_org_operations` — no Driver write policy |
+| `trip_assignments` | `trip_assignments_select_org_operations`, `trip_assignments_select_own_driver` — **INSERT/UPDATE policies retired in P1-E2-S2 (ZD-092)**; all writes now go through `assign_trip`/`reassign_trip` |
 | `trip_events` | `trip_events_select_org_operations`, `trip_events_select_assigned_driver` — **no INSERT/UPDATE/DELETE policy for any role** |
 | `trip_notes` | `trip_notes_select_operations`, `trip_notes_select_assigned_driver_visible`, `trip_notes_insert_operations`, `trip_notes_insert_assigned_driver`, `trip_notes_update_operations` — no Driver UPDATE |
 | `trip_exceptions` | `trip_exceptions_select_operations`, `trip_exceptions_select_assigned_driver`, `trip_exceptions_insert_operations`, `trip_exceptions_insert_assigned_driver`, `trip_exceptions_update_operations` — no Driver UPDATE (cannot resolve) |
@@ -43,12 +45,12 @@ RLS alone controls *which rows* a query can touch — it says nothing about *whi
 | Table | Grantable (client-editable) columns | Never grantable to `authenticated` |
 |---|---|---|
 | `trips` | `scheduled_pickup_at`, `appointment_at`, `pickup_description`, `destination_description`, `assistance_notes`, `instructions`, `pickup_facility_id`, `destination_facility_id` | `state`, `organization_id`, `passenger_id`, `request_id`, `completed_at`, `cancelled_at`, `cancellation_reason`, `no_show_at` |
-| `trip_assignments` | `ended_at`, `end_reason` | `driver_id`, `vehicle_id`, `trip_id`, `organization_id`, `assigned_at`, `assigned_by` |
+| `trip_assignments` | **none** — INSERT/UPDATE fully revoked from `authenticated` in P1-E2-S2 (ZD-092); `ended_at`/`end_reason` were grantable here before this phase | everything, now — `assign_trip`/`reassign_trip` (SECURITY DEFINER) are the sole write path |
 | `memberships` | `role`, `status` | `organization_id`, `user_id` |
 | `organizations` | `name`, `status` | `id` |
 | `drivers`, `passengers`, `facilities`, `vehicles` | their own descriptive/status fields | `organization_id` (and `id`) |
 
-**Note on `trips`:** this is deliberately *more conservative* than the approved model strictly requires. `authorization-model.md` describes Trip lifecycle transitions as eventually happening through a controlled RPC that Organization Admin/Dispatcher would also use for `cancel_trip`/`record_no_show` — but that RPC doesn't exist yet (work item §63 explicitly defers it). Rather than grant `state`/terminal-timestamp columns to `authenticated` now and rely on policy logic alone to prevent misuse, this phase revokes them entirely; **no one** — not even Organization Admin via the API — can change `trips.state` until a later phase adds the controlled mechanism. This is flagged explicitly as an intentional, temporary over-restriction, not an oversight: it means Organization Admin/Dispatcher currently have no way to progress a trip's lifecycle at all through this schema alone, which is correct for a phase that explicitly excludes lifecycle-transition RPCs.
+**Note on `trips` (original P1-E2-S1 text, now resolved by P1-E2-S2):** this was deliberately *more conservative* than the approved model strictly required at the time. `authorization-model.md` described Trip lifecycle transitions as eventually happening through a controlled RPC — that RPC didn't exist yet in P1-E2-S1 (work item §63 explicitly deferred it), so `state`/terminal-timestamp columns were revoked entirely rather than granted with policy logic alone trusted to prevent misuse. **P1-E2-S2 built that controlled mechanism** (`docs/data/mutation-api.md`) — `trips.state` and the terminal timestamp/reason columns are still not, and will never be, directly grantable to `authenticated`; they are reachable exclusively through the `SECURITY DEFINER` mutation RPCs, which is the intended permanent shape, not a temporary gap.
 
 Verified directly: `information_schema.column_privileges` for `authenticated` on `trips`/`memberships`/`trip_assignments` shows exactly the columns above and no others (see the completion report).
 
@@ -124,8 +126,8 @@ No Supabase Storage bucket is created in this phase. Restated as the required in
 
 ## What's deliberately NOT solved yet
 
-- Trip lifecycle-transition RPCs (so `trips.state` etc. have no grantable path at all right now — see the field-level table above).
-- Assignment/reassignment RPCs (creation/closing of `trip_assignments` currently goes through the plain `_insert_org_operations`/`_update_org_operations` policies plus the column-privilege restriction — functional, but not yet wrapped in the atomic, audited mechanism ZD-060/ZD-061 describe for the future).
-- The driver → passenger projection (see above).
-- `trip_events`/`audit_events` INSERT of any kind for any role — both are SELECT-only in this phase; a future controlled path (trigger or RPC) will need to write them, not a direct client grant.
-- Public transportation-request intake (no anonymous INSERT policy exists — deferred per ZD-044/ZD-050 and this work item's explicit instruction not to add one merely to support the marketing site).
+- ~~Trip lifecycle-transition RPCs~~ — **built in P1-E2-S2**, see [mutation-api.md](../data/mutation-api.md).
+- ~~Assignment/reassignment RPCs~~ — **built in P1-E2-S2** (`assign_trip`/`reassign_trip`); the plain INSERT/UPDATE policies this line used to describe were retired in the same phase (ZD-092).
+- The driver → passenger projection (see above) — still deferred; unaffected by P1-E2-S2.
+- `trip_events`/`audit_events` INSERT for any *human* role directly — still true; both tables are written only from inside the P1-E2-S2 `SECURITY DEFINER` mutation functions, never via a direct client grant to `authenticated`.
+- Public transportation-request intake (no anonymous INSERT policy exists — deferred per ZD-044/ZD-050 and this work item's explicit instruction not to add one merely to support the marketing site). Unaffected by P1-E2-S2.

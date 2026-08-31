@@ -1,0 +1,319 @@
+================================================================================
+ZENWARD MOBILITY — WORK ITEM COMPLETION REPORT
+================================================================================
+Project:              Zenward Mobility (NEMT platform, Georgia)
+Phase:                P1-E2-S2A — Idempotent Authorization Edge-Case Audit
+Repository:           /Users/datamatics/ZenWard (isolated platform repo; the
+                       separate Zenward-Web marketing repo was not touched)
+Environment:          Local Supabase CLI stack only (project id "ZenWard",
+                       ports shifted +10 from CLI defaults). No remote
+                       project linked.
+Git branch:            main
+Git HEAD:              79f4f7616209fc4d1f3014cdb4227b9afb98a30b (unchanged —
+                       nothing committed or pushed; P1-E2-S2's own migration
+                       was corrected in place in the working tree, since it
+                       was never committed either — see §5)
+Date/time:             2026-08-31 16:25 UTC
+================================================================================
+
+--------------------------------------------------------------------------------
+1. BEHAVIOR BEFORE AUDIT
+--------------------------------------------------------------------------------
+`_driver_execute_trip_transition` (the shared internal executor behind all 6
+`driver_*` RPCs) granted its idempotent no-op success whenever:
+
+  (a) the Trip's current state already equalled this function's target
+      state, AND
+  (b) the calling Driver satisfied `is_driver_assigned_to_trip` — i.e. had
+      EVER (historically) held a `trip_assignments` row on this Trip.
+
+Condition (b) does not distinguish "I am the Driver who performed this
+exact transition" from "I am A Driver who once had some assignment on this
+Trip, performed by someone else entirely." Two different Drivers can each
+satisfy `is_driver_assigned_to_trip` on the same Trip (one historical, one
+current). This meant a formerly-assigned Driver, retrying an action that a
+DIFFERENT Driver had actually performed after a reassignment, would
+receive a false idempotent success — `changed: false`, current_state
+correctly reported, but the caller was never the legitimate actor.
+
+This gap was NOT caught by the P1-E2-S2 test suites. Those suites tested
+"the actual completer retries their own successful call" (required
+behavior, correctly passing) and "a Driver who was never assigned at all"
+(correctly denied, since `is_driver_assigned_to_trip` alone already blocks
+that case) — but never the specific combination this audit targets: a
+Driver who WAS once assigned, but is retrying an action a DIFFERENT actor
+performed.
+
+--------------------------------------------------------------------------------
+2. TARGETED TEST RESULTS A-F
+--------------------------------------------------------------------------------
+Suite: supabase/tests/mutation_idempotent_authorization_tests.sql — all
+run against a running local instance, not asserted from reasoning alone.
+
+  A. Driver A1 performs en_route_to_pickup themselves, is reassigned away
+     to Driver A2, then retries driver_start_to_pickup.
+     Result: idempotent SUCCESS (changed=false), no duplicate TripEvent.
+     PASS — this is a legitimate retry of Driver A1's OWN prior action;
+     ZD-090's core guarantee (a Driver may safely retry their own already-
+     successful call even after later losing the active assignment) must
+     hold and does.
+
+  B. Driver A1 is reassigned away BEFORE performing any transition; Driver
+     A2 performs en_route_to_pickup -> arrived_at_pickup. Driver A1 then
+     calls driver_arrive_at_pickup.
+     Result (AFTER fix): DENY, ZW001 unauthorized. No duplicate TripEvent.
+     PASS. (Empirically confirmed this was a real gap before the fix —
+     see §3.)
+
+  C. A same-org Driver (A2) who was NEVER assigned to the Trip at all
+     calls a Driver RPC whose target state already holds.
+     Result: DENY, ZW002 not_found (blocked at the ever-assigned gate,
+     before idempotency is even considered).
+     PASS — this case was already safe before the fix; confirmed here as
+     a permanent regression guard.
+
+  D. A foreign-org Driver (Org B) calls a Driver RPC on an Org A Trip
+     whose target state already holds.
+     Result: DENY, ZW002 not_found, no existence disclosure.
+     PASS — already safe before the fix (current_driver_id resolves null
+     for a user with no Driver row in the Trip's organization); confirmed
+     as a permanent regression guard.
+
+  E. REQUIRED EXISTING BEHAVIOR: the Driver who actually performed
+     driver_complete_trip retries the exact call after their assignment
+     has been closed by that same completion.
+     Result: idempotent SUCCESS (changed=false), no duplicate TripEvent.
+     PASS — confirms the fix did not regress the behavior ZD-090 exists
+     to guarantee.
+
+  F. A formerly-assigned Driver who did NOT perform completion calls
+     driver_complete_trip after a DIFFERENT Driver completed it.
+     Result (AFTER fix): DENY, ZW001 unauthorized. No duplicate TripEvent.
+     PASS. (Empirically confirmed this was a real gap before the fix —
+     see §3; same shape as case B, applied to the terminal transition.)
+
+  6/6 PASS.
+
+--------------------------------------------------------------------------------
+3. GAP FOUND: YES
+--------------------------------------------------------------------------------
+Confirmed, not merely reasoned about. Before writing the fix, the original
+(pre-fix) idempotency logic was reproduced exactly under a temporary,
+non-persistent test-only function (`_test_old_vulnerable_driver_transition`,
+created, exercised, and dropped in the same session — never a permanent
+object, never touching the real corrected function) and run directly
+against case B's exact fixture state:
+
+  Driver A1 (formerly assigned, never performed arrived_at_pickup on this
+  Trip; Driver A2 actually performed it) called the OLD logic for
+  driver_arrive_at_pickup:
+
+    old_logic_result_case_b
+    ------------------------------------------------------------------
+    (90000000-0000-0000-0000-0000000000b3, arrived_at_pickup,
+     arrived_at_pickup, changed=false)
+
+  i.e. the old code returned a clean SUCCESS to Driver A1 for an action
+  they never performed — the exact false-positive this audit was
+  commissioned to find. This is empirical confirmation, not a hypothetical.
+
+Severity: Driver-facing, not Passenger/tenant-data-facing. The false
+success does not let a Driver mutate anything they could not otherwise
+already have observed via RLS SELECT (the Trip's true current state was
+never misreported — `current_state` in the false-success response was
+accurate), and it grants no elevated read access. Its impact is a false
+positive on the ACTION-authorization boundary specifically: an
+unauthorized-to-act Driver could believe (and have their client believe)
+they successfully performed an action they did not, in a scenario that
+requires a genuine prior reassignment to construct. No exploitation of
+this gap occurred in this local, fictional-data-only environment; it was
+found by design review before this code was committed, deployed, or
+exposed to any real client.
+
+--------------------------------------------------------------------------------
+4. IMPLEMENTATION CHANGE
+--------------------------------------------------------------------------------
+`_driver_execute_trip_transition`'s idempotent no-op branch now requires,
+in addition to "Trip already at target state":
+
+  exists (
+    select 1 from public.trip_events
+    where trip_id = p_trip_id
+      and event_type = p_event_type
+      and actor_user_id = auth.uid()
+  )
+
+i.e. trusted, append-only proof — from the same `trip_events.actor_user_id`
+column every mutation function already writes — that THIS caller
+(resolved via `auth.uid()`, never a caller-supplied value) is the one who
+actually performed this exact transition. Every event_type in this
+transition set is written at most once per Trip (transitions are strictly
+forward, terminal states never revisited), so the lookup is unambiguous —
+no ordering or LIMIT concerns.
+
+A caller who fails this check falls through to the pre-existing active-
+assignment requirement, which correctly denies them (ZW001) — a caller in
+that branch can never still hold the Trip's active assignment either (if
+they did, they would be the one who performed the transition and would
+already have matched the actor check above), so the fallthrough is safe
+by construction, not merely by the immediate test results.
+
+No caller-supplied actor id was introduced anywhere, per instruction.
+`cancel_trip`, `record_no_show`, `assign_trip`, and `reassign_trip` were
+reviewed and deliberately NOT changed — their authorization is live-
+checked, org-scoped role (`has_org_role`), not trip-instance-specific
+personal identity, so no analogous gap exists there: any currently-
+authorized Organization Admin/Dispatcher may legitimately re-assert an
+already-true org-level fact (e.g. retry cancelling a Trip a colleague
+already cancelled), which is intended behavior, not a security gap.
+
+--------------------------------------------------------------------------------
+5. MIGRATION CHANGE
+--------------------------------------------------------------------------------
+P1-E2-S2's own migration, `supabase/migrations/20260831100200_controlled_
+trip_mutations.sql`, was corrected IN PLACE rather than appended to with a
+4th migration. This is consistent with the project's current working-tree
+policy: P1-E2-S2 was never committed (git HEAD is still
+79f4f7616209fc4d1f3014cdb4227b9afb98a30b, from before P1-E2-S1 even), so
+that migration has never been "historical" in the sense the append-only
+rule protects against — it has never been applied to any shared, deployed,
+or committed environment, only this session's own local `supabase db
+reset` cycles. No genuinely historical/committed migration was edited.
+The file's own header comments were updated in the same edit to describe
+the corrected behavior accurately, so the migration remains self-
+documenting rather than requiring a separate patch note to be read
+alongside it.
+
+--------------------------------------------------------------------------------
+6. ZD-090 STATUS
+--------------------------------------------------------------------------------
+ZD-090 is AMENDED, not superseded. Its core guarantee — that the target-
+state-already-holds check takes precedence over the active-assignment
+requirement, so a Driver can retry their own already-successful call even
+after their assignment is later closed — remains correct and unchanged
+(confirmed by test E). A new decision, ZD-093, clarifies and tightens the
+no-op's own eligibility test: it must be actor-verified via trusted
+TripEvent history, not merely "the caller has some historical relationship
+to this Trip." Both decisions now appear in docs/product/decision-
+register.md; docs/data/mutation-api.md and docs/security/mutation-
+authorization.md were updated to describe the corrected behavior and
+reference the new decision.
+
+--------------------------------------------------------------------------------
+7. REGRESSION RESULTS — ALL RE-RUN, ALL GREEN
+--------------------------------------------------------------------------------
+Run fresh against a clean `supabase db reset`, immediately before this
+report was written:
+
+  rls_adversarial_tests.sql                    32/32  PASS
+  constraint_tests.sql                         13/13  PASS
+  function_privilege_tests.sql                  7/7   PASS
+  security_definer_exposure_tests.sql          20/20  PASS
+  mutation_privilege_tests.sql                  7/7   PASS
+  mutation_lifecycle_tests.sql                 23/23  PASS  (unchanged from
+                                                              P1-E2-S2, incl.
+                                                              L7/L8, the
+                                                              completer-retry
+                                                              and terminal-
+                                                              reopening cases)
+  mutation_assignment_tests.sql                16/16  PASS
+  mutation_authorization_tests.sql              4/4   PASS
+  mutation_atomicity_tests.sql                  2/2   PASS
+  mutation_idempotent_authorization_tests.sql   6/6   PASS  (NEW, this audit)
+
+  TOTAL SQL ASSERTIONS: 131/131 PASS, zero failures.
+
+  mutation_concurrency_test.sh (genuine two-process test): PASS — Session
+    B blocked 1.83s on Session A's row lock, then correctly detected the
+    conflict rather than racing past it. Unaffected by this change (the
+    fix touches only the idempotent-no-op branch, not the locking/
+    concurrency path).
+
+Reproducibility: the above is from a `supabase db reset` run immediately
+before this regression pass, not an accumulated session — the fix, and
+every existing guarantee, hold from a clean state.
+
+--------------------------------------------------------------------------------
+8. REAL HTTP TEST RESULT
+--------------------------------------------------------------------------------
+Function behavior changed (the idempotent no-op branch), so representative
+real PostgREST/GoTrue calls were re-run per instruction, extending the
+established get_real_tokens.js/rpc_probe.js pattern with 3 new checks
+specific to this audit:
+
+  HTTP-1  through HTTP-12  (P1-E2-S2's original checks): 12/12 PASS,
+    unaffected — includes the original driver_start_to_pickup/assign_trip/
+    cancel_trip authorization and error-contract checks.
+  HTTP-13 driver_start_to_pickup: Driver A2 (actually assigned) succeeds
+    -- PASS
+  HTTP-14 driver_start_to_pickup: same Driver A2 retrying their own action
+    is idempotent success (changed=false) -- PASS
+  HTTP-15 driver_start_to_pickup: a never-assigned Driver A1 is denied
+    (ZW002), not handed a false idempotent success -- PASS
+
+  15/15 real HTTP cross-validation checks passed, confirming the fix
+  behaves identically over genuine PostgREST/GoTrue infrastructure with
+  real sign-in tokens as it does at the SQL level.
+
+--------------------------------------------------------------------------------
+9. REMAINING RISKS
+--------------------------------------------------------------------------------
+- The fix's correctness depends on the invariant "each event_type is
+  written at most once per Trip." This holds today because the Trip state
+  machine is strictly forward and terminal states are never revisited
+  (verified structurally, not merely assumed — `_is_valid_trip_transition`
+  is the single source of truth for legal edges and permits no cycle back
+  to an already-visited state). Any FUTURE change that allowed a state to
+  be re-entered (e.g. an "un-cancel" or "reopen" action, explicitly not
+  built and not requested) would need to re-examine this assumption before
+  reuse, since a `trip_events` lookup with no ordering/LIMIT would then
+  need revisiting. Flagged for future reviewers, not a present gap.
+- Ops-family functions (`cancel_trip`/`record_no_show`/`assign_trip`/
+  `reassign_trip`) were deliberately left unchanged, reasoned through in
+  §4 above as not sharing this vulnerability shape. This reasoning was not
+  independently re-verified with a dedicated adversarial test suite the
+  way the Driver family was in this audit (out of this audit's stated
+  scope) — a future audit could add explicit "does the same-org, wrong-
+  original-actor idempotent-retry case exist for ops functions" tests as
+  a confirming regression guard, though the authorization-model reasoning
+  (org-scoped role, not trip-instance-specific identity) is sound.
+- This audit did not re-examine `assign_trip`/`reassign_trip`'s own
+  idempotent-match branches (content-based: matching driver_id/vehicle_id
+  against the currently active row) for an analogous actor-identity
+  question, since those checks were never actor-based to begin with (see
+  §4) — noted here for completeness, not because a gap is suspected.
+
+--------------------------------------------------------------------------------
+10. FILES CHANGED THIS AUDIT
+--------------------------------------------------------------------------------
+Modified (working tree only, P1-E2-S2's own uncommitted migration and docs):
+  supabase/migrations/20260831100200_controlled_trip_mutations.sql
+  docs/product/decision-register.md          (ZD-093 appended)
+  docs/data/mutation-api.md                  (idempotency section updated)
+  docs/security/mutation-authorization.md    (new subsection added)
+New:
+  supabase/tests/mutation_idempotent_authorization_tests.sql
+  docs/reports/P1-E2-S2A-idempotent-authorization-audit.txt (this report)
+
+No file outside supabase/ and docs/ was touched. /Users/datamatics/Zenward-Web
+was not touched. No remote Supabase project was linked. Nothing was
+committed or pushed — git HEAD is unchanged at
+79f4f7616209fc4d1f3014cdb4227b9afb98a30b. P1-E2-S3 was not begun.
+
+================================================================================
+IDEMPOTENT AUTHORIZATION GATE:  READY
+================================================================================
+- Legitimate Driver retry still succeeds:                       CONFIRMED (A, E)
+- Formerly-assigned wrong Driver cannot receive false success:  CONFIRMED (B, F)
+- Never-assigned Driver cannot receive false success:           CONFIRMED (C)
+- Foreign-org Driver cannot receive false success:               CONFIRMED (D)
+- No duplicate TripEvent in any case:                            CONFIRMED (all 6)
+- No duplicate AuditEvent:                                       N/A — the
+    Driver-transition family never writes AuditEvent (ZD-087); confirmed no
+    AuditEvent-writing function was touched by this change
+- All regression suites remain green:                            CONFIRMED
+    (131/131 SQL, 1/1 concurrency, 15/15 real HTTP, zero failures)
+================================================================================
+
+Stopping here per instruction. Not proceeding into P1-E2-S3 or any
+application/deployment work without further direction.

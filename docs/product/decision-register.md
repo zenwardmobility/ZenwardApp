@@ -1043,6 +1043,114 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Security
 - **Review Trigger:** Every future migration adding a SECURITY DEFINER or RPC-reachable function — reviewed against this convention before merge
 
+### ZD-085 — Controlled-mutation error contract: six custom SQLSTATEs, code-based branching only
+
+- **Date:** 2026-08-31
+- **Category:** Architecture / Security
+- **Decision:** Every controlled-mutation RPC (P1-E2-S2) rejects with one of exactly six custom SQLSTATEs — `ZW001 unauthorized`, `ZW002 not_found`, `ZW003 stale_state`, `ZW004 illegal_transition`, `ZW005 assignment_conflict`, `ZW006 invalid_input` — via `RAISE EXCEPTION ... USING ERRCODE = 'ZW0xx'`, with a short, stable, tenant-data-free message token (never a sentence, never row contents). Callers (application code and tests alike) must branch on PostgREST's `code` field in the JSON error body, never on message text.
+- **Status:** CONFIRMED — implemented and verified (125 SQL assertions plus 12 real-HTTP cross-validation checks, all passing; HTTP-12 specifically confirms PostgREST surfaces the custom code in the response body)
+- **Reason:** A stable, small, documented error vocabulary lets every caller (future UI, tests, other services) distinguish failure modes reliably without parsing human-readable text, which is exactly the kind of brittleness that breaks silently when a message is later reworded for clarity.
+- **Affected Product Areas:** All P1-E2-S2 mutation RPCs; docs/data/mutation-api.md
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** Any future mutation RPC family — must reuse this same six-code vocabulary rather than inventing new codes ad hoc
+
+### ZD-086 — Fixed row-locking order: Trip, then active TripAssignment
+
+- **Date:** 2026-08-31
+- **Category:** Architecture
+- **Decision:** Every controlled-mutation RPC that touches both tables locks `trips` first (`SELECT ... FOR UPDATE`) and the active `trip_assignments` row (if any) second, in that fixed order, with no exception. A pure idempotent-no-op read path may skip the second lock entirely (nothing to protect), but never acquires it out of order.
+- **Status:** CONFIRMED — implemented and verified (mutation_atomicity_tests.sql forced-failure test; mutation_concurrency_test.sh genuine two-process concurrency test, both passing)
+- **Reason:** Uniform lock ordering across every mutation path is what makes concurrent calls deadlock-free by construction rather than "usually fine" — two transactions each following the same fixed order can never form a lock cycle.
+- **Affected Product Areas:** All P1-E2-S2 mutation RPCs
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** Any future mutation RPC touching more than one of these tables — must follow this same order, extended consistently if a third table is added to a lock chain
+
+### ZD-087 — Event/Audit matrix: Driver progression is TripEvent-only, assignment/cancellation/no-show/completion get both
+
+- **Date:** 2026-08-31
+- **Category:** Product / Security
+- **Decision:** The 5 non-terminal Driver progression transitions write a TripEvent only. Assignment, reassignment, cancellation, no-show, and Trip completion (the one Driver action that reaches a terminal state) write both a TripEvent and an AuditEvent. Exactly one of each per successful call — closing an assignment as a side effect (on reassignment/cancellation/no-show/completion) is folded into that one event/audit row, never logged as a separate event.
+- **Status:** CONFIRMED
+- **Reason:** lifecycle-model.md/authorization-model.md never fully enumerated this split; the work item's own guidance (AuditEvent "strongly considered mandatory" for actions that materially change responsibility or reach a terminal disposition, TripEvent sufficient for routine progress) is adopted directly and recorded here as the definitive rule, rather than left to be reinvented per-function.
+- **Affected Product Areas:** trip_events, audit_events, all P1-E2-S2 mutation RPCs
+- **Dependencies:** None
+- **Owner:** Product / Security
+- **Review Trigger:** Any future mutation RPC family — apply this same "does it change responsibility or reach a terminal state" test to decide TripEvent-only vs. both
+
+### ZD-088 — Assignment-eligible Trip states: scheduled, en_route_to_pickup, arrived_at_pickup
+
+- **Date:** 2026-08-31
+- **Category:** Product
+- **Decision:** `assign_trip` and `reassign_trip` are legal only while a Trip is in `scheduled`, `en_route_to_pickup`, or `arrived_at_pickup`. Once a Trip reaches `passenger_onboard` or later, ordinary (re)assignment is no longer permitted through these RPCs.
+- **Status:** CONFIRMED — recorded fresh; neither lifecycle-model.md nor authorization-model.md specified a restricted eligible-state list for (re)assignment before this phase (checked directly against both documents; no existing rule was found to follow or contradict)
+- **Reason:** Reassigning a driver mid-transport (after the passenger is already onboard) is an operationally unusual, high-risk action that the MVP does not need to support through the ordinary controlled path; a conservative allow-list is safer than an unconstrained one and is trivially loosened later if a real dispatch workflow needs it.
+- **Affected Product Areas:** assign_trip, reassign_trip
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** A real dispatcher workflow that needs mid-transport reassignment — would require a deliberate, separately-reviewed extension, not a silent widening
+
+### ZD-089 — RPC architecture: one narrow function per Driver action, sharing one unexposed internal executor
+
+- **Date:** 2026-08-31
+- **Category:** Architecture / Security
+- **Decision:** The 6 Driver lifecycle transitions are each their own named, narrow SECURITY DEFINER function (`driver_start_to_pickup`, etc.) accepting only `p_trip_id` and `p_expected_current_state` — never a target-state parameter. All 6 delegate to one shared internal SECURITY DEFINER function (`_driver_execute_trip_transition`) that does accept a from/to state pair, but that internal function is never granted EXECUTE to any client role (`authenticated`, `anon`, or `PUBLIC`) — it is reachable only from within the 6 wrappers' own already-elevated execution context. The single canonical Trip transition matrix lives in one place (`_is_valid_trip_transition`), also never exposed directly.
+- **Status:** CONFIRMED — implemented and verified (mutation_privilege_tests.sql "internal-helpers-not-exposed" check; security_definer_exposure-style ACL inspection showing the 3 internal helpers carry only the owner's implicit privilege)
+- **Reason:** A single generic "transition trip to state X" RPC would let any caller who could reach it choose an arbitrary target state, defeating the entire per-action authorization design; splitting into narrow named functions while still sharing one implementation avoids both that risk and inconsistent duplicated logic across 6 near-identical function bodies.
+- **Affected Product Areas:** All 6 driver_* RPCs, _driver_execute_trip_transition, _is_valid_trip_transition
+- **Dependencies:** ZD-084 (privilege convention)
+- **Owner:** Security
+- **Review Trigger:** Any future action family with more than one legal edge — apply this same "narrow public wrapper, shared unexposed internal executor" pattern rather than one parameterized public function
+
+### ZD-090 — Idempotency semantics: target-state-already-holds is always a safe no-op
+
+- **Date:** 2026-08-31
+- **Category:** Architecture
+- **Decision:** For every lifecycle mutation RPC, if the Trip is already at the function's own target/terminal state, the call returns success with `changed=false` and performs no write — regardless of what `expected_current_state` (Driver functions) or prior call history the caller supplied. This check is evaluated before any active-assignment requirement, since a terminal transition itself is what closes the active assignment (ZD-087), so a driver retrying their own just-succeeded call must not be rejected merely because their assignment is now closed as a normal consequence. Any state that is neither the function's required from-state nor its target state is rejected as `ZW003 stale_state`, independent of whether `expected_current_state` was supplied.
+- **Status:** CONFIRMED — implemented and verified (mutation_lifecycle_tests.sql L7/L16, and the L8 case that specifically distinguishes "retry of one's own successful action" from "terminal reopening via an unrelated action")
+- **Reason:** A caller retrying an already-successful request (network timeout, double-tap, at-least-once delivery) must get a safe, informative success back — bouncing them into an authorization error because a natural side effect (assignment closure) already happened would be actively misleading.
+- **Affected Product Areas:** All P1-E2-S2 lifecycle mutation RPCs
+- **Dependencies:** ZD-087
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-091 — Cancellation and no-show are Organization Admin / Dispatcher actions only, never Driver-initiated
+
+- **Date:** 2026-08-31
+- **Category:** Product / Security
+- **Decision:** `cancel_trip` and `record_no_show` both require `has_org_role(organization_id, [organization_admin, dispatcher])`; no Driver-facing function exists for either action, even for a Driver's own actively-assigned Trip.
+- **Status:** CONFIRMED
+- **Reason:** Cancellation and no-show are dispositive, often billing/reporting-relevant administrative decisions with follow-on consequences (rescheduling, family notification, no-show tracking) that authorization-model.md already scopes to operations roles; the work item reaffirms this is not one of the 6 actions a Driver may perform directly, and a Driver observing a genuine no-show or needing a cancellation reports it through operations rather than executing it unilaterally.
+- **Affected Product Areas:** cancel_trip, record_no_show, authorization-model.md action matrix
+- **Dependencies:** authorization-model.md §N (actor transition permissions)
+- **Owner:** Product
+- **Review Trigger:** A future Driver-facing "report a problem" workflow — would raise a TripException or a flagged note, not call these RPCs directly, unless explicitly re-decided
+
+### ZD-092 — trip_assignments direct table write retired in favor of assign_trip/reassign_trip
+
+- **Date:** 2026-08-31
+- **Category:** Architecture / Security
+- **Decision:** The direct INSERT/UPDATE grant and the two RLS policies (`trip_assignments_insert_org_operations`, `trip_assignments_update_org_operations`) that P1-E2-S1 gave Organization Admin/Dispatcher on `trip_assignments` — necessary then because no controlled assignment mechanism existed — are revoked and dropped outright in P1-E2-S2, now that `assign_trip`/`reassign_trip` exist. No role retains any direct write path to this table; SELECT and its two policies are unchanged.
+- **Status:** CONFIRMED — implemented and verified (mutation_privilege_tests.sql "trip-assignments-direct-write-revoked"/"superseded-policies-dropped"; mutation_assignment_tests.sql C16)
+- **Reason:** Per ZD-084's spirit and the work item's explicit direction, once a controlled RPC exists for a mutation, the raw table-level path that predated it should be retired rather than left as a silent bypass around the RPC's auth chain, idempotency handling, locking, and event/audit logging.
+- **Affected Product Areas:** trip_assignments RLS/grants
+- **Dependencies:** ZD-084, ZD-089
+- **Owner:** Security
+- **Review Trigger:** Any future table that gains its own controlled-mutation RPC — apply the same retirement of the direct-write path that predated it
+
+### ZD-093 — Idempotent no-op for Driver transitions requires actor-verified proof, not merely ever-assigned (amends ZD-090)
+
+- **Date:** 2026-08-31
+- **Category:** Security
+- **Decision:** Amends ZD-090. The Driver-transition idempotent no-op path (`_driver_execute_trip_transition`: "Trip already at target state") additionally requires trusted proof — a `trip_events` row for this Trip with `event_type` = this function's own target event and `actor_user_id = auth.uid()` — that the calling Driver is the one who actually performed that exact transition, not merely that they hold (or ever held) *some* relationship to the Trip. `is_driver_assigned_to_trip` (ever-assigned) remains the correct gate for whether the caller may be considered at all, but it was never sufficient on its own to justify a no-op *success*, since two different Drivers can each satisfy it on the same Trip (one historical, one current). No caller-supplied actor id is introduced anywhere — the check is against the same trusted, append-only `trip_events.actor_user_id` column every mutation function already writes, resolved the same way `auth.uid()` is resolved everywhere else in this codebase.
+- **Status:** CONFIRMED — implemented and verified (P1-E2-S2A audit: `mutation_idempotent_authorization_tests.sql` A-F, all passing, including 3 real-HTTP cross-validation checks; the pre-fix gap was additionally reproduced empirically under a temporary, non-persistent copy of the old logic before being fixed, not merely reasoned about)
+- **Reason:** Found via targeted audit (P1-E2-S2A) that the original ZD-090 wording ("the Trip is already at the target state" as the sole idempotency test) let a formerly-assigned Driver who never performed a given transition receive a false success merely because a *different* Driver had already performed it after a reassignment — idempotency correctly means "the same authorized operation may safely be retried by the actor who performed it", not "anyone with any historical relationship to the resource receives success once the desired state exists for any reason." Confined to the Driver-transition family: ops actions (`cancel_trip`/`record_no_show`/`assign_trip`/`reassign_trip`) authorize by live-checked, org-scoped role rather than trip-instance-specific actor identity, so no analogous gap exists there — any currently-authorized Organization Admin/Dispatcher legitimately may re-assert an already-true org-level fact, unlike a Driver's inherently personal "this is MY assignment" authorization.
+- **Affected Product Areas:** `_driver_execute_trip_transition` (and therefore all 6 `driver_*` RPCs)
+- **Dependencies:** ZD-090 (amended, not superseded — the target-state-already-holds precedence over the active-assignment check is unchanged; only the no-op's own eligibility test is tightened)
+- **Owner:** Security
+- **Review Trigger:** Any future actor-scoped (not role-scoped) mutation RPC with idempotent-retry semantics — apply this same "verify the retry via trusted history, never via mere historical relationship" pattern
+
 No decisions have been REJECTED or SUPERSEDED as of this update.
 
-**Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md)
+**Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md)
