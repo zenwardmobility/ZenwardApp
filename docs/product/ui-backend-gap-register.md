@@ -26,13 +26,14 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Resolution:** Folded into `create_trip` exactly as recommended — an optional `p_request_id`, validated for tenant consistency and a usable state (`pending`/`accepted`; `declined`/`cancelled` rejected), atomically transitions a `pending` request to `accepted` in the same transaction as the Trip INSERT. Correctly preserves 1:N (an already-`accepted` request — e.g. producing a return-leg Trip — is left untouched, not treated as an error). A `decline_request`-style RPC for the request queue remains unbuilt — not evidenced by any reference in the P1-E3-S0 batch, so not proposed or built here.
 - **Blocks:** Nothing, as of P1-E3-S0A.
 
-### GAP-3 — Missing reference images: Driver History and Driver Profile screens
+### GAP-3 — Missing reference images: Driver History and Driver Profile screens — **History built (P1-E3-S3), Profile still open**
 
 - **Screen:** Driver History, Driver Profile (both present in the bottom tab bar on every Driver reference, neither has its own screenshot)
-- **Finding:** Both routes already exist as stubs (`/driver/history`, `/driver/profile`) and both have a ready backend source (`driver_list_trip_history`, `driver_get_profile`), but no visual reference was provided to design against.
+- **Finding:** Both routes already exist and both have a ready backend source (`driver_list_trip_history`, `driver_get_profile`), but no visual reference was provided to design against.
 - **Severity:** Low — backend-ready, visual-design gap only.
-- **Recommendation:** Do not fabricate a design. Either request additional Stitch references for these two screens, or build minimal functional versions directly against the existing design system (matching 04/06/07's established visual language) when their implementation phase arrives.
-- **Blocks:** Nothing yet — these are simply not ready to build with full design fidelity.
+- **Resolution (History, P1-E3-S3):** Built as a minimal, functional screen directly against the existing design system, per this gap's own original recommendation — see ZD-128, docs/product/driver-active-trip-data-map.md. Rows show exactly what `driver_list_trip_history`'s deliberately-redacted contract returns (date/time/outcome), no passenger name or route.
+- **Driver Profile: still open, unchanged.** Not addressed this phase — remains a stub.
+- **Blocks:** Nothing — Driver Profile is simply not ready to build with full design fidelity yet.
 
 ### GAP-4 — Sign-in / auth screen
 

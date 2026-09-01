@@ -1511,6 +1511,66 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product / Engineering
 - **Review Trigger:** When the Internal New Trip / scheduling-presentation UI is actually built — implement the local-to-UTC conversion there, using `organizationTimezone`, before any timestamp reaches `create_trip`.
 
+### ZD-124 — Driver lifecycle completion redirects server-side, from within the Server Action, not client-side after the fact
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `progressTripAction` (`src/app/driver/trips/[tripId]/actions.ts`) calls `redirect("/driver")` directly, server-side, when the mutation just performed was `driver_complete_trip` — not a client-side `router.push()` triggered from a `useActionState` success effect.
+- **Status:** CONFIRMED — implemented and verified via a real end-to-end lifecycle test (headless Chrome, real form submits, real Server Action, real RPCs).
+- **Reason:** The client-side approach was built first and failed a real test, not a hypothetical one: Next.js automatically re-renders the current route's Server Component tree once any Server Action completes (to reflect its own `revalidatePath()` calls). Since `driver_complete_trip` closes the active assignment in the same transaction as completing the Trip, that automatic re-render re-fetches `driver_get_trip_detail` for a now-inaccessible Trip and renders "Trip unavailable" — which won the race against a client `useEffect`'s `router.push()` every time, in real testing. A server-side `redirect()` thrown from within the action itself pre-empts this entirely, rather than attempting to out-race Next.js's own automatic behavior client-side.
+- **Affected Product Areas:** `src/app/driver/trips/[tripId]/actions.ts`, `src/components/driver/DriverLifecycleAction.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** Any future Server Action whose success should navigate away from a route the action itself makes inaccessible — use the same server-side `redirect()` pattern, not a client effect.
+
+### ZD-125 — "Report Issue"/"Trip Details" deliberately deferred from Active Trip, not built
+
+- **Date:** 2026-09-01
+- **Category:** Product / Scope
+- **Decision:** The Active Trip screen implements exactly the lifecycle-progression path (route, passenger requirements, one primary action) and omits the reference's secondary "Report Issue"/"Trip Details" action row entirely this phase.
+- **Status:** CONFIRMED
+- **Reason:** `trip_exceptions_insert_assigned_driver` (the backend path "Report Issue" would use) genuinely exists and is ready — this is a scope decision, not a backend gap. Building it would introduce a new, separate write surface needing its own dedicated security/functional test coverage, disproportionate to this phase's primary mandate (work item §4: open Trips → find the assignment → progress the lifecycle → completion). "Trip Details"' own destination was flagged ambiguous (`stitch-reference-index.md`) with no clear target. Matches the explicit permission in work item §26: "Otherwise defer to a focused future phase."
+- **Affected Product Areas:** `src/app/driver/trips/[tripId]/page.tsx`
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** A future, dedicated Driver-issue-reporting phase — build it as its own reviewed surface, not retrofitted here.
+
+### ZD-126 — Directions provider: a plain Google Maps web-search URL, no SDK
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `directionsUrl()` (`src/lib/driver/maps.ts`) builds `https://www.google.com/maps/search/?api=1&query=<address>` — no mapping SDK, no API key, no dependency. Sends only the address text already visible on screen (Trip's own pickup/destination snapshot) — never a Passenger name or phone.
+- **Status:** CONFIRMED — implemented and verified (real screenshot QA shows the Navigate button; the URL construction is a pure, directly-testable function).
+- **Reason:** Work item §14 explicitly prefers a safe external maps URL over an SDK and asks that an unresolved provider choice be recorded rather than block on it. Google Maps' public web endpoint works identically across iOS/Android/desktop with one URL shape (opens the native app via universal link on mobile, the web version on desktop) — the simplest option that needs no per-platform branching.
+- **Affected Product Areas:** `src/lib/driver/maps.ts`, `src/components/driver/DriverActiveTripLegs.tsx`
+- **Dependencies:** None
+- **Owner:** Product / Engineering
+- **Review Trigger:** A genuine future need for a different provider (e.g. an organization-specific preference) — revisit deliberately then, not reflexively.
+
+### ZD-127 — Call Passenger is scoped to the pickup leg only
+
+- **Date:** 2026-09-01
+- **Category:** Product
+- **Decision:** The Call Passenger action (`tel:` link, using `driver_get_trip_detail.passenger_phone`) is shown only while the pickup leg is current (`scheduled`/`en_route_to_pickup`/`arrived_at_pickup`) — it disappears once `passenger_onboard` and beyond.
+- **Status:** CONFIRMED — implemented and verified.
+- **Reason:** The reference screenshot only shows this button during `en_route_to_pickup`, leaving the later-leg behavior undecided. Once the passenger is physically in the vehicle, calling them serves no operational purpose — a deliberate design decision extending the reference's own visible logic, not one dictated by it.
+- **Affected Product Areas:** `src/components/driver/DriverActiveTripLegs.tsx`, `src/lib/driver/trip-presentation.ts` (`currentLeg()`)
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** None anticipated
+
+### ZD-128 — Driver History: a minimal, functional screen built directly against the redacted history projection (partial resolution of GAP-3)
+
+- **Date:** 2026-09-01
+- **Category:** Product / Security
+- **Decision:** `/driver/history` is implemented as a minimal, functional list (date, time, outcome/end-reason badge) built entirely around what `driver_list_trip_history` actually returns — no passenger name, no route, matching that RPC's deliberate redaction (ZD-099). No Stitch reference exists for this screen; none was fabricated. `driver_get_trip_detail` is never called for a historical Trip to "recover" the redacted fields — that RPC correctly denies access once an assignment has ended, and this screen does not attempt to work around that.
+- **Status:** CONFIRMED — implemented; GAP-3 (ui-backend-gap-register.md) updated to reflect History now has a minimal built version — Driver Profile remains open (out of scope this phase, no route change made there).
+- **Reason:** GAP-3's own recorded recommendation was "build minimal functional versions... when their implementation phase arrives" — this phase's explicit mandate ("6. trip history where supported") is that arrival, for History specifically. Security minimization outranks screenshot fidelity (work item §9's own explicit instruction) — the row design followed the RPC's real field set, not an imagined richer one.
+- **Affected Product Areas:** `src/app/driver/history/page.tsx`
+- **Dependencies:** ZD-099
+- **Owner:** Product / Security
+- **Review Trigger:** A genuine future Stitch reference for this screen, or a deliberately-reviewed decision to widen the history projection — neither assumed here.
+
 No decisions have been REJECTED or SUPERSEDED as of this update.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

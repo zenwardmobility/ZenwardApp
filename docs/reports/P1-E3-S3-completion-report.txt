@@ -1,0 +1,696 @@
+====================================================================
+Project:            Zenward Platform
+Phase:               P1-E3-S3 — Driver Trips & Active Trip Experience
+Repository:          /Users/datamatics/ZenWard
+Environment:         LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:          main
+Git HEAD before work: a3ac9ca37381a73756a2bffd42791000b4b8726f (unchanged — nothing committed during this phase)
+Date/time:           2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------
+`git status --short` was clean at the start of this phase; `git log
+--oneline -5` confirmed the S2/S2A/S2B/S2C checkpoint genuinely
+committed as `a3ac9ca "Implement Driver Today and operational
+timezone foundation"` (spot-checked via `git show --stat` — all 58
+files from those four sub-phases present). No unexplained
+modifications existed. Proceeded per work item §1.
+
+--------------------------------------------------------------------
+2. REFERENCES INSPECTED
+--------------------------------------------------------------------
+Primary: docs/design/stitch/references/07-driver-trips.png and
+04-driver-active-trip.png — both read in full, directly. Secondary:
+06-driver-today.png (continuity only — not re-implemented). All
+required docs read before coding (domain-model.md, lifecycle-model.md,
+authorization-model.md, application-route-map.md,
+application-implementation-plan.md, ui-data-action-map.md,
+ui-backend-gap-register.md, auth-session-routing.md,
+operational-timezone.md, driver-today-data-map.md,
+decision-register.md, read-api.md, mutation-api.md,
+driver-data-minimization.md, mutation-authorization.md,
+application-auth-boundary.md, rls-model.md, component-inventory.md).
+Every RPC signature and composite return type was inspected directly
+from `src/lib/supabase/database.types.ts`, not inferred from prior
+documentation summaries alone (work item §2's explicit instruction).
+
+--------------------------------------------------------------------
+3. DRIVER TRIPS ARCHITECTURE
+--------------------------------------------------------------------
+`src/app/driver/trips/page.tsx` — a Server Component, same
+authorization pattern as Driver Today (`requireDriverAccess`), same
+single data source (`driver_list_active_trips`) — but **unfiltered by
+date**: every currently-active assignment, grouped by
+organization-local calendar day (`operationalDayLabel`,
+`operationalDateKey` — extended from P1-E3-S2C's Driver Today
+helpers, now exported for reuse) into labeled sections ("Today",
+"Tomorrow", or a full weekday/date for further-out trips), plus a
+trailing "Unscheduled" section for any trip with a null
+`scheduled_pickup_at`. Only the single soonest trip overall gets the
+featured `DriverNextTripCard` treatment — every other row, including
+the first of a later date group, is a compact `DriverTripCard` —
+confirmed by direct visual inspection of the reference, not assumed
+from the Driver Today pattern.
+
+--------------------------------------------------------------------
+4. DRIVER ACTIVE TRIP ARCHITECTURE
+--------------------------------------------------------------------
+`src/app/driver/trips/[tripId]/page.tsx` — Server Component, reads
+`driver_get_trip_detail(p_trip_id)` only. Any error or missing row
+(malformed ID, nonexistent, foreign-org, never-assigned,
+reassigned-away, or a just-completed Trip whose assignment already
+closed) renders the identical "Trip unavailable" `EmptyState` — no
+existence oracle, matching ZD-095's established convention. On
+success: passenger name + status badge, `DriverActiveTripLegs` (new
+component — pickup/drop-off blocks with contextual Navigate/Call
+Passenger), any `driver_notes` rendered via the existing
+`DriverInstruction`, a Passenger Requirements `DefinitionList`
+(Assistance/Instructions only — no Companion, no reference code — see
+§21/§23), and the one primary lifecycle action
+(`DriverLifecycleAction`, a Client Component wrapping a real `<form>`
++ Server Action).
+
+--------------------------------------------------------------------
+5. SECURE RPCS USED
+--------------------------------------------------------------------
+`driver_get_profile` (via `requireDriverAccess`, unchanged from
+P1-E3-S2), `driver_list_active_trips` (Trips, unfiltered), `driver_get_trip_detail`
+(Active Trip), `driver_list_trip_history` (History), and the 6
+lifecycle RPCs (`driver_start_to_pickup`, `driver_arrive_at_pickup`,
+`driver_mark_passenger_onboard`, `driver_start_to_destination`,
+`driver_arrive_at_destination`, `driver_complete_trip`) via the one
+shared Server Action. No other RPC, and no direct table read/write,
+appears anywhere in Driver application code (§24/§25/§26 below).
+
+--------------------------------------------------------------------
+6. DRIVER TRIPS FIELD MAPPING
+--------------------------------------------------------------------
+Full table: docs/product/driver-trips-data-map.md. Summary: identical
+field set to Driver Today (`trip_id`, `state`, `scheduled_pickup_at`,
+`appointment_at`, `pickup_description`, `destination_description`,
+`passenger_display_name`), same `driverTripStateLabel()`/
+`formatTripTime()` derivations, date-group labels newly derived via
+`operationalDayLabel()`.
+
+--------------------------------------------------------------------
+7. ACTIVE TRIP FIELD MAPPING
+--------------------------------------------------------------------
+Full table: docs/product/driver-active-trip-data-map.md. Every field
+`driver_get_trip_detail` returns is either rendered (trip_id via the
+route param — never displayed directly, state, scheduled_pickup_at,
+appointment_at, pickup/destination_description,
+passenger_display_name, passenger_phone, assistance_notes,
+instructions, driver_notes) or deliberately not rendered
+(vehicle_label/vehicle_status — not shown in the reference either, no
+current UI need identified).
+
+--------------------------------------------------------------------
+8. PASSENGER MINIMUM-NECESSARY HANDLING
+--------------------------------------------------------------------
+Unchanged from P1-E2-S3/P1-E3-S2: only `passenger_display_name` (both
+screens) and `passenger_phone` (Active Trip detail only, for the
+`tel:` action) are ever read or rendered — the exact same fields the
+approved projection already exposed. No new Passenger field was
+requested, added, or exposed. `assistance_notes`/`instructions` come
+from the Trip's own snapshot fields (never from a Passenger table
+read).
+
+--------------------------------------------------------------------
+9. HISTORY HANDLING
+--------------------------------------------------------------------
+`src/app/driver/history/page.tsx` — built entirely around
+`driver_list_trip_history`'s deliberately-redacted contract
+(`trip_id`, `scheduled_pickup_at`, `assignment_started_at/ended_at`,
+`end_reason`, `trip_outcome`) — no passenger name, no route, matching
+ZD-099. `driver_get_trip_detail` is never called for a historical
+entry to "recover" the redacted fields — confirmed structurally (a
+single `grep` for `driver_get_trip_detail` shows it used only in
+`[tripId]/page.tsx`) and confirmed by the RPC's own documented
+behavior (it denies access once the assignment has ended). See ZD-128.
+
+--------------------------------------------------------------------
+10. STATE → ACTION MAPPING
+--------------------------------------------------------------------
+`DRIVER_NEXT_ACTION` (`src/lib/driver/trip-presentation.ts`) — the
+single centralized table, verified against both lifecycle-model.md §N
+and mutation-api.md before writing it (both agree exactly with the
+work item's own conceptual sketch): `scheduled`→Start to
+Pickup→`driver_start_to_pickup`; `en_route_to_pickup`→I'VE
+ARRIVED→`driver_arrive_at_pickup`; `arrived_at_pickup`→Passenger
+Onboard→`driver_mark_passenger_onboard`;
+`passenger_onboard`→Start to Destination→`driver_start_to_destination`;
+`en_route_to_destination`→I'VE ARRIVED→`driver_arrive_at_destination`;
+`arrived_at_destination`→Complete Trip→`driver_complete_trip`. No
+entry for `completed`/`cancelled`/`no_show` — and, confirmed by the
+RPCs' own documented behavior (closing the active assignment in the
+same transaction as any terminal transition), a Driver can never
+actually be shown one of those three states via
+`driver_get_trip_detail` in the first place.
+
+--------------------------------------------------------------------
+11. LIFECYCLE MUTATION ARCHITECTURE
+--------------------------------------------------------------------
+One shared Server Action, `progressTripAction`
+(`src/app/driver/trips/[tripId]/actions.ts`) — no service role, runs
+under the caller's own session via `createServerSupabaseClient()`.
+`rpc` is validated against a fixed allowlist derived from
+`DRIVER_NEXT_ACTION` before ever being passed to `supabase.rpc()` —
+never an arbitrary client-supplied function name. `requireDriverAccess()`
+is re-derived fresh on every single call (never trusted from the
+page's earlier render) — this is precisely what makes the
+same-session inactive-Membership/inactive-Driver tests below pass.
+`revalidatePath()` is called for the detail route, the Trips list, and
+Driver Today after every successful mutation (work item §28). See
+ZD-124 for the one genuine architectural finding this phase's own
+testing surfaced (documented in full there and in §32 below).
+
+--------------------------------------------------------------------
+12. EACH DRIVER RPC INTEGRATION
+--------------------------------------------------------------------
+All 6 wired through the identical Server Action, differing only by
+which RPC name and which `p_expected_current_state` the form's hidden
+fields carry — verified individually via the full lifecycle walk
+(§32).
+
+--------------------------------------------------------------------
+13. IDEMPOTENT RETRY HANDLING
+--------------------------------------------------------------------
+The Server Action treats `changed: false` exactly like `changed: true`
+— both are `status: "success"`, triggering the same
+`router.refresh()`. No special-cased "this was a no-op" error path
+exists; a legitimate retry never surfaces as a failure to the Driver.
+Verified directly (§33).
+
+--------------------------------------------------------------------
+14. MUTATION ERROR MAPPING
+--------------------------------------------------------------------
+`src/lib/driver/errors.ts` — `mapDriverActionError()` translates the
+PostgREST `error.code` field (confirmed empirically to be the literal
+string `"ZW001"`/`"ZW002"`/`"ZW003"`, not a raw SQLSTATE — verified by
+a live probe against the real local instance before writing the
+mapping, not assumed) to one of 4 safe, stable application codes
+(`UNAUTHORIZED`/`NOT_FOUND`/`STALE_STATE`/`UNKNOWN`), each with calm,
+generic copy. No ZW-code, SQLSTATE, or Postgres/PostgREST message
+ever reaches the rendered page — confirmed by direct code inspection
+(the error object's `.message`/`.details`/`.hint` fields are never
+read anywhere in the Driver code path).
+
+--------------------------------------------------------------------
+15. CONCURRENT/REASSIGNMENT BEHAVIOR
+--------------------------------------------------------------------
+On any mutation error (stale state, reassignment, lost access), the
+client component calls `router.refresh()` exactly as it does on
+success — the page's own `driver_get_trip_detail` call independently
+re-derives current accessibility, naturally rendering either the
+refreshed active-trip UI or "Trip unavailable." No separate
+client-side "am I still authorized" logic was written — the database
+remains the single source of truth. Verified end-to-end (§29 below):
+Driver A's detail page genuinely showed "Trip unavailable" after a
+real `reassign_trip` call moved the Trip to Driver B.
+
+--------------------------------------------------------------------
+16. CANCELLATION BEHAVIOR
+--------------------------------------------------------------------
+No cancellation control exists anywhere in Driver code — confirmed by
+inspection (no call to `cancel_trip` anywhere in `src/`). `cancel_trip`
+also closes the active assignment in the same transaction as
+`mutation-api.md` documents, so a Driver whose Trip is cancelled by
+Operations simply sees "Trip unavailable" on their next
+load/action — the same unified handling as every other
+now-inaccessible-Trip case, per work item §24's explicit instruction
+not to give the Driver a cancellation button.
+
+--------------------------------------------------------------------
+17. NO-SHOW BEHAVIOR
+--------------------------------------------------------------------
+`record_no_show` is never called from Driver code (confirmed by
+inspection) — no-show remains an Operations-only human decision, per
+work item §25. No Driver-facing no-show button was built.
+
+--------------------------------------------------------------------
+18. COMPLETION FLOW
+--------------------------------------------------------------------
+`driver_complete_trip` success → `redirect("/driver")` thrown
+server-side, from within the Server Action itself (ZD-124) — not a
+client-side `router.push()` after the fact, which a real end-to-end
+test proved loses a genuine race against Next.js's own automatic
+post-Server-Action re-render. Verified: the real UI, clicking "Complete
+Trip," lands on `/driver` (18/18 lifecycle checks, §32).
+
+--------------------------------------------------------------------
+19. PHONE ACTION
+--------------------------------------------------------------------
+`tel:${passenger_phone}` — shown only while the pickup leg is current
+(`scheduled`/`en_route_to_pickup`/`arrived_at_pickup`), omitted once
+`passenger_onboard` (ZD-127 — a deliberate design decision extending
+the reference's own single-state screenshot, not dictated by it). No
+SMS/WhatsApp/email action exists. `passenger_phone` never appears in
+any log, analytics call, or third-party request — confirmed (§59
+below, no analytics of any kind was added this phase).
+
+--------------------------------------------------------------------
+20. DIRECTIONS DECISION
+--------------------------------------------------------------------
+`directionsUrl()` (`src/lib/driver/maps.ts`) — a plain Google Maps
+public web-search URL (`https://www.google.com/maps/search/?api=1&query=...`),
+no SDK, no API key, no dependency added. Sends only the already-visible
+pickup/destination address text — never a Passenger name or phone.
+Recorded as ZD-126, including the reasoning for choosing this over a
+platform-specific scheme.
+
+--------------------------------------------------------------------
+21. ASSISTANCE/INSTRUCTIONS HANDLING
+--------------------------------------------------------------------
+Both real fields (`assistance_notes`, `instructions`) rendered via
+`DefinitionList`, each showing its own content or "None recorded" —
+matching the reference's own "None recorded" pattern for genuinely
+absent-but-real data. No Companion row exists (no such field anywhere
+in the schema — confirmed again this phase, unchanged gap) and none
+was fabricated (work item §37).
+
+--------------------------------------------------------------------
+22. TIMEZONE HANDLING
+--------------------------------------------------------------------
+Every displayed date/time on both new screens (Driver Trips'
+date-group labels and trip times; Active Trip's pickup time and
+appointment label) uses `access.organization.organizationTimezone`
+threaded through the same centralized helpers P1-E3-S2C built
+(`formatTripTime`, `formatLongDate`, `operationalDateKey`,
+`operationalDayLabel`) — never a default, never a server-local
+fallback (TypeScript enforces the parameter as required, unchanged
+from P1-E3-S2C). Verified live against the real running app, server
+process in `Africa/Lagos`, correctly showing `America/New_York` times
+throughout (§35 below).
+
+--------------------------------------------------------------------
+23. UNSUPPORTED/DEFERRED CONCEPTS
+--------------------------------------------------------------------
+Report Issue / Trip Details (ZD-125, deliberately deferred — the
+backend path exists and is ready, building the UI was judged
+disproportionate to this phase's core mandate). Trip reference code
+("ZW-240829-018") — no such field exists anywhere, omitted (pre-existing
+gap, not new). Companion — no such field exists, omitted (§37,
+pre-existing gap). "Pickup updated from X" — no field-level change
+tracking exists, not fabricated (§38, pre-existing gap). Driver
+Availability (On Shift/Break/etc.) — still not implemented from local
+UI state (§39, unchanged). Running Late — still no arbitrary
+threshold invented (§40, unchanged). Driver Profile — still a stub,
+not addressed this phase (GAP-3, partially resolved for History only
+— ZD-128).
+
+--------------------------------------------------------------------
+24. DIRECT PASSENGER-READ AUDIT
+--------------------------------------------------------------------
+`grep -rn "from(\"passengers\")\|\.from('passengers')" src/app/driver
+src/components/driver src/lib/driver` → **zero matches**.
+
+--------------------------------------------------------------------
+25. CANONICAL TRIP-READ AUDIT
+--------------------------------------------------------------------
+`grep -rn "from(\"trips\")\|from(\"trip_assignments\")\|\.from('trips')\|
+\.from('trip_assignments')" src/app/driver src/components/driver
+src/lib/driver` → **zero matches**. Every `.rpc(` call in Driver code
+(`grep -rn "\.rpc("`) is exactly the 4 approved read RPCs plus the
+6-name-allowlisted lifecycle mutation dispatch — listed in full at §5.
+
+--------------------------------------------------------------------
+26. DIRECT TRIP-UPDATE AUDIT
+--------------------------------------------------------------------
+`grep -rn "\.update(" src/app/driver src/components/driver
+src/lib/driver` → **zero matches**. No direct `trips`/`trip_assignments`
+UPDATE exists anywhere in Driver application code — every lifecycle
+change goes through one of the 6 approved RPCs.
+
+--------------------------------------------------------------------
+27. WRONG-DRIVER TEST
+--------------------------------------------------------------------
+Real RPC call, real session: `org-a-driver-b@example.test` (Driver A2,
+no assignment on the target Trip) called `driver_arrive_at_pickup` on
+Driver A1's active Trip. **Denied with a real ZW code (ZW001/ZW002,
+never a crash or a distinguishing detail) — PASS.**
+
+--------------------------------------------------------------------
+28. REASSIGNMENT TEST
+--------------------------------------------------------------------
+Real end-to-end sequence, real RPCs throughout: Driver A progressed a
+Trip to `en_route_to_pickup`; a real Dispatcher session called
+`reassign_trip` to move it to Driver A2; Driver A's next
+`driver_arrive_at_pickup` attempt was denied; Driver A's real detail
+page (`GET /driver/trips/<id>`, real HTTP, real cookies) showed "Trip
+unavailable"; Driver A2 (now assigned) successfully called
+`driver_arrive_at_pickup` on the same Trip. **All 4 steps PASS.**
+
+--------------------------------------------------------------------
+29. INACTIVE MEMBERSHIP TEST
+--------------------------------------------------------------------
+Same session throughout, no sign-out: baseline access to a real Trip
+detail page worked; `memberships.status` toggled to `inactive` live in
+the database; the next request to the same URL, same session, was
+denied (redirect); reactivated; access restored immediately, same
+session, no re-login. **All 3 steps PASS.**
+
+--------------------------------------------------------------------
+30. INACTIVE DRIVER TEST
+--------------------------------------------------------------------
+Same pattern: `drivers.status` toggled to `inactive` live — the next
+request rendered the existing safe "Driver account not yet set up"
+inline state (not a crash, not stale data); reactivated — real access
+restored immediately, same session. **Both steps PASS.**
+
+--------------------------------------------------------------------
+31. MULTI-ORG TEST
+--------------------------------------------------------------------
+`multi-org-user@example.test` (organization_admin in Org A, driver in
+Org B) attempted `driver_start_to_pickup` on an Org A Trip — denied
+with a real ZW code. Their higher authority in Org A (as an admin)
+grants zero Driver-lifecycle authority there; their genuine driver
+role belongs to a different organization entirely. **PASS.**
+
+--------------------------------------------------------------------
+32. FULL LIFECYCLE TEST
+--------------------------------------------------------------------
+**Executed through the actual application UI, real headless Chrome
+(the same CDP technique proven in P1-E3-S2B) driving a real
+authenticated session, real form submits, real Server Actions, real
+RPCs — never a direct SQL state update anywhere in this test.** All 6
+transitions walked in order on the same real seeded Trip:
+
+  scheduled → [Start to Pickup] → en_route_to_pickup           PASS
+  en_route_to_pickup → [I'VE ARRIVED] → arrived_at_pickup       PASS
+  arrived_at_pickup → [Passenger Onboard] → passenger_onboard   PASS
+  passenger_onboard → [Start to Destination] → en_route_to_destination  PASS
+  en_route_to_destination → [I'VE ARRIVED] → arrived_at_destination    PASS
+  arrived_at_destination → [Complete Trip] → completed, redirected to /driver  PASS
+
+**18/18 checks passed.** Final database state independently confirmed:
+`trips.state = 'completed'`, `completed_at` set;
+`trip_assignments.ended_at` set, `end_reason = 'trip_completed'`.
+
+**A real bug was found and fixed during this test, not merely
+documented afterward:** the test's own CSS selector initially matched
+the wrong `<form><button type="submit">` on the page (the header's own
+sign-out form, found before the lifecycle button) — a test-script
+defect, corrected by scoping to the form containing the hidden `rpc`
+field. Separately, a genuine **application** defect was found and
+fixed: the completion redirect originally relied on a client-side
+`useEffect`, which lost a real race against Next.js's own automatic
+re-render after a Server Action — fixed by moving the redirect
+server-side (ZD-124, full detail in §18/§11 above).
+
+--------------------------------------------------------------------
+33. IDEMPOTENT RETRY TEST
+--------------------------------------------------------------------
+Real RPC calls, same Driver, same Trip, same target action, twice in
+a row: first call `driver_start_to_pickup` → `changed: true`; second,
+identical call → `changed: false`, **not an error**, same target
+state confirmed in the response. **Both PASS** — the application layer
+treats this exactly as the RPC contract intends (work item §20's own
+explicit instruction).
+
+--------------------------------------------------------------------
+34. DRIVER TODAY REGRESSION
+--------------------------------------------------------------------
+Re-run, unmodified: populated state (`org-a-driver-a@example.test`) —
+all real-data checks pass, no raw ISO leak, no premature phone
+exposure; empty state (`org-a-driver-b@example.test`) — correct
+copy, zero leaked content. Visual structure, secure reads, timezone
+semantics, shell, and bottom navigation all confirmed unchanged —
+Driver Today's own source file (`src/app/driver/page.tsx`) was not
+touched this phase at all.
+
+--------------------------------------------------------------------
+35. SQL REGRESSION
+--------------------------------------------------------------------
+**217/217 PASS, zero failures** — the full existing suite (unchanged
+this phase — no migration was touched), re-run from a fresh
+`supabase db reset` at the end of this phase.
+
+--------------------------------------------------------------------
+36. CONCURRENCY REGRESSION
+--------------------------------------------------------------------
+`mutation_concurrency_test.sh` → **PASS** (genuine two-process row-lock
+serialization, unchanged since no backend code was touched).
+
+--------------------------------------------------------------------
+37. AUTH REGRESSION
+--------------------------------------------------------------------
+**41/41 PASS** — the full existing auth integration suite, re-run
+against the real running app after all changes in this phase.
+
+--------------------------------------------------------------------
+38. 390 TRIPS QA
+--------------------------------------------------------------------
+Real screenshot, real authenticated session:
+`docs/design/qa/driver-trips/390-driver-trips.png`. Featured card,
+"Today"/"Tomorrow" date-group sections, real seeded data throughout
+(including a genuine incidental cross-phase fixture — an older
+P1-E2-S2 Trip still actively assigned to this Driver — correctly
+appearing under "Tomorrow," real proof the grouping logic works on
+data it wasn't specifically written to expect). **PASS.**
+
+--------------------------------------------------------------------
+39. 430 TRIPS QA
+--------------------------------------------------------------------
+`docs/design/qa/driver-trips/430-driver-trips.png` — same result,
+full-width, no overflow. **PASS.**
+
+--------------------------------------------------------------------
+40. 390 ACTIVE TRIP QA
+--------------------------------------------------------------------
+Two states captured: `390-active-trip-scheduled.png` (the initial
+"Start to Pickup" state) and `390-active-trip-en-route.png` (a real
+in-progress state, reached via an actual `driver_start_to_pickup`
+call — "Heading to Pickup" badge, "I'VE ARRIVED" primary action,
+Navigate + Call Passenger both visible during the live pickup leg).
+**Both PASS.**
+
+--------------------------------------------------------------------
+41. 430 ACTIVE TRIP QA
+--------------------------------------------------------------------
+`430-active-trip-scheduled.png` and `430-active-trip-en-route.png` —
+same result. **PASS.**
+
+--------------------------------------------------------------------
+42. TABLET QA
+--------------------------------------------------------------------
+768×1024, both screens (`docs/design/qa/driver-trips/768-driver-trips.png`,
+`docs/design/qa/driver-active-trip/768-active-trip.png`) — the
+established `max-w-md` capped, bordered shell (P1-E3-S2B) holds
+correctly for the new screens too, no layout regression. **PASS.**
+
+--------------------------------------------------------------------
+43. DESKTOP QA
+--------------------------------------------------------------------
+1024×768 and 1440×900, both screens
+(`docs/design/qa/driver-trips/{1024,1440}-driver-trips.png`,
+`docs/design/qa/driver-active-trip/{1024,1440}-active-trip.png`) —
+same capped, centered, bordered treatment; the back arrow correctly
+appears in the header on the Trip Detail route at every width. No
+Driver screen ever grows into a second Operations-style dashboard.
+**PASS.**
+
+--------------------------------------------------------------------
+44. ACCESSIBILITY
+--------------------------------------------------------------------
+Semantic heading (`<h2>` page title, unchanged pattern from Driver
+Today); status conveyed via `StatusBadge`'s existing text+dot pattern,
+never color alone (unchanged component); real touch-target sizing
+(`LinkButton`/`DriverPrimaryAction` reuse the existing, already-sized
+button system — no new small hit targets introduced); button loading
+state via `DriverPrimaryAction`'s existing `loading`/`disabled`
+props, same pattern as `SignInForm`; focus visibility unchanged
+(global `:focus-visible` rule, untouched); phone link is a plain
+`tel:` anchor (native semantics, no ARIA override needed); external
+Navigate links use `target="_blank" rel="noopener noreferrer"`
+(safe, standard external-link semantics); bottom nav unchanged from
+P1-E3-S2 (already accessible); error feedback uses `role="alert"`
+(matching `SignInForm`'s existing pattern); no state is color-only
+anywhere on either new screen.
+
+--------------------------------------------------------------------
+45. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` → exit 0, zero errors (final run, after every
+change in this phase).
+
+--------------------------------------------------------------------
+46. LINT
+--------------------------------------------------------------------
+`npm run lint` (eslint) → exit 0, zero errors/warnings.
+
+--------------------------------------------------------------------
+47. BUILD
+--------------------------------------------------------------------
+`npm run build` → succeeded (Next.js 16.3.3, Turbopack). All 24
+routes generated, `ƒ Proxy (Middleware)` present, no warnings.
+
+**Process note (matching this project's standing practice of
+reporting testing incidents honestly):** the very first build/run
+after writing the Server Action failed with "A 'use server' file can
+only export async functions, found object" — the action file also
+exported a plain `INITIAL_PROGRESS_STATE` constant alongside the
+async function, which Next.js's `"use server"` convention forbids.
+Fixed by moving that constant into the consuming Client Component.
+Caught and fixed before any test was run against it — not a
+regression that shipped past validation.
+
+--------------------------------------------------------------------
+48. SCREENSHOTS CREATED
+--------------------------------------------------------------------
+docs/design/qa/driver-trips/{390,430,768,1024,1440}-driver-trips.png
+docs/design/qa/driver-active-trip/{390,430}-active-trip-scheduled.png
+docs/design/qa/driver-active-trip/{390,430}-active-trip-en-route.png
+docs/design/qa/driver-active-trip/{768,1024,1440}-active-trip.png
+
+(No file under docs/design/stitch/references/ was modified — confirmed
+via `git status`.)
+
+--------------------------------------------------------------------
+49. DOCS CREATED
+--------------------------------------------------------------------
+docs/product/driver-trips-data-map.md
+docs/product/driver-active-trip-data-map.md
+docs/reports/P1-E3-S3-completion-report.txt
+
+--------------------------------------------------------------------
+50. DOCS UPDATED
+--------------------------------------------------------------------
+docs/design/component-inventory.md ("Driver components — P1-E3-S3")
+docs/product/application-implementation-plan.md (screen matrix, step
+descriptions, "Next recommended phase")
+docs/product/ui-backend-gap-register.md (GAP-3 — History resolved,
+Profile still open)
+docs/product/decision-register.md (ZD-124 through ZD-128)
+
+--------------------------------------------------------------------
+51. DECISIONS RECORDED
+--------------------------------------------------------------------
+ZD-124 (server-side completion redirect, and the race it fixes) ·
+ZD-125 (Report Issue/Trip Details deliberately deferred) · ZD-126
+(Google Maps directions URL, no SDK) · ZD-127 (Call Passenger scoped
+to the pickup leg) · ZD-128 (Driver History minimal implementation,
+partial GAP-3 resolution).
+
+--------------------------------------------------------------------
+52. FILES CREATED
+--------------------------------------------------------------------
+src/app/driver/trips/[tripId]/actions.ts
+src/components/driver/DriverActiveTripLegs.tsx
+src/components/driver/DriverLifecycleAction.tsx
+src/lib/driver/errors.ts
+src/lib/driver/maps.ts
+docs/product/driver-trips-data-map.md
+docs/product/driver-active-trip-data-map.md
+docs/design/qa/driver-trips/ (5 screenshots)
+docs/design/qa/driver-active-trip/ (7 screenshots)
+docs/reports/P1-E3-S3-completion-report.txt
+
+--------------------------------------------------------------------
+53. FILES MODIFIED
+--------------------------------------------------------------------
+src/app/driver/trips/page.tsx (real implementation, was a stub)
+src/app/driver/trips/[tripId]/page.tsx (real implementation, was a stub)
+src/app/driver/history/page.tsx (real minimal implementation, was a stub)
+src/lib/driver/trip-presentation.ts (exported `operationalDateKey`,
+  added `operationalDayLabel`, `DRIVER_NEXT_ACTION`, `currentLeg`)
+docs/design/component-inventory.md
+docs/product/application-implementation-plan.md
+docs/product/ui-backend-gap-register.md
+docs/product/decision-register.md
+
+--------------------------------------------------------------------
+54. BACKEND GAPS
+--------------------------------------------------------------------
+NONE newly discovered this phase. Every previously-recorded gap
+relevant to these screens (Companion, Trip reference code, "Pickup
+updated from X", Driver Availability, Running Late) was inspected
+again and confirmed still accurate/unchanged — none required backend
+work, and none was silently worked around.
+
+--------------------------------------------------------------------
+55. BLOCKERS
+--------------------------------------------------------------------
+NONE. (One transient, unrelated infrastructure hiccup recorded
+honestly, matching P1-E3-S2C's own precedent: a mid-phase `supabase
+db reset` twice reported "supabase_storage_ZenWard container is not
+ready: unhealthy" as its final line — in both cases the actual
+database work (migrations + seed) had already completed successfully
+before that unrelated health-check failure, confirmed by immediately
+querying the resulting data; the Storage service is not used anywhere
+in this project. No SQL/application regression was ever caused by
+this.)
+
+--------------------------------------------------------------------
+56. DEFERRED ITEMS
+--------------------------------------------------------------------
+Driver Profile screen (GAP-3, still open — no Stitch reference,
+correctly not fabricated). Report Issue / Trip Details (ZD-125).
+Driver Availability (§39, unchanged). Running Late (§40, unchanged).
+Operations UI (explicitly out of scope this phase, work item §60).
+
+--------------------------------------------------------------------
+57. DRIVER TRIP WORKFLOW GATE
+--------------------------------------------------------------------
+READY — every criterion in work item §66 is met: Driver Trips (1) and
+Active Trip (2) both implemented; secure read projections only (3),
+verified by direct repository audit; no direct Passenger reads (4) or
+Trip lifecycle UPDATEs (5), both confirmed by grep with zero matches;
+all six Driver progression RPCs wired and individually verified
+through a real end-to-end walk (6); exactly one primary legal next
+action shown per state, centrally derived (7); idempotent retry
+handled as a safe success, not an error (8); wrong-Driver denied with
+no information leak (9); reassignment revocation verified live,
+including the newly-assigned Driver gaining access (10); inactive
+Membership (11) and inactive Driver (12) both fail closed on the very
+next request, same session; multi-org authorization preserved — an
+admin's authority in one org grants nothing in another (13);
+Organization timezone used for every displayed date/time on both new
+screens, verified against a server running in a third, unrelated
+timezone (14); completion flow is intentional and race-free,
+server-side redirect (15); Stitch design language materially
+reproduced — real screenshots compared directly against both
+references (16); real 390/430 browser QA complete for every required
+screen and state, plus tablet/desktop (17); Driver Today verified
+unchanged (18); historical minimization preserved — History never
+recovers redacted fields via `driver_get_trip_detail` (19);
+TypeScript/lint/build all pass (20).
+
+====================================================================
+DRIVER TRIP WORKFLOW GATE:
+READY
+
+SECURE DRIVER READS:
+PASS
+
+DIRECT PASSENGER SELECT:
+NONE
+
+DIRECT TRIP LIFECYCLE UPDATE:
+NONE
+
+FULL DRIVER LIFECYCLE:
+PASS
+
+IDEMPOTENT RETRY:
+PASS
+
+REASSIGNMENT REVOCATION:
+PASS
+
+ORGANIZATION TIMEZONE:
+PASS
+
+MOBILE VISUAL QA:
+COMPLETE
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S4 — Operations Application Shell & Today's Operations
+====================================================================
+Do NOT commit. Do NOT push. Do NOT deploy. Do NOT begin Operations UI.
+STOP after reporting.
+====================================================================

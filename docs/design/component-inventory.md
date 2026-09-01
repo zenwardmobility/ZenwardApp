@@ -1,7 +1,7 @@
 # Zenward Platform — Component Inventory
 
-**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today (Driver components below actually built/refined)
-**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented the Driver Today screen and refined the shared Driver shell — see "Driver components — P1-E3-S2" below.
+**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today and P1-E3-S3 — Driver Trips & Active Trip Experience (Driver components below actually built/refined)
+**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History — see "Driver components — P1-E3-S2" and "Driver components — P1-E3-S3" below.
 **Last updated:** 2026-09-01
 
 Reconciles the Stitch references (docs/design/stitch/references/) against the component library that **already exists** in `src/components/` (built during P0-E2-S3/S3A) rather than proposing an inventory from scratch. Confirmed by direct inspection: the existing `TRIP_STATUS_MAP`/`DRIVER_STATUS_MAP` in `TripStatus.tsx`/`DriverStatus.tsx` already anticipate the exact labels seen in these references (`Requested`, `Pending Confirmation`, `Needs Assignment`, `Available`, `On Trip`, `Break`, `Unavailable`) — the primitive layer is well-aligned; this phase's job is identifying the screen/feature-level composition still needed on top of it.
@@ -62,6 +62,18 @@ Reused/refined the existing Driver primitives rather than rebuilding them (work 
 | `DriverTripRow`, `DriverInstruction`, `DriverPrimaryAction` | Unchanged | Not used by Driver Today this phase — `DriverInstruction`'s "Call passenger on arrival" pattern and `DriverPrimaryAction`'s single-CTA rule remain available for the Active Trip screen |
 
 Full field-level rationale: [driver-today-data-map.md](../product/driver-today-data-map.md).
+
+## Driver components — P1-E3-S3
+
+| Component | Status | Change |
+|---|---|---|
+| `DriverNextTripCard`, `DriverTripCard` | Reused unchanged | Same components Driver Today already built, now also driving the featured/compact rows on Driver Trips — no Trips-specific fork was created |
+| `DriverActiveTripLegs` | **New** | The two-leg pickup/drop-off block for Active Trip — extends the existing dot-line-dot metaphor (`DriverRoute`) into a richer, per-leg display with contextual Navigate/Call Passenger actions attached to whichever leg is currently live (`currentLeg()`) |
+| `DriverLifecycleAction` | **New** | The one primary progression button — a real `<form>` + Server Action (`useActionState`), matching `SignInForm`'s established pattern. Disables immediately on submit, never optimistically advances state, refreshes authoritative data on both success and error |
+| `DriverInstruction` | Reused unchanged | Now actually used — renders each `driver_notes` entry on Active Trip, exactly the pattern this component was originally built for in P1-E3-S2 but had no call site yet |
+| `DefinitionList` | Reused unchanged | The Passenger Requirements card (Assistance/Instructions) |
+
+Full field-level rationale: [driver-trips-data-map.md](../product/driver-trips-data-map.md), [driver-active-trip-data-map.md](../product/driver-active-trip-data-map.md).
 
 ## Explicitly not building generically
 
