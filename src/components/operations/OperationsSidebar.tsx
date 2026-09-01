@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { Gear, MapPin } from "@phosphor-icons/react/dist/ssr";
 import { navIcons } from "@/design/icons";
@@ -51,10 +52,26 @@ export function OperationsSidebar({
   return (
     <aside className="hidden shrink-0 flex-col border-r border-border-subtle bg-surface-elevated md:flex md:w-16 lg:w-64">
       <div className="flex h-16 items-center border-b border-border-subtle px-4 lg:px-6">
-        <span className={cn(typography.subsectionHeading, "hidden text-brand-care-navy lg:block")}>
-          Zenward
-        </span>
-        <span className={cn(typography.subsectionHeading, "text-brand-care-navy lg:hidden")}>Z</span>
+        {/*
+          P1-E3-S4A: the approved Zenward Mobility logo — the same asset
+          already used on /sign-in (P1-E3-S2A), reused here rather than the
+          legacy plain-text "Zenward"/"Z" treatment this sidebar previously
+          rendered. One <Image>, sized responsively (constrained at lg+ so
+          it doesn't dominate navigation; smaller still in the md
+          icon-only rail) rather than a fabricated compact-only mark — no
+          second approved asset exists, so the same artwork is simply
+          rendered smaller, never cropped or distorted (natural aspect
+          ratio preserved via `h-auto`). See docs/reports/
+          P1-E3-S4A-operations-brand-consistency-report.txt.
+        */}
+        <Image
+          src="/images/zenward-mobility-logo.png"
+          alt="Zenward Mobility"
+          width={217}
+          height={72}
+          priority
+          className="h-auto w-9 lg:w-28"
+        />
       </div>
 
       <nav aria-label="Primary" className="flex-1 overflow-y-auto px-2 py-3 lg:px-3">

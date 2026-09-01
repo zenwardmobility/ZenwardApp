@@ -65,6 +65,7 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Severity:** Medium — visible on 2 of 7 screens, but not blocking (each screen degrades gracefully to showing only "On Trip" vs. an unlabeled/omitted status).
 - **Recommendation:** A dedicated future work item (schema + RLS + read/mutation surface for Driver-set or dispatcher-set availability), scoped and reviewed on its own — not designed here.
 - **Blocks:** Full fidelity of the Driver Availability/Capacity panels only; both screens remain otherwise implementable.
+- **Resolution this phase (Today's Operations, P1-E3-S4):** Confirmed still open — the Driver Availability panel is omitted from Today's Operations entirely (not degraded to a partial "On Trip only" version), since Today's Operations' own summary strip already reports the "active" trip count elsewhere; a partial panel here would have added visual clutter without adding information not already shown. Dispatch Board (not built this phase) remains the screen where "On Trip only" degradation, per the original recommendation, is the more natural fit.
 
 ### GAP-7 — TripException Driver-facing status view
 
@@ -90,12 +91,14 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Finding:** Summary metrics (24 trips today, 6 active, etc.) are derivable client-side from the same day-scoped `trips` query the tables below them already need — no new RPC is required to implement the screen (see ui-data-action-map.md §8).
 - **Severity:** None currently — purely a future query-cost optimization if data volume grows.
 - **Recommendation:** Do not build speculatively; revisit if real usage shows the client-side aggregation is a performance problem.
+- **Resolution (Today's Operations, P1-E3-S4):** Confirmed as recommended — `getTodaysOperations()` (`src/lib/operations/todays-operations.ts`) derives every summary count server-side from the same three real queries the panels below already need. No aggregate RPC was built.
 
 ### GAP-9 — "Export Day Sheet"
 
 - **Finding:** No backend export/report-generation capability exists in any phase to date.
 - **Severity:** Low — a single button on one screen, not core trip-management functionality.
 - **Recommendation:** Scope as its own small feature when prioritized; not designed here.
+- **Resolution (Today's Operations, P1-E3-S4):** The button is rendered, real, and `disabled` — not hidden, not a fake working control. Still fully open as a future feature.
 
 ---
 

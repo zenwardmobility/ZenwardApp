@@ -1,7 +1,7 @@
 # Zenward Platform — Component Inventory
 
-**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today and P1-E3-S3 — Driver Trips & Active Trip Experience (Driver components below actually built/refined)
-**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History — see "Driver components — P1-E3-S2" and "Driver components — P1-E3-S3" below.
+**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today, P1-E3-S3 — Driver Trips & Active Trip Experience, and P1-E3-S4 — Operations Application Shell & Today's Operations (components below actually built/refined)
+**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History; P1-E3-S4 implemented the real Today's Operations screen and refined the Operations shell — see "Driver components — P1-E3-S2", "Driver components — P1-E3-S3", and "Operations components — P1-E3-S4" below.
 **Last updated:** 2026-09-01
 
 Reconciles the Stitch references (docs/design/stitch/references/) against the component library that **already exists** in `src/components/` (built during P0-E2-S3/S3A) rather than proposing an inventory from scratch. Confirmed by direct inspection: the existing `TRIP_STATUS_MAP`/`DRIVER_STATUS_MAP` in `TripStatus.tsx`/`DriverStatus.tsx` already anticipate the exact labels seen in these references (`Requested`, `Pending Confirmation`, `Needs Assignment`, `Available`, `On Trip`, `Break`, `Unavailable`) — the primitive layer is well-aligned; this phase's job is identifying the screen/feature-level composition still needed on top of it.
@@ -74,6 +74,19 @@ Full field-level rationale: [driver-today-data-map.md](../product/driver-today-d
 | `DefinitionList` | Reused unchanged | The Passenger Requirements card (Assistance/Instructions) |
 
 Full field-level rationale: [driver-trips-data-map.md](../product/driver-trips-data-map.md), [driver-active-trip-data-map.md](../product/driver-active-trip-data-map.md).
+
+## Operations components — P1-E3-S4
+
+| Component | Status | Change |
+|---|---|---|
+| `AppHeader` | Refined | Added optional `title`/`description` (a screen's own persistent-chrome title/date, matching the reference's composition — the title lives in the sticky header, not the scrollable `PageHeader` below it) and `avatarName` (real resolved identity), alongside the existing `contextLabel` fallback used by every not-yet-built Operations route. Added a "?" Help icon next to the existing bell — bare icon, no fabricated data, same convention as the bell itself. |
+| `OperationsLayoutClient` | Refined | Builds the Overview route's richer header (title/date/search/Export/New-Trip cluster) itself, from data it already has (`organization.organizationTimezone`) plus static content — no new cross-tree state channel introduced merely for one route (see decision-register.md ZD-129). Now resolves a real `user_profiles.display_name` (via the new `getDisplayName()`) instead of passing the raw session email through as a "name". |
+| `SummaryStrip` | Refined | Added an optional `inline` layout (single flowing row, dot + bold value + label, matching the reference's compact metric strip) and a per-item `dot` flag — additive, the original stacked value-over-label layout (`src/app/foundation`'s showcase usage, SummaryStrip's only other call site) is unchanged. |
+| `todays-operations` query/presentation modules (`src/lib/operations/`) | **New** | `day-bounds.ts` (org-local "today" as a UTC range — the range-query counterpart to `trip-presentation.ts`'s single-instant timezone helpers), `presentation.ts` (Operations-specific status-label/event-label derivations — a distinct module from the Driver one; an Operations Trip can be genuinely unassigned, which a Driver never sees), `todays-operations.ts` (the three real queries, see [todays-operations-data-map.md](../product/todays-operations-data-map.md)). |
+| `src/lib/auth/profile.ts` (`getDisplayName`) | **New** | Real `user_profiles.display_name` resolution with an email fallback — used by Operations this phase; available to any future surface needing the same real-identity lookup. |
+| `TripStatus`, `DataTable`, `Panel`, `SectionHeader`, `EmptyState`, `StatusBadge` | Reused unchanged | Every label `operationsTripStatusLabel`/the literal `"Needs Assignment"` produces was already anticipated by `TRIP_STATUS_MAP` before this phase's code was written (confirmed at the top of this document) — no new status-badge component needed. |
+
+Full field-level rationale: [todays-operations-data-map.md](../product/todays-operations-data-map.md).
 
 ## Explicitly not building generically
 

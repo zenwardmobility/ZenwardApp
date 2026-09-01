@@ -1,0 +1,202 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S4A — Operations Sidebar Brand
+                       Consistency Fix
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 7f0eb9d "Implement Driver trip workflow"
+                       (unchanged — P1-E3-S4 remains uncommitted, as
+                       instructed; nothing committed during this
+                       phase either)
+Date/time:            2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+1. PREVIOUS SIDEBAR BRANDING
+--------------------------------------------------------------------
+`OperationsSidebar` (`src/components/operations/OperationsSidebar.tsx`)
+rendered two plain-text spans in its header, toggled by breakpoint:
+
+  - At `lg`+ (1024px+, full 264px sidebar): the literal text
+    "Zenward", styled with `typography.subsectionHeading` and
+    `text-brand-care-navy`.
+  - Below `lg` (the `md` 768–1023px icon-only rail): a single
+    literal letter "Z" in the same style.
+
+Neither was the approved Zenward Mobility logo artwork — both were a
+typographic stand-in never updated after the sign-in page was
+corrected to use the real asset in P1-E3-S2A. This was a genuine
+third, inconsistent brand treatment: sign-in used the approved
+image, `Zenward-Web`'s own header uses it too, and Operations alone
+still showed plain text.
+
+--------------------------------------------------------------------
+2. APPROVED ASSET USED
+--------------------------------------------------------------------
+`public/images/zenward-mobility-logo.png` — the same file already in
+the Platform repository and already used by `/sign-in`
+(`src/app/sign-in/page.tsx`, established P1-E3-S2A). Confirmed via
+`sips`: 2172 x 724px, an exact 3.0:1 aspect ratio. No new asset was
+introduced, generated, or fetched; the file itself was not opened in
+any editor or touched — only referenced by path, exactly as the
+sign-in page already does.
+
+--------------------------------------------------------------------
+3. IMPLEMENTATION
+--------------------------------------------------------------------
+`src/components/operations/OperationsSidebar.tsx`:
+  - Added `import Image from "next/image";`.
+  - Replaced both plain-text spans with a single `next/image`
+    element:
+
+      <Image
+        src="/images/zenward-mobility-logo.png"
+        alt="Zenward Mobility"
+        width={217}
+        height={72}
+        priority
+        className="h-auto w-9 lg:w-28"
+      />
+
+  - One element, not two hidden/shown variants — the existing
+    "Zenward"/"Z" pair was two separate spans toggled with
+    `hidden`/`lg:hidden`; the logo instead uses a single `<Image>`
+    whose Tailwind width classes change per breakpoint
+    (`w-9` = 36px in the `md` icon-only rail, `lg:w-28` = 112px at
+    `lg`+), with `h-auto` preserving the asset's natural aspect
+    ratio at both sizes. `width`/`height` props (217x72, matching the
+    intrinsic 3.0:1 ratio) are required by `next/image` and are not
+    the final rendered size — the `className` governs that.
+  - No compact-only mark was fabricated for the `md` icon rail
+    (768–1023px): work item §4 explicitly forbids inventing a
+    separate unapproved logo for that state, and no second approved
+    asset exists. The identical artwork is simply rendered smaller
+    there (36px wide, ~12px tall) — the whole wordmark, never
+    cropped, never distorted, never recolored.
+  - The rail's own width (`md:w-16 lg:w-64`) and header height
+    (`h-16`) were NOT changed — only the brand mark inside the
+    existing header block.
+  - `typography`/`cn` imports remain in use elsewhere in the file
+    (nav item labels, location text, dispatcher name/role) —
+    confirmed via grep before removing nothing else.
+
+--------------------------------------------------------------------
+4. 1024 QA (1024x768)
+--------------------------------------------------------------------
+Real headless-Chrome/CDP screenshot captured signed in as
+org-a-admin@example.test (real session, real data), saved to
+docs/design/qa/todays-operations/sidebar-brand-1024x768.png. At this
+width the sidebar is in its full `lg:w-64` state (Tailwind's `lg`
+breakpoint is 1024px min-width, so exactly 1024px already renders the
+expanded sidebar, not the compact rail).
+
+  - Approved logo (swoosh mark + "Zenward MOBILITY" wordmark) renders
+    clearly, in full color, undistorted.
+  - No clipping — the image fits entirely within the 264px-wide,
+    64px-tall header block with visible margin on all sides.
+  - Constrained width (112px rendered) — clearly present but does
+    not dominate the navigation list beneath it.
+  - Nav item alignment/spacing below the header is unchanged and
+    correctly aligned.
+  - Sidebar reads as visually balanced — logo, nav list, and the
+    bottom location/settings/dispatcher rail are proportionate to
+    each other, matching the general composition of
+    01-todays-operations.png (that reference's own mark differs
+    cosmetically, being a design mockup rather than the real asset —
+    the composition/placement principle it demonstrates is what was
+    matched, not its specific artwork, per work item §3 instruction
+    to "fit the approved mark in intentionally").
+  - DOM check: exactly one `<img alt="Zenward Mobility">` inside
+    `<aside>`; natural aspect ratio (2172/724 = 3.01) matches the
+    rendered aspect ratio (3.01) to within measurement precision —
+    confirms `h-auto` is genuinely preserving proportions, not
+    silently stretching.
+
+--------------------------------------------------------------------
+5. 1440 QA (1440x900)
+--------------------------------------------------------------------
+Real headless-Chrome/CDP screenshot, same session, saved to
+docs/design/qa/todays-operations/sidebar-brand-1440x900.png.
+
+  - Same expanded `lg:w-64` sidebar state as 1024 (no different
+    behavior above the `lg` breakpoint — confirmed identical
+    treatment at 1280x900 and 1600x1000 as well, captured for
+    completeness).
+  - Logo renders identically to the 1024 capture (same 112px
+    rendered width — the logo does not itself grow with the
+    viewport past `lg`, since only the sidebar's own two breakpoint
+    states exist).
+  - No clipping, no distortion.
+  - Navigation alignment and overall sidebar balance unchanged from
+    1024, and unchanged from the Today's Operations content to its
+    right (Needs Attention/Upcoming Trips/Active Trips/Activity Log
+    render exactly as they did before this phase — confirmed
+    visually, not just assumed, since this screenshot re-renders the
+    whole page).
+
+Additionally inspected (not required, captured for completeness):
+768x1024 — the `md` icon-only rail state. The same asset renders at
+36px wide (~12px tall): small, but genuinely the whole, undistorted,
+uncropped logo — no fabricated compact mark. No clipping observed at
+this width either.
+
+--------------------------------------------------------------------
+6. OPERATIONS SMOKE RESULT
+--------------------------------------------------------------------
+Focused access check driven against the real running application via
+real sign-in (headless Chrome + CDP, same technique as P1-E3-S4):
+
+  PASS  org_admin lands on /operations (not redirected)
+  PASS  org_admin sees "Today's Operations" content
+  PASS  org_admin sees real Org A data (Fictional Passenger A1)
+  PASS  driver still correctly redirected away from /operations
+        to /driver
+
+  4/4 PASS — confirms the brand-only change did not affect routing,
+  data, or role-based access in any way.
+
+--------------------------------------------------------------------
+7. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, zero errors.
+
+--------------------------------------------------------------------
+8. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, zero errors, zero warnings.
+
+--------------------------------------------------------------------
+9. BUILD
+--------------------------------------------------------------------
+`npm run build` — succeeded. All 24 routes compiled (same route list
+as P1-E3-S4's own build, unaffected — every `/operations/*` route
+still dynamic (ƒ) as expected).
+
+--------------------------------------------------------------------
+10. FILES MODIFIED
+--------------------------------------------------------------------
+`git status --short` at the end of this phase:
+
+  M  src/components/operations/OperationsSidebar.tsx   (this phase's
+                                                          only source
+                                                          change)
+  ?? docs/design/qa/todays-operations/sidebar-brand-*.png
+                                                         (5 new
+                                                          screenshots)
+  ?? docs/reports/P1-E3-S4A-operations-brand-consistency-report.txt
+                                                         (this report)
+
+Everything from P1-E3-S4 (still uncommitted, per that phase's own
+instruction) is otherwise untouched — confirmed identical to the
+diff at the end of that phase's own report, plus this one file. No
+change to: Today's Operations data, queries, summary metrics, status
+logic, RLS, Supabase migrations/seed, auth, the Driver application,
+Zenward-Web, or the Dispatch Board (confirmed: `git status --short`
+shows no file under `/driver/*`, `/Users/datamatics/Zenward-Web`, or
+`/operations/dispatch`). Nothing was committed or pushed.
+
+====================================================================
+OPERATIONS BRAND CONSISTENCY GATE:
+READY
+====================================================================

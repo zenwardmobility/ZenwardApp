@@ -1,0 +1,522 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S4 — Operations Application Shell &
+                       Today's Operations
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 7f0eb9d "Implement Driver trip workflow"
+                       (unchanged — nothing committed during this
+                       phase; working tree left dirty per instruction)
+Date/time:            2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK STATE
+--------------------------------------------------------------------
+`git status --short` was clean at the start of this phase. `git log
+--oneline -3` confirmed P1-E3-S3 genuinely committed as `7f0eb9d
+"Implement Driver trip workflow"`. All Operations scaffold files
+(`operations/page.tsx`, `operations/layout.tsx`, `OperationsShell`,
+`OperationsSidebar`, `OperationsLayoutClient`, `AppHeader`) and the
+Stitch reference `01-todays-operations.png` were read in full before
+any code was written, along with the existing design-system
+primitives this phase would reuse (`SummaryStrip`, `DataTable`,
+`AttentionState`, `PageHeader`, `Panel`, `TripStatus`, `StatusBadge`,
+`SectionHeader`, `EmptyState`, `Avatar`, `SearchInput`, `Button`,
+`LinkButton`, `IconButton`). Every table/column/FK-constraint name
+this phase's queries depend on was confirmed directly from
+`src/lib/supabase/database.types.ts` and the actual RLS-policy
+migrations, not inferred from prior documentation summaries alone.
+
+--------------------------------------------------------------------
+2. SCOPE BOUNDARIES HONORED
+--------------------------------------------------------------------
+Built: the real Today's Operations screen (summary metrics, Needs
+Attention, Upcoming Trips, Active Trips, Activity Log) and Operations
+shell refinements (richer `AppHeader`, real resolved dispatcher
+identity).
+
+NOT built, per explicit work item instruction — confirmed by
+inspection, not merely by omission:
+  - Dispatch Board — untouched (`/operations/dispatch` remains the
+    pre-existing stub; only ever linked TO, never built out).
+  - Operations Trip Detail — untouched.
+  - New Trip form — untouched (`/operations/trips/new` remains the
+    pre-existing stub; only ever linked TO).
+  - `assign_trip`/`reassign_trip` — not called anywhere in this
+    phase's code. The "Assign" action is a plain link to
+    `/operations/dispatch`, no deep-link parameter.
+  - No Driver lifecycle mutation buttons, no cancellation/no-show
+    controls anywhere on this screen.
+  - No Supabase Realtime, no polling, no fake "LIVE" indicator —
+    this is a server-rendered snapshot, refreshed on navigation only.
+  - No GPS/location tracking of any kind.
+  - No service role used anywhere — every query runs under the
+    caller's own session via the publishable key, RLS-enforced.
+  - `--spacing-sm/md/lg/xl` bare custom tokens were not reintroduced
+    — every new class uses the existing `zw-`-namespaced tokens
+    (confirmed by grep across every file this phase touched).
+  - `/driver/*` routes and `/Users/datamatics/Zenward-Web` were not
+    touched (confirmed: `git status --short` shows no files under
+    either path).
+  - Nothing was committed or pushed (working tree intentionally left
+    dirty — see `git status --short` in section 12).
+
+--------------------------------------------------------------------
+3. QUERY ARCHITECTURE
+--------------------------------------------------------------------
+`src/lib/operations/todays-operations.ts` — `getTodaysOperations()`,
+the server-side data-access boundary the work item explicitly asked
+for (§51). Three real, organization-scoped, explicit-column queries,
+no `select("*")`, no service role:
+
+  1. Today's trips — `trips`, filtered by `scheduled_pickup_at`
+     within the organization's own local "today"
+     (`organizationDayBoundsUtc()`, `src/lib/operations/day-bounds.ts`
+     — a UTC `[start, end)` range computed via the same `Intl`-offset
+     technique `operationalDateKey` already established in P1-E3-S2C,
+     extended from a single-instant comparison to a real range for a
+     `gte`/`lt` filter). Embeds `passengers(display_name)` and
+     `trip_assignments(ended_at, drivers(display_name),
+     vehicles(label))` via the confirmed composite-FK relationships
+     (`trips_passenger_id_organization_id_fkey`,
+     `trip_assignments_trip_id_organization_id_fkey`,
+     `trip_assignments_driver_id_organization_id_fkey`,
+     `trip_assignments_vehicle_id_organization_id_fkey`). Feeds Needs
+     Attention, Upcoming Trips, and the Completed-Today subset.
+  2. Active trips — `trips` filtered by `state in (5 non-terminal
+     states)`, DELIBERATELY NOT bounded to today's window (ZD-131) —
+     an in-progress Trip is happening right now by construction;
+     bounding it to "scheduled for today" would incorrectly hide a
+     running-late Trip whose `scheduled_pickup_at` technically fell
+     on the prior org-local day. Feeds Active Trips and the "active"
+     summary metric.
+  3. Today's activity — `trip_events`, filtered by `occurred_at`
+     within the same org-local day bounds, embedding
+     `trips(passengers(display_name))` via
+     `trip_events_trip_id_organization_id_fkey`, ordered
+     `occurred_at desc`, limited to 20. Feeds the Activity Log.
+
+Every query is additionally filtered by `.eq("organization_id", ...)`
+explicitly — never left to RLS alone to narrow, the same
+defense-in-depth convention `getActiveMemberships()`
+(`src/lib/auth/membership.ts`) already established. No new RPC was
+built (GAP-8 explicitly recommends against one until real usage shows
+a need) — every value is derived from the same three queries the
+panels themselves need.
+
+Embedded-relation typing follows `getActiveMemberships()`'s own
+established defensive pattern (`unwrapOne<T>()`) — a to-one composite
+FK can come back as either an object or a one-element array depending
+on supabase-js's type inference, so every embed is unwrapped
+defensively rather than assumed to be one shape.
+
+--------------------------------------------------------------------
+4. PRESENTATION LAYER
+--------------------------------------------------------------------
+`src/lib/operations/presentation.ts` — a distinct module from
+`src/lib/driver/trip-presentation.ts`, not a shared one: Operations
+sees every Trip in the organization and has a genuine "unassigned"
+concept a Driver never encounters (a Driver only ever sees Trips they
+hold an assignment on). Small time-formatting helpers
+(`formatOperationsTime`/`formatOperationsLongDate`) are deliberately
+duplicated rather than imported from `driver/` to keep that module
+boundary clean.
+
+`operationsTripStatusLabel(state, hasActiveAssignment)` — the plain
+lifecycle status shown in the Upcoming Trips STATUS column and the
+Active Trips list: `scheduled` reads "Assigned" when an active
+assignment exists, "Scheduled" when it doesn't (matching the
+reference's own Anna Reed/Mary Collins rows exactly); the 5
+non-terminal states collapse to the same bare "En Route"/"Arrived"
+labels lifecycle-model.md §C already sanctions as a presentation
+choice, reusing every label `TRIP_STATUS_MAP`
+(`src/components/ui/TripStatus.tsx`) already anticipated before this
+phase's code was written. This is intentionally DISTINCT from the
+literal "Needs Assignment" label used only in the Needs Attention
+panel's ISSUE column — conflating the two would duplicate a warning
+badge as the primary status everywhere a Trip appears, which the
+reference itself does not do.
+
+`operationsEventLabel(eventType)` — humanizes the full, real
+`trip_events.event_type` allow-list (the CHECK constraint's own 16
+values, `supabase/migrations/20260830131200_trip_events.sql`) for the
+Activity Log. Unrecognized values fall back to the raw string,
+matching `driverTripStateLabel`'s established convention.
+
+--------------------------------------------------------------------
+5. SEED FIXTURES ADDED
+--------------------------------------------------------------------
+`supabase/seed.sql` gained one new Org A vehicle ("Fictional Van A2")
+and four new Org A trips anchored to the same org-local "today"
+concept the P1-E3-S2 Driver Today fixtures established, covering all
+four screen groupings with real data (not fabricated at the
+application layer):
+  - 96...a1 — Needs Assignment (`scheduled`, no assignment row)
+  - 96...a2 — Active (`en_route_to_pickup`, live assignment: Driver
+    A2 / Van A2)
+  - 96...a3 — Completed today (`completed`, `completed_at` set, WITH
+    an ENDED assignment, `end_reason='trip_completed'` — mirrors
+    exactly what `driver_complete_trip` itself produces in the same
+    transaction, not an invented shape)
+  - 96...a4 — a second Upcoming/assigned trip later in the day
+    (Driver A2 / Van A2)
+A matching set of `trip_events` rows (real allow-listed `event_type`
+values — `trip_scheduled`/`driver_assigned`/`en_route_to_pickup`/
+`trip_completed`) spread through the org-local morning gives the
+Activity Log genuine chronological content.
+
+Bug found and fixed while writing this fixture block: a 4-branch
+`UNION ALL` mixing untyped `null` literals with a concrete
+`timestamptz` expression at the same column position across branches
+raised `ERROR: UNION types text and timestamp with time zone cannot
+be matched`, even though the same technique (bare `null` unioned with
+a `timestamptz` branch) already worked in the adjacent, unmodified
+P1-E3-S2C fixture block. Root-caused to Postgres's `unknown`-type
+resolution across more than two `UNION ALL` branches, not chased
+further once found — fixed unambiguously by casting every placeholder
+to `null::timestamptz` explicitly rather than relying on inference.
+Verified by running `supabase/seed.sql` directly against the local
+Postgres container via `psql` after the fix — zero errors, all
+`INSERT` statements succeeded.
+
+--------------------------------------------------------------------
+6. SHELL / CHROME CHANGES
+--------------------------------------------------------------------
+`AppHeader` — added optional `title`/`description` (a route's own
+persistent-chrome title/date, matching the reference's composition:
+the title lives in the sticky header, not the scrollable `PageHeader`
+below it) and `avatarName` (real resolved identity, rendered only
+when supplied). Added a "?" Help icon next to the existing bell — a
+bare icon with no fabricated data, the same convention already
+applied to the bell.
+
+`OperationsLayoutClient` — builds the Overview route's specific
+richer header content itself (title, org-local date via
+`formatOperationsLongDate`, the search/Export/New-Trip action
+cluster), keyed off `pathname`, from data it already has
+(`organization.organizationTimezone`) plus static content — no new
+cross-tree state channel was introduced for one route (ZD-132). Now
+resolves the caller's real `user_profiles.display_name` (via the new
+`getDisplayName()`, `src/lib/auth/profile.ts`) instead of passing the
+raw session email through as the sidebar's "dispatcherName" — this
+was a genuine identity-leak-as-name gap present before this phase,
+found and fixed here rather than left in place (ZD-129). No seed data
+populates `user_profiles.display_name` for any fixture user, so every
+fixture account genuinely exercises the email fallback in QA, not a
+hypothetical path.
+
+`SummaryStrip` — gained an additive `inline` layout (single flowing
+row, dot + bold value + label, matching the reference's compact
+metric strip) and a per-item `dot` flag (ZD-133). The original
+stacked layout is unchanged and remains the default; the one
+pre-existing call site (`src/app/foundation`'s showcase) was confirmed
+to render identically (no `inline`/`dot` passed there).
+
+--------------------------------------------------------------------
+7. DELIBERATE OMISSIONS / CONTENT DEVIATIONS FROM THE REFERENCE
+--------------------------------------------------------------------
+Every visible deviation from `01-todays-operations.png`, documented
+and justified per work item instruction:
+
+  - Driver Availability panel — omitted entirely, not degraded to a
+    partial "On Trip"-only version (GAP-6, ZD-130). Only "On Trip" is
+    derivable; the panel's value depends on a missing Available/
+    Break/Unavailable taxonomy with no schema representation.
+  - Needs Attention shows Needs-Assignment rows only — never "Running
+    Late" (no defined threshold) or "Pending Confirmation" (no
+    domain concept exists at all) — both already recorded as open
+    product decisions in ui-backend-gap-register.md, not invented
+    here.
+  - "Assign" routes to `/operations/dispatch` generically, no
+    deep-link parameter — the Dispatch Board doesn't exist yet, and
+    the work item explicitly forbids wiring `assign_trip` into this
+    screen regardless.
+  - "Export Day Sheet" is rendered, real, and `disabled` (GAP-9 — no
+    export backend exists in any phase to date).
+  - Search is rendered, real, and `disabled` — not wired this phase,
+    disabled rather than silently inert so it doesn't look like a
+    live control that just doesn't respond (ZD-134).
+  - The reference's "Filter" control on Upcoming Trips is omitted
+    from the DOM entirely, not rendered disabled — no established
+    gap-register entry defines what it would even do once "wired"
+    (ZD-134).
+  - Activity Log rows show the affected Trip's passenger, not the
+    human actor who performed the action — `user_profiles` has zero
+    seed data and no auto-provisioning trigger; resolving an actor
+    name reliably would need a second cross-table lookup solely for
+    informational value. The reference's richer "Marcus Hall marked
+    En Route / James Carter • Toyota Sienna 4" composition is a
+    deliberate simplification here, not an oversight.
+  - Sidebar branding (plain "Zenward" text, no logo mark/icon) is
+    UNCHANGED from before this phase — a pre-existing treatment, not
+    something this phase introduced or was asked to fix. Flagged here
+    for visibility, left alone per scope discipline (this phase's
+    mandate is Today's Operations' content and shell wiring, not a
+    drive-by brand-asset change to a component every future Operations
+    screen shares — the sign-in logo fix in P1-E3-S2A was its own
+    dedicated work item for exactly this reason).
+  - Fixture display names ("Fictional Driver A2", "Fictional Van A2")
+    are longer than the reference's compact "M. Hall"/"Ford Transit
+    12" style, causing more table-row wrapping than the reference
+    shows — a content artifact of this project's established "Fictional
+    X" seed-naming convention (used identically since P1-E2), not a
+    layout defect. Real production data would use realistic names.
+
+--------------------------------------------------------------------
+8. REGRESSION SUITE (fresh `supabase db reset`)
+--------------------------------------------------------------------
+Ran all 18 existing SQL test files directly against the local
+Postgres container after a fresh `supabase db reset` applying this
+phase's migration-free (seed-only) changes:
+
+  constraint_tests.sql                        13 assertions, 0 fail
+  create_trip_atomicity_tests.sql               2 assertions, 0 fail
+  create_trip_privilege_tests.sql               5 assertions, 0 fail
+  create_trip_tests.sql                        20 assertions, 0 fail
+  driver_read_authorization_tests.sql          17 assertions, 0 fail
+  driver_read_history_tests.sql                 8 assertions, 0 fail
+  driver_read_minimization_tests.sql           13 assertions, 0 fail
+  driver_read_privilege_tests.sql               8 assertions, 0 fail
+  function_privilege_tests.sql                  7 assertions, 0 fail
+  mutation_assignment_tests.sql                16 assertions, 0 fail
+  mutation_atomicity_tests.sql                  2 assertions, 0 fail
+  mutation_authorization_tests.sql              4 assertions, 0 fail
+  mutation_idempotent_authorization_tests.sql   6 assertions, 0 fail
+  mutation_lifecycle_tests.sql                 24 assertions, 0 fail
+  mutation_privilege_tests.sql                  7 assertions, 0 fail
+  organization_timezone_tests.sql              13 assertions, 0 fail
+  rls_adversarial_tests.sql                    33 assertions, 0 fail
+  security_definer_exposure_tests.sql          20 assertions, 0 fail
+  ------------------------------------------------------------------
+  TOTAL: 218 assertions, 0 failures (100% PASS)
+
+(mutation_concurrency_test.sh, a shell-driven concurrency probe, was
+not re-run this phase — it exercises Driver mutation concurrency,
+untouched by this phase's changes.)
+
+`npx supabase gen types typescript --local` was re-run after the
+reset; `diff` against the committed `database.types.ts` showed ZERO
+lines of difference — this phase added no new tables/columns/RPCs,
+confirming no schema drift was accidentally introduced.
+
+--------------------------------------------------------------------
+9. BUILD / LINT / TYPECHECK
+--------------------------------------------------------------------
+`npx tsc --noEmit`  — clean, zero errors.
+`npm run lint`      — clean, zero errors (0 warnings in application
+                      code; 4 warnings only in this phase's own
+                      untracked, non-shipped `.tmp-qa/` test scripts,
+                      deleted before this report was finalized).
+`npm run build`     — succeeded. All 24 routes compiled, including
+                      every `/operations/*` route as dynamic (ƒ),
+                      matching their server-rendered, per-request
+                      auth-gated nature.
+
+--------------------------------------------------------------------
+10. FUNCTIONAL / SECURITY TEST MATRIX
+--------------------------------------------------------------------
+Driven against the REAL running application (dev server) via headless
+Chrome + CDP, using the same technique established in P1-E3-S2B/S3:
+real `@supabase/ssr` sign-in (via `createServerClient(...).auth.
+signInWithPassword()`, capturing the exact cookies the real sign-in
+flow would set — not a hand-rolled guess) injected via
+`Network.setCookie`, then real navigation and DOM/text assertions —
+one fresh browser tab per scenario so no session leaks between
+scenarios.
+
+  A. organization_admin, own org
+     A1  lands on /operations, not redirected .......... PASS
+     A2  sees "Today's Operations" title ................ PASS
+     A3  sees real Org A passenger fixture data .......... PASS
+     A4  sees Needs Attention panel ...................... PASS
+     A5  sees Upcoming Trips panel ........................ PASS
+     A6  sees Active Trips panel .......................... PASS
+     A7  sees Activity Log panel .......................... PASS
+     A8  Driver Availability panel correctly absent ....... PASS
+  B. dispatcher, own org
+     B1  lands on /operations ............................. PASS
+     B2  sees real Org A data ............................. PASS
+  C. driver attempts /operations
+     C1  redirected to /driver, not denied-and-stuck ...... PASS
+  D. inactive Operations Membership
+     D1  redirected to /access-unavailable ................ PASS
+  E. multi-org user (org_admin in Org A, driver in Org B),
+     no organization-context cookie
+     E1  required to select — NEVER silently inherits the
+         stronger org_admin role from the other org ....... PASS
+  F. foreign-org data invisibility (Org B admin)
+     F1  lands on /operations (own org) ................... PASS
+     F2  renders Org B's own organization context ......... PASS
+     F2b correct empty states for a day with zero real
+         Org B "today" trips (Org B's only fixture Trip is
+         ~1 day out — an honest empty render, not a
+         fabricated Org B "today" fixture built merely to
+         make this screenshot busier) .................... PASS
+     F3  NEVER sees Org A's passenger fixture data ......... PASS
+  ------------------------------------------------------------------
+  TOTAL: 17 assertions, 0 failures (100% PASS)
+
+Driver-surface smoke check (not a regression this phase should have
+caused, verified anyway): signed in as a Driver, confirmed
+`/driver` still renders both fixture trips correctly with no visual
+or functional change — `SummaryStrip`'s new `inline` prop is
+opt-in and additive; Driver components were not touched.
+
+--------------------------------------------------------------------
+11. VISUAL FIDELITY GATE
+--------------------------------------------------------------------
+Real screenshots captured via headless Chrome + CDP (signed in as
+org-a-admin@example.test, real data, not a static mock) at every
+required width — 768, 1024, 1280, 1440, 1600 — saved to
+docs/design/qa/todays-operations/. Compared directly against
+01-todays-operations.png, item by item:
+
+  Sidebar (width, nav list, active-state highlight, bottom
+    location/settings/dispatcher rail) ............. MATCHES
+  Header height/composition (title+date left, search+
+    Export+New Trip+bell+help+avatar right) ......... MATCHES
+    (pre-existing plain-text "Zenward" wordmark vs. the
+    reference's logo+icon mark — a PRE-EXISTING deviation,
+    not introduced this phase — see section 7)
+  Summary strip (single row, dot+value+label, dividers) . MATCHES
+  Needs Attention panel (icon+title+count badge, table
+    columns, Assign button treatment) ............... MATCHES
+  Upcoming Trips panel (table columns, "--" for
+    unassigned, status badges, "View all trips" footer
+    link) ............................................ MATCHES
+  Active Trips panel (dot+name+driver/vehicle
+    subtitle+status, "N in progress" header) ......... MATCHES
+  Activity Log panel (dot+label+subtitle+time) ......... MATCHES
+    (actor identity intentionally simpler than the
+    reference — see section 7)
+  Driver Availability panel ............................ ABSENT
+    (deliberate omission — see section 7, GAP-6)
+  Border/radius/whitespace/typography treatment
+    (Panel's existing border+radius convention, `zw-`
+    spacing tokens throughout, `typography.*` tokens
+    throughout — no ad hoc values) ................... MATCHES
+  Desktop-first responsive behavior at 1024/1280/1440/
+    1600 ............................................. MATCHES
+  768px (secondary check per work item — "Also inspect:
+    768", not a primary target) — tables scroll
+    horizontally within their own bounded `DataTable`
+    container rather than forcing full-page horizontal
+    scroll; this is `DataTable`'s own established,
+    documented behavior (`overflow-x-auto` on its own
+    wrapper), not a new compromise introduced here ..... ACCEPTABLE,
+                                                           DOCUMENTED
+
+REAL BUG FOUND AND FIXED DURING THIS VISUAL QA (not a hypothetical
+review — caught only because an actual 768px screenshot was captured
+and inspected, exactly why this gate requires real screenshots and
+not component-inspection alone): the header's `SearchInput` was
+hidden below the `lg` breakpoint via `hidden lg:block` passed as its
+own `className` prop — but `SearchInput` forwards `className` only to
+its inner `<input>`, not to its own outer wrapping `<div>` (which also
+renders the magnifying-glass icon as a sibling element). The `<input>`
+was correctly hidden; its wrapper and icon were not, producing a tiny
+floating icon-shaped box with no input next to it at 768px. Fixed by
+wrapping `<SearchInput>` in a plain `<div className="hidden
+lg:block">` instead (ZD-135). Re-captured the same screenshot after
+the fix and confirmed the icon-leak is gone; re-ran the full
+functional/security matrix (section 10) afterward to confirm the fix
+introduced no regression — still 17/17 PASS.
+
+VISUAL FIDELITY GATE: READY.
+
+--------------------------------------------------------------------
+12. FILES CREATED / MODIFIED
+--------------------------------------------------------------------
+`git status --short` at the end of this phase:
+
+  M  docs/design/component-inventory.md
+  M  docs/product/application-implementation-plan.md
+  M  docs/product/decision-register.md
+  M  docs/product/ui-backend-gap-register.md
+  M  src/app/operations/layout.tsx
+  M  src/app/operations/page.tsx
+  M  src/components/operations/AppHeader.tsx
+  M  src/components/operations/OperationsLayoutClient.tsx
+  M  src/components/ui/SummaryStrip.tsx
+  M  supabase/seed.sql
+  ?? docs/design/qa/todays-operations/   (5 real screenshots)
+  ?? docs/product/todays-operations-data-map.md
+  ?? src/lib/auth/profile.ts
+  ?? src/lib/operations/                  (day-bounds.ts,
+                                            presentation.ts,
+                                            todays-operations.ts)
+
+Nothing under `/driver/*`, `src/app/foundation` (beyond its own
+unaffected `SummaryStrip` showcase call site, confirmed unchanged),
+or `/Users/datamatics/Zenward-Web` was touched. `.tmp-qa/` (this
+phase's own throwaway CDP test scripts, needed because module
+resolution requires them to live inside this project's own
+`node_modules` tree) was deleted before this report was finalized —
+not part of the deliverable, never staged.
+
+--------------------------------------------------------------------
+13. DECISIONS RECORDED
+--------------------------------------------------------------------
+ZD-129 through ZD-135 — see decision-register.md for full detail:
+  ZD-129  Real user_profiles.display_name identity resolution,
+          replacing the raw session email
+  ZD-130  Needs Attention narrowed to Needs-Assignment only; Driver
+          Availability panel omitted entirely
+  ZD-131  Active Trips query deliberately NOT bounded to "today"
+  ZD-132  AppHeader's richer per-route content is owned by
+          OperationsLayoutClient, not a new cross-tree state channel
+  ZD-133  SummaryStrip gains an additive inline/dot layout; original
+          stacked layout unchanged
+  ZD-134  Search/Export/Filter: disabled vs. omitted, not faked
+  ZD-135  SearchInput's className-reaches-only-the-inner-input bug,
+          found and fixed during 768px visual QA
+
+--------------------------------------------------------------------
+14. GATE VERDICTS
+--------------------------------------------------------------------
+FUNCTIONAL GATE:       READY
+  - All 18 pre-existing SQL regression suites: 218/218 assertions
+    PASS after a fresh reset.
+  - New functional/security matrix (org_admin, dispatcher,
+    driver-denied, inactive-Membership, multi-org-select-required,
+    foreign-tenant-invisibility): 17/17 PASS, driven against the
+    real running application via real sign-in + real navigation.
+  - tsc/lint/build all clean.
+  - Driver surface smoke-checked, unaffected.
+
+VISUAL FIDELITY GATE:  READY
+  - Real screenshots at all 5 required widths, compared item-by-item
+    against the canonical reference.
+  - One real defect found by this exact process (not hypothetical)
+    and fixed, then re-verified.
+  - Every remaining deviation from the reference is a content-level
+    difference with a recorded, specific justification (sections 7
+    and 11) — not an unexplained layout/composition/hierarchy change.
+
+OVERALL IMPLEMENTATION GATE: READY (both sub-gates READY).
+
+--------------------------------------------------------------------
+15. NOT DONE / DEFERRED (confirmed, not silently dropped)
+--------------------------------------------------------------------
+  - Operations Trip Detail, Dispatch Board, New Trip form — all
+    remain unbuilt stubs, exactly as scoped.
+  - Driver Availability system (GAP-6) — remains open, its own
+    future work item.
+  - Running Late threshold / Pending Confirmation concept — remain
+    open product decisions, ui-backend-gap-register.md.
+  - "Export Day Sheet" backend — remains open (GAP-9).
+  - Search/Filter wiring — remains open, not scoped to this phase.
+  - Sidebar branding (logo mark) — pre-existing, unaddressed, out of
+    this phase's scope by design (see section 7).
+  - Driver Profile — still a stub (GAP-3), unrelated to this phase.
+
+--------------------------------------------------------------------
+16. STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed (working
+tree intentionally left exactly as listed in section 12); Dispatch
+Board, Operations Trip Detail, New Trip, Driver location tracking,
+Zenward-Web, and deployment were not begun. This phase stops here.
+====================================================================

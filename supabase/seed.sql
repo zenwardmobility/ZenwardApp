@@ -130,6 +130,12 @@ insert into public.facilities (id, organization_id, name, city, state, status) v
 -- ---------------------------------------------------------------------------
 insert into public.vehicles (id, organization_id, label, status) values
   ('50000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000a1', 'Fictional Van A1', 'active'),
+  -- Second Org A vehicle (P1-E3-S4) — lets the Today's Operations Upcoming/
+  -- Active fixtures show a genuinely different driver+vehicle pairing than
+  -- the existing Driver Today fixtures (95xx, which already occupy Van A1),
+  -- rather than two concurrent active assignments implausibly sharing one
+  -- vehicle.
+  ('50000000-0000-0000-0000-0000000000a2', '10000000-0000-0000-0000-0000000000a1', 'Fictional Van A2', 'active'),
   ('50000000-0000-0000-0000-0000000000b1', '10000000-0000-0000-0000-0000000000b1', 'Fictional Van B1', 'active');
 
 -- ---------------------------------------------------------------------------
@@ -244,3 +250,111 @@ insert into public.trip_exceptions (organization_id, trip_id, exception_type, de
    'timing_conflict', 'Fictional: passenger requested an earlier pickup time.', 'open', '20000000-0000-0000-0000-0000000000a2'),
   ('10000000-0000-0000-0000-0000000000b1', '80000000-0000-0000-0000-0000000000b1',
    'vehicle_issue', 'Fictional Org B exception — must stay in Org B.', 'open', '20000000-0000-0000-0000-0000000000b2');
+
+-- ---------------------------------------------------------------------------
+-- Today's Operations QA fixtures (P1-E3-S4) — four MORE Org A trips
+-- anchored to the same org-local "today" concept the 95xx Driver Today
+-- fixtures already established (`midnight_ny`, recomputed here in a fresh
+-- CTE rather than reused across statements), deliberately covering the
+-- four distinct groupings Today's Operations derives from real data alone
+-- (docs/product/todays-operations-data-map.md):
+--   96..a1 — Needs Assignment: state='scheduled', NO trip_assignments row.
+--   96..a2 — Active: state='en_route_to_pickup', WITH an active assignment
+--            (Driver A2 / Van A2) — one of the 5 non-terminal in-progress
+--            states, so it structurally always carries an active assignment.
+--   96..a3 — Completed today: state='completed', completed_at set, WITH an
+--            ENDED assignment (end_reason='trip_completed') — mirrors
+--            exactly what driver_complete_trip itself does in the same
+--            transaction (see controlled_trip_mutations migration), not an
+--            invented shape.
+--   96..a4 — Upcoming/assigned, later today: state='scheduled' WITH an
+--            active assignment (Driver A2 / Van A2) — gives Upcoming Trips
+--            a second, distinctly-timed row beyond the 95xx fixtures.
+-- Reuses the existing Org A passenger/driver/vehicle fixtures — no new
+-- passenger or driver invented merely for this screen.
+-- ---------------------------------------------------------------------------
+with org_a_today as (
+  select ((now() at time zone 'America/New_York')::date)::timestamp at time zone 'America/New_York' as midnight_ny
+)
+insert into public.trips (
+  id, organization_id, passenger_id, state, scheduled_pickup_at, completed_at,
+  pickup_description, destination_description
+)
+select '96000000-0000-0000-0000-0000000000a1'::uuid, '10000000-0000-0000-0000-0000000000a1'::uuid,
+   '40000000-0000-0000-0000-0000000000a1'::uuid, 'scheduled',
+   midnight_ny + interval '9 hours', null::timestamptz,
+   '55 Fictional Blvd, Atlanta, GA', 'Fictional Clinic A'
+from org_a_today
+union all
+select '96000000-0000-0000-0000-0000000000a2'::uuid, '10000000-0000-0000-0000-0000000000a1'::uuid,
+   '40000000-0000-0000-0000-0000000000a1'::uuid, 'en_route_to_pickup',
+   midnight_ny + interval '8 hours', null::timestamptz,
+   '77 Fictional Trail, Atlanta, GA', 'Fictional Clinic A'
+from org_a_today
+union all
+select '96000000-0000-0000-0000-0000000000a3'::uuid, '10000000-0000-0000-0000-0000000000a1'::uuid,
+   '40000000-0000-0000-0000-0000000000a1'::uuid, 'completed',
+   midnight_ny + interval '7 hours', midnight_ny + interval '7 hours 30 minutes',
+   '88 Fictional Court, Atlanta, GA', 'Fictional Clinic A'
+from org_a_today
+union all
+select '96000000-0000-0000-0000-0000000000a4'::uuid, '10000000-0000-0000-0000-0000000000a1'::uuid,
+   '40000000-0000-0000-0000-0000000000a1'::uuid, 'scheduled',
+   midnight_ny + interval '16 hours', null::timestamptz,
+   '99 Fictional Parkway, Atlanta, GA', 'Fictional Clinic A'
+from org_a_today;
+
+insert into public.trip_assignments (organization_id, trip_id, driver_id, vehicle_id, assigned_by, ended_at, end_reason) values
+  ('10000000-0000-0000-0000-0000000000a1', '96000000-0000-0000-0000-0000000000a2',
+   '30000000-0000-0000-0000-0000000000a2', '50000000-0000-0000-0000-0000000000a2', '20000000-0000-0000-0000-0000000000a2', null, null),
+  ('10000000-0000-0000-0000-0000000000a1', '96000000-0000-0000-0000-0000000000a3',
+   '30000000-0000-0000-0000-0000000000a1', '50000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000a2', now(), 'trip_completed'),
+  ('10000000-0000-0000-0000-0000000000a1', '96000000-0000-0000-0000-0000000000a4',
+   '30000000-0000-0000-0000-0000000000a2', '50000000-0000-0000-0000-0000000000a2', '20000000-0000-0000-0000-0000000000a2', null, null);
+
+-- Activity Log fixtures — real event_type values from trip_events' own
+-- allow-list (lifecycle-model.md §H), occurred_at times spread through the
+-- org-local morning so the log has genuine chronological variety. Not
+-- exhaustive (e.g. 96..a3's full pickup-to-completion sequence is
+-- abbreviated to scheduled/assigned/completed) — Today's Operations reads
+-- whatever real events exist, it does not require a complete history per
+-- trip.
+with org_a_today as (
+  select ((now() at time zone 'America/New_York')::date)::timestamp at time zone 'America/New_York' as midnight_ny
+)
+insert into public.trip_events (organization_id, trip_id, event_type, actor_user_id, occurred_at)
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a1'::uuid,
+   'trip_scheduled', '20000000-0000-0000-0000-0000000000a2'::uuid, midnight_ny + interval '6 hours'
+from org_a_today
+union all
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a2'::uuid,
+   'trip_scheduled', '20000000-0000-0000-0000-0000000000a2'::uuid, midnight_ny + interval '5 hours'
+from org_a_today
+union all
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a2'::uuid,
+   'driver_assigned', '20000000-0000-0000-0000-0000000000a2'::uuid, midnight_ny + interval '5 hours 30 minutes'
+from org_a_today
+union all
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a2'::uuid,
+   'en_route_to_pickup', '20000000-0000-0000-0000-0000000000a4'::uuid, midnight_ny + interval '7 hours 55 minutes'
+from org_a_today
+union all
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a3'::uuid,
+   'trip_scheduled', '20000000-0000-0000-0000-0000000000a2'::uuid, midnight_ny + interval '4 hours'
+from org_a_today
+union all
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a3'::uuid,
+   'driver_assigned', '20000000-0000-0000-0000-0000000000a2'::uuid, midnight_ny + interval '4 hours 30 minutes'
+from org_a_today
+union all
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a3'::uuid,
+   'trip_completed', '20000000-0000-0000-0000-0000000000a3'::uuid, midnight_ny + interval '7 hours 30 minutes'
+from org_a_today
+union all
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a4'::uuid,
+   'trip_scheduled', '20000000-0000-0000-0000-0000000000a2'::uuid, midnight_ny + interval '6 hours 30 minutes'
+from org_a_today
+union all
+select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a4'::uuid,
+   'driver_assigned', '20000000-0000-0000-0000-0000000000a2'::uuid, midnight_ny + interval '7 hours'
+from org_a_today;

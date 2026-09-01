@@ -1571,6 +1571,90 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product / Security
 - **Review Trigger:** A genuine future Stitch reference for this screen, or a deliberately-reviewed decision to widen the history projection — neither assumed here.
 
+### ZD-129 — Real `user_profiles.display_name` identity resolution, replacing the raw session email
+
+- **Date:** 2026-09-01
+- **Category:** Product / Security
+- **Decision:** `OperationsLayoutClient` now receives a `dispatcherDisplayName` resolved server-side by a new `getDisplayName()` helper (`src/lib/auth/profile.ts` — `user_profiles.display_name`, RLS: `user_profiles_select_own`), falling back to the session email only when no profile row exists. It no longer receives, or passes through, the raw `user.email` as a "name".
+- **Status:** CONFIRMED — implemented; the fallback path is genuinely exercised (no seed data populates `user_profiles.display_name` for any fixture user, and no auto-provisioning trigger exists — confirmed by inspecting `supabase/seed.sql` and every migration).
+- **Reason:** The pre-P1-E3-S4 `OperationsLayoutClient` passed `user.email` straight into the sidebar's `dispatcherName` slot — a real, if minor, identity-leak-as-name gap noticed while building this phase's header/avatar work, not something the work item asked for by name. Fixing it where it lives (the shared layout) rather than only in the new header avoids the same raw-email leak resurfacing the moment a future screen also wants to show the current user's name.
+- **Affected Product Areas:** `src/lib/auth/profile.ts`, `src/app/operations/layout.tsx`, `src/components/operations/OperationsLayoutClient.tsx`, `src/components/operations/AppHeader.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering / Security
+- **Review Trigger:** A future profile self-service or auto-provisioning flow that actually populates `user_profiles.display_name` — no code change needed here when that lands, the resolution already prefers it.
+
+### ZD-130 — Needs Attention narrowed to Needs-Assignment only; Driver Availability panel omitted entirely
+
+- **Date:** 2026-09-01
+- **Category:** Product / Scope
+- **Decision:** Today's Operations' Needs Attention panel shows Needs-Assignment rows only (never "Running Late"/"Pending Confirmation"). The reference's "Driver Availability" panel is not built at all — not degraded to a partial "On Trip"-only version.
+- **Status:** CONFIRMED — implemented and verified (functional matrix test A8, docs/design/qa/todays-operations/ screenshots).
+- **Reason:** Both are pre-existing, already-recorded gaps (ui-backend-gap-register.md "PRODUCT DECISIONS REQUIRED" for Running Late/Pending Confirmation; GAP-6 for Driver Availability) — this phase's job was applying those established deferrals to a real screen, not re-litigating them. Inventing a Running Late threshold or a Pending Confirmation concept to fill out the reference would be fabricated business logic, not a legitimate content simplification. A partial Driver Availability panel showing only "On Trip" was considered and rejected as added visual clutter with no information Today's Operations' own summary strip doesn't already report.
+- **Affected Product Areas:** `src/app/operations/page.tsx`, `src/lib/operations/todays-operations.ts`
+- **Dependencies:** ui-backend-gap-register.md GAP-6, "PRODUCT DECISIONS REQUIRED" table
+- **Owner:** Product
+- **Review Trigger:** A future, deliberately-reviewed product decision defining a Running Late threshold, a Pending Confirmation concept, or a Driver Availability schema — none assumed here.
+
+### ZD-131 — Active Trips query is deliberately NOT bounded to "today"
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** The Active Trips panel (and the "active" summary count) query every Trip in one of the 5 non-terminal in-progress states, organization-scoped, with no `scheduled_pickup_at` day-window filter — unlike the Needs Attention/Upcoming Trips/Completed-Today panels, which are all bounded to the organization's local "today".
+- **Status:** CONFIRMED — implemented (`getTodaysOperations()`, query 2).
+- **Reason:** An in-progress Trip is happening right now by construction — bounding it to "scheduled for today" would incorrectly hide a running-late Trip whose `scheduled_pickup_at` technically fell on the prior org-local day, the exact opposite of what an operations dispatcher needs to see. The panel's own transience (a Trip cannot realistically stay "active" for days) makes the unbounded query safe in practice.
+- **Affected Product Areas:** `src/lib/operations/todays-operations.ts`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated — revisit only if a future Trip type is intentionally long-running (e.g. a multi-day trip concept), which does not exist today.
+
+### ZD-132 — `AppHeader`'s richer per-route content is owned by `OperationsLayoutClient`, not a new cross-tree state channel
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `AppHeader` gained optional `title`/`description`/`avatarName` props. The Overview route's specific header content (title, org-local date, search/Export/New-Trip cluster) is composed directly inside `OperationsLayoutClient` (keyed off `pathname`), which already has everything that content needs (`organization.organizationTimezone` plus static content) — not pushed up from the page itself via a new React Context/portal.
+- **Status:** CONFIRMED — implemented and verified (functional matrix + visual QA).
+- **Reason:** The reference's title/date/actions genuinely live in the persistent chrome header, not the scrollable `PageHeader` below it — a real composition constraint, not a stylistic choice. A page-to-layout state channel was considered (a page calling something like `useSetAppHeader()`) but rejected as unnecessary complexity: every action in this specific header is static or disabled this phase (Search/Export are inert, New Trip is a plain link), so nothing here actually needs page-supplied data. A future route whose header DOES need page-driven content (e.g. a live-computed count) is the real trigger to revisit this.
+- **Affected Product Areas:** `src/components/operations/AppHeader.tsx`, `src/components/operations/OperationsLayoutClient.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** A future Operations route whose persistent header needs content only the page component itself computes.
+
+### ZD-133 — `SummaryStrip` gains an additive `inline`/`dot` layout; original stacked layout unchanged
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Design System
+- **Decision:** `SummaryStrip` (`src/components/ui/SummaryStrip.tsx`) gained an optional `inline` prop (single flowing row, matching the reference's compact metric strip) and a per-item `dot` flag — the original stacked value-over-label layout remains the default and is unchanged.
+- **Status:** CONFIRMED — implemented; the one pre-existing call site (`src/app/foundation`'s showcase, `SummaryStrip`'s only other usage in the codebase) was confirmed unaffected (no `inline`/`dot` passed, renders identically).
+- **Reason:** component-inventory.md had explicitly flagged this exact question before this phase ("`SummaryStrip` may already suffice... confirm which pattern before building"). Since the component had genuinely zero other real call sites at the time of this change, extending it safely was possible without any risk to a screen this project hasn't built yet; a future screen needing the stacked variant still gets it by default.
+- **Affected Product Areas:** `src/components/ui/SummaryStrip.tsx`, `src/app/operations/page.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering / Design
+- **Review Trigger:** A second real (non-showcase) stacked-layout consumer appearing — confirms the default should stay stacked; if none ever appears, a future cleanup could reconsider which layout is the default.
+
+### ZD-134 — Search input, Export Day Sheet, and the Upcoming Trips "Filter" control: disabled vs. omitted, not faked
+
+- **Date:** 2026-09-01
+- **Category:** Product
+- **Decision:** Search and Export Day Sheet are rendered as real, visible, `disabled` controls (with a `title` explaining why). The reference's "Filter" control on Upcoming Trips is omitted from the DOM entirely, not rendered as a disabled affordance.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** Search/Export are prominent, expected controls whose ABSENCE would itself look like a bug on a screen this visually complete — rendering them disabled communicates "not yet wired" honestly without silently promising a working feature (GAP-9 already established this exact treatment for Export). Filter is a smaller, secondary affordance without an established `ui-backend-gap-register.md` entry of its own; omitting it entirely avoids inventing a placeholder for a control with no defined behavior even once "wired", which disabling would have implied existed.
+- **Affected Product Areas:** `src/components/operations/OperationsLayoutClient.tsx`, `src/app/operations/page.tsx`
+- **Dependencies:** ui-backend-gap-register.md GAP-9
+- **Owner:** Product
+- **Review Trigger:** A dedicated future search/filter/export work item — none of the three should be retrofitted into a data-focused phase again.
+
+### ZD-135 — `SearchInput`'s `className` prop only reaches its inner `<input>`, not its wrapper — found and fixed during 768px visual QA
+
+- **Date:** 2026-09-01
+- **Category:** Bug fix
+- **Decision:** The header's search control is now wrapped in its own `<div className="hidden lg:block">` around a plain `<SearchInput className="w-64" .../>`, instead of passing `hidden w-64 lg:block` directly as `SearchInput`'s own `className`.
+- **Status:** CONFIRMED — found by real 768px-width headless-Chrome screenshot QA (not a hypothetical review), fixed, and re-verified by re-capturing the same screenshot.
+- **Reason:** `SearchInput` forwards its `className` prop only to the inner `<input>` element (`src/components/ui/SearchInput.tsx`), not to the component's own outer wrapping `<div>` (which also renders the magnifying-glass icon via a sibling absolutely-positioned element). Passing `hidden lg:block` as `className` therefore hid only the `<input>` — the wrapper (and its icon) kept rendering at its normal flex-item size below the `lg` breakpoint, producing a tiny floating icon-shaped box with no input next to it. This is exactly the kind of defect the work item's mandatory real-screenshot visual QA (not component/class inspection alone) exists to catch — it would not have been visible from reading the JSX.
+- **Affected Product Areas:** `src/components/operations/OperationsLayoutClient.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** Any future caller conditionally hiding a `SearchInput` (or any other component whose `className` prop is documented/observed to reach only an inner element, not its wrapper) — wrap it, don't rely on the prop reaching the outermost box.
+
 No decisions have been REJECTED or SUPERSEDED as of this update.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)
