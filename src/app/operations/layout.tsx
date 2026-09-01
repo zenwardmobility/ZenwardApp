@@ -1,46 +1,25 @@
-"use client";
-
 import type { ReactNode } from "react";
-import { usePathname } from "next/navigation";
-import { OperationsShell } from "@/components/operations/OperationsShell";
-
-const SECTION_LABELS: { prefix: string; label: string }[] = [
-  { prefix: "/operations/trips", label: "Trips" },
-  { prefix: "/operations/dispatch", label: "Dispatch" },
-  { prefix: "/operations/passengers", label: "Passengers" },
-  { prefix: "/operations/facilities", label: "Facilities" },
-  { prefix: "/operations/drivers", label: "Drivers" },
-  { prefix: "/operations/fleet", label: "Fleet" },
-  { prefix: "/operations/billing", label: "Billing" },
-  { prefix: "/operations/reports", label: "Reports" },
-];
-
-function getContextLabel(pathname: string) {
-  if (pathname === "/operations") return "Overview";
-  return SECTION_LABELS.find((section) => pathname.startsWith(section.prefix))?.label ?? "Operations";
-}
+import { requireOperationsAccess } from "@/lib/auth/authorization";
+import { getCurrentPathname } from "@/lib/auth/current-path";
+import { getUser } from "@/lib/auth/session";
+import { OperationsLayoutClient } from "@/components/operations/OperationsLayoutClient";
 
 /**
- * Every operations route renders through the one OperationsShell. Sidebar
- * context values below are foundation-phase sample data (see
- * OperationsSidebar.tsx) — not a resolution of ZD-016 (launch territory) or
- * any dispatcher identity system, which doesn't exist yet (no auth in this
- * phase).
+ * Server-side authorization gate for every /operations/* route (work item
+ * §9/§24) — resolved BEFORE any client component renders, so there is no
+ * flash of Operations chrome for a Driver or an unauthenticated visitor.
+ * The actual pathname-driven chrome logic (sidebar section highlighting,
+ * header title) is unchanged from the pre-auth foundation phase — see
+ * OperationsLayoutClient.
  */
-export default function OperationsLayout({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
+export default async function OperationsLayout({ children }: { children: ReactNode }) {
+  const pathname = await getCurrentPathname("/operations");
+  const organization = await requireOperationsAccess(pathname);
+  const user = await getUser();
 
   return (
-    <OperationsShell
-      sidebar={{
-        location: "Atlanta, GA",
-        orgUnit: "Main Operations",
-        dispatcherName: "Sample Dispatcher",
-        dispatcherRole: "Dispatcher",
-      }}
-      header={{ contextLabel: getContextLabel(pathname) }}
-    >
+    <OperationsLayoutClient organization={organization} userEmail={user?.email ?? ""}>
       {children}
-    </OperationsShell>
+    </OperationsLayoutClient>
   );
 }

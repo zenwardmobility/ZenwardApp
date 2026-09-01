@@ -1,10 +1,12 @@
 # Zenward Platform — Application Route Map
 
-**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping
-**Status:** Planning/documentation only — no route was created, modified, or removed.
-**Last updated:** 2026-08-31
+**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S1 — Authentication, Session & Role Routing Foundation (auth/org-context routes implemented, route access matrix added)
+**Status:** P1-E3-S0's route plan was planning-only. P1-E3-S1 implemented the auth/routing shell described below — `/sign-in`, `/select-organization`, `/access-unavailable`, root `/`, and server-side guards on `/operations/*`/`/driver/*` all exist and are tested (docs/security/application-auth-test-matrix.md). The Stitch screens themselves remain unimplemented placeholders, as this phase intended.
+**Last updated:** 2026-09-01
 
-Proposed route structure derived from the Stitch references and the existing (already-scaffolded, placeholder-only) Next.js route tree under `src/app/`. **This phase does not create routes** — the structure below already exists as stub pages from a prior UI-foundation phase (P0-E2-S3/S3A); this document reconciles that existing scaffold against what the Stitch references actually require, rather than proposing from a blank slate.
+Proposed route structure derived from the Stitch references and the existing (already-scaffolded, placeholder-only) Next.js route tree under `src/app/`. P1-E3-S0 did not create routes; P1-E3-S1 implemented the auth/context routes this document already proposed, plus the server-side guards described in [auth-session-routing.md](./auth-session-routing.md).
+
+**P1-E3-S1 update — the vestigial public homepage placeholder was removed.** `src/app/(public)/page.tsx` predated the Zenward-Web marketing-site separation (ZD-079) and existed only "to verify shared public-site primitives" before that separation was complete — it is not the real marketing homepage (that lives entirely in Zenward-Web) and had no functional purpose left once auth-aware root routing (work item §27) needed to own `/`. Removed rather than left in conflict with the new `src/app/page.tsx`. `/request-transportation` and `/healthcare-providers` — the other two routes in that same `(public)` route group — were left untouched; whether they still belong in this repository at all, now that Zenward-Web is the settled home for public marketing surfaces, is flagged here as an open question for a future phase, not decided or acted on in this one.
 
 ## Existing scaffold (confirmed by inspection, not modified)
 
@@ -55,31 +57,46 @@ Every one of these is a placeholder rendering `OperationsRouteStub`/`DriverRoute
 
 ## Shared / auth / utility routes
 
-Not covered by any Stitch reference in this batch (no sign-in screen was provided) — proposed based on the existing route tree's absence of an auth route and the established authorization model:
+No Stitch reference covered any of these — built directly against the design system in P1-E3-S1, not fabricated from a missing mockup:
 
-| Route (proposed) | Purpose | Notes |
+| Route | Purpose | Public/Protected |
 |---|---|---|
-| `/sign-in` (exact path TBD) | Unauthenticated entry point | **No Stitch reference** — must be designed or a minimal functional version built directly against the design system for S1; not fabricated here |
-| `/` or a role-resolution redirect | Post-auth landing, resolves to `/operations` or `/driver` per Membership role (see auth boundary below) | |
+| `/sign-in` | Email + password entry point | Public |
+| `/select-organization` | Multi-Membership organization selection | Protected (auth required; no org context required — that's what it resolves) |
+| `/access-unavailable` | Authenticated, zero active Memberships | Protected (auth required) |
+| `/` | Role-resolution landing — never renders visible content itself, always redirects | Protected (redirects unauthenticated visitors to `/sign-in`) |
+
+## Route access matrix (work item §70)
+
+| Route | Auth required | Org context required | Allowed role | Driver link required | Fallback |
+|---|---|---|---|---|---|
+| `/` | No (redirects if absent) | No | N/A — resolves destination | No | `/sign-in` (unauthenticated) → role-based destination |
+| `/sign-in` | No | No | N/A | No | Redirects to `/` if already authenticated |
+| `/select-organization` | Yes | No (resolves it) | Any role, in any of the caller's own Memberships | No | `/access-unavailable` if zero Memberships; onward redirect if only one (nothing to select) |
+| `/access-unavailable` | Yes | No | N/A | No | `/sign-in` if unauthenticated |
+| `/operations` | Yes | Yes | `organization_admin`, `dispatcher` | No | `/sign-in` → `/select-organization` → `/driver` (if role=driver) → `/access-unavailable` |
+| `/operations/*` | Yes | Yes | `organization_admin`, `dispatcher` | No | Same as `/operations` |
+| `/driver` | Yes | Yes | `driver` | Yes (inline safe state if missing, never a redirect) | `/sign-in` → `/select-organization` → `/operations` (if role is Ops) → `/access-unavailable` |
+| `/driver/*` | Yes | Yes | `driver` | Yes | Same as `/driver` |
 
 ## Responsive surface split (work item §7-9)
 
 - **Operations** (`/operations/*`): desktop/tablet primary. The Dispatch Board (03) in particular is a dense 3-column layout that cannot be meaningfully compressed below roughly **1024px** without losing the grid's own information density — this is documented as the **intended minimum Operations width**, not implemented as an enforced breakpoint in this phase. Below that width, Operations should show a deliberate "use a larger screen" message rather than auto-morphing into a cramped mobile dashboard (work item §8) — the exact fallback UI is deferred, not designed here.
 - **Driver** (`/driver/*`): mobile-first, must work at 390px/430px and common Android/iPhone widths (work item §9). All 4 driver reference images already demonstrate this correctly (full-width primary CTAs, bottom tab bar, single-column card stacks) — no redesign is implied, only implementation against the existing pattern.
 
-## Auth boundary (work item §33) — conceptual, not implemented
+## Auth boundary — implemented in P1-E3-S1
 
 | Session state | Routing behavior |
 |---|---|
-| Unauthenticated | → sign-in (route TBD, no reference provided) |
+| Unauthenticated | → `/sign-in` |
 | Authenticated, `organization_admin`/`dispatcher` Membership | → `/operations` |
-| Authenticated, `driver` Membership | → `/driver` |
-| Authenticated, multi-org user | → org-context resolution (see below) — **PRODUCT UX DECISION REQUIRED**, no reference provided |
-| Authenticated, zero Membership anywhere | → a safe "no access" state, never a raw error or a guess at role | 
-| Authenticated, Platform Admin only (no Membership) | → **out of scope for this reference set** — no Platform Admin screen was provided; Platform Admin's own console (if any) is not addressed here |
+| Authenticated, `driver` Membership | → `/driver` (or the inline account-setup state if no linked Driver row) |
+| Authenticated, multi-org user | → `/select-organization` (see "Multi-org UX" below — the smallest-safe-approach recommendation there is what got built) |
+| Authenticated, zero Membership anywhere | → `/access-unavailable` |
+| Authenticated, Platform Admin only (no Membership) | → `/access-unavailable`, identical to any other zero-Membership user — **not** a tenant-Operations bypass (work item §39). Platform Admin's own console remains out of scope. |
 
-This is what **P1-E3-S1 must build** — none of it exists yet (no Supabase client, no session retrieval, no role-guard middleware anywhere in `src/`).
+Full verification: [application-auth-test-matrix.md](../security/application-auth-test-matrix.md).
 
-## Multi-org UX (work item §34)
+## Multi-org UX (work item §34) — implemented in P1-E3-S1
 
-No Stitch reference includes an organization switcher. Recorded as **PRODUCT UX DECISION REQUIRED**. Smallest safe approach for initial implementation, recommended (not decided) here: resolve to the user's **sole** active Membership automatically when they have exactly one; when they have more than one, show a minimal, unstyled-but-functional org picker (a plain list, not a designed component) before entering `/operations` or `/driver`, rather than guessing which org to land in or building a full switcher UI speculatively. A real switcher component belongs in a later phase once the actual UX is designed.
+No Stitch reference includes an organization switcher — this section originally recorded the gap as PRODUCT UX DECISION REQUIRED with a recommended smallest-safe approach. That recommendation is what got built: a single active Membership auto-resolves with no extra screen; more than one active Membership shows `/select-organization`, a plain, functional list of the caller's own organizations + role (using existing design-system primitives, not a newly-designed switcher component) rather than a full org-switcher UI. Server-validated (work item §21) — see [auth-session-routing.md](./auth-session-routing.md) "Organization context". A **richer** switcher (e.g. changing organization context from within `/operations` without a full re-selection screen) remains a legitimate future enhancement once the actual UX is designed — not attempted here.

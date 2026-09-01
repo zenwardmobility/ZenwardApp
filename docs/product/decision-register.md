@@ -1259,6 +1259,102 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Security
 - **Review Trigger:** If application usage reveals accidental double-submission is a real, recurring problem — revisit whether a deliberate, durable idempotency key belongs in a future revision, rather than adding one reactively without review
 
+### ZD-103 — SSR auth architecture: `@supabase/ssr`, two clients, server-first resolution
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Security
+- **Decision:** The application uses `@supabase/ssr`'s current, supported cookie-based pattern — a browser client (`src/lib/supabase/client.ts`) and a server client (`src/lib/supabase/server.ts`), both publishable-key-only, plus a middleware session-refresh helper (`src/lib/supabase/middleware.ts`). Every protected route's authorization (user, Membership, organization context, role, Driver linkage) is resolved server-side, in a Server Component, before any client code renders — never a client-side redirect after a flash of protected content.
+- **Status:** CONFIRMED — implemented and verified (41 real integration checks against the actual running app and local Supabase Auth; zero client-side route guards exist anywhere in `src/`)
+- **Reason:** Matches the work item's explicit "no flash of unauthorized content" requirement, and reuses the exact SDK pattern Supabase currently recommends for Next.js App Router rather than the deprecated `auth-helpers` package or a hand-rolled session mechanism.
+- **Affected Product Areas:** All of `src/lib/supabase/`, `src/lib/auth/`, `middleware.ts`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** A future Supabase SSR SDK major version — re-verify the cookie/session pattern still matches current guidance before upgrading
+
+### ZD-104 — Organization context: cookie names a request, never authority; single-org auto-selects, multi-org requires explicit selection
+
+- **Date:** 2026-09-01
+- **Category:** Security / Product
+- **Decision:** A `zw_org_context` cookie (httpOnly, `sameSite=lax`) holds which of the caller's own active Memberships to use when they have more than one. It is never trusted as authorization by itself — `resolveOrganizationContext()` re-validates it against a fresh `getActiveMemberships()` call on every request; a value matching none of the caller's own active Memberships is treated exactly like no cookie at all. A single active Membership auto-selects with no extra screen; multiple require `/select-organization`, a plain server-validated list (organization name + role only, no internal tenant metadata) — not a designed org-switcher component.
+- **Status:** CONFIRMED — implemented and verified (`application-auth-test-matrix.md` MULTIORG-*/FOREIGNORG-* rows, including a forged-cookie test for both single- and multi-org users)
+- **Reason:** Matches the work item's explicit instruction that "the caller choosing an organization UUID does not grant authority" and the smallest-safe-MVP recommendation already recorded in `application-route-map.md` "Multi-org UX" before this phase built it.
+- **Affected Product Areas:** `src/lib/auth/organization.ts`, `/select-organization`
+- **Dependencies:** ZD-103
+- **Owner:** Security
+- **Review Trigger:** A richer org-switcher UX (e.g. changing context without a full re-selection screen) — revisit the storage mechanism then if needed, not before
+
+### ZD-105 — Route guards are UX-only; the database remains final authority
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Security
+- **Decision:** `requireOperationsAccess()`/`requireDriverAccess()` are narrow, single-purpose functions that improve navigation (redirect a Driver to `/driver` instead of a confusing Operations denial, resolve `/` to the correct landing page) — they are explicitly not a reimplementation of RLS/RPC authorization, and no attempt was made to recreate every database policy in TypeScript. Every data read/write this application will ever perform remains independently enforced by the same database layer P1-E2-S1 through P1-E3-S0A built and exhaustively tested.
+- **Status:** CONFIRMED
+- **Reason:** Directly follows the work item's own explicit instruction (§30) and keeps a single source of truth for authorization — a bug in this application layer would be a UX defect (an unexpected redirect), never a security breach, because the database refuses an unauthorized caller regardless of what the application layer's own routing logic decided.
+- **Affected Product Areas:** `src/lib/auth/authorization.ts`
+- **Dependencies:** ZD-084, ZD-089 through ZD-102 (the entire database mutation/read-model architecture this layer sits in front of, none of it re-derived here)
+- **Owner:** Security
+- **Review Trigger:** None anticipated — this is the permanent intended relationship between the two layers
+
+### ZD-106 — Live Membership/role/Driver-linkage resolution, no caching, at the application layer
+
+- **Date:** 2026-09-01
+- **Category:** Security
+- **Decision:** `getActiveMemberships()` and the Driver-linkage check (`driver_get_profile` RPC call inside `requireDriverAccess()`) both re-query the database on every protected request. Nothing is cached in a session claim, a cookie, or module-level state. A Membership status/role change takes effect on the very next request using the same session — no sign-out/sign-in cycle required.
+- **Status:** CONFIRMED — implemented and verified (the mandatory same-session revocation matrix, `application-auth-test-matrix.md`, all 10 steps across 3 scenarios passing)
+- **Reason:** Extends ZD-077's live-check principle (established at the database/RLS layer in P1-E2-S1) to the application layer that now actually calls it — a cached role in this layer would silently reintroduce exactly the stale-authorization risk ZD-077 exists to prevent, one layer up from where it was originally solved.
+- **Affected Product Areas:** `src/lib/auth/membership.ts`, `src/lib/auth/authorization.ts`
+- **Dependencies:** ZD-077
+- **Owner:** Security
+- **Review Trigger:** None anticipated
+
+### ZD-107 — Platform Admin routing posture: no tenant-Operations bypass
+
+- **Date:** 2026-09-01
+- **Category:** Security
+- **Decision:** `PlatformAdminGrant` is never consulted by any route guard in this layer. A user holding only a Platform Admin grant (zero Memberships) is routed to `/access-unavailable`, identical to any other zero-Membership user.
+- **Status:** CONFIRMED — implemented and verified (`application-auth-test-matrix.md` PLATFORMADMIN-1)
+- **Reason:** Directly extends the database layer's own established posture (ZD-049: Platform Admin authority is a separate, narrow, read-scoped mechanism, never Membership-equivalent; work item §80 in P1-E2-S2 explicitly forbade an `is_platform_admin() OR ...` bypass in mutation authorization) to the application routing layer — no new reasoning was needed, only consistent application of an already-settled decision.
+- **Affected Product Areas:** `src/lib/auth/authorization.ts`
+- **Dependencies:** ZD-049
+- **Owner:** Security
+- **Review Trigger:** A future Platform Admin console — would need its own explicit, separately-reviewed routing decision, never assumed from this one
+
+### ZD-108 — Redirect safety: allowlist, not denylist
+
+- **Date:** 2026-09-01
+- **Category:** Security
+- **Decision:** `isSafeRedirectPath()` accepts only a single-leading-slash path built from `[A-Za-z0-9\-_/]` plus a simple query segment — everything else is rejected, including values that don't resemble any known attack pattern. Every `next`/`returnTo` value in the application (the `/sign-in?next=` query parameter, `selectOrganizationAction`'s form field) is validated through this one function before ever reaching `redirect()`.
+- **Status:** CONFIRMED — implemented and verified (`application-auth-test-matrix.md` "Redirect safety", including a real POST to the actual sign-in Server Action with `https://evil.example` as `next`)
+- **Reason:** An allowlist rejects an entire class of open-redirect vectors by construction (protocol-relative URLs, any absolute scheme, backslash tricks) rather than requiring every future attack variant to be individually enumerated and added to a denylist.
+- **Affected Product Areas:** `src/lib/auth/redirect.ts`
+- **Dependencies:** None
+- **Owner:** Security
+- **Review Trigger:** A genuine future need for a redirect target outside this pattern (e.g. a query string with different characters) — extend the allowlist deliberately, never widen it reflexively to unblock a specific case
+
+### ZD-109 — Driver-linkage-missing renders inline, never redirects (avoids a redirect loop)
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `requireDriverAccess()` returns a discriminated `{ status: "ok" | "link-missing" }` result rather than redirecting when a `driver` Membership has no resolvable linked `drivers` row. The `/driver` layout renders a safe, non-crashing "account not yet set up" state inline for the `link-missing` case, with a sign-out action, no internal ID exposed.
+- **Status:** CONFIRMED — implemented and verified (`application-auth-test-matrix.md` DRIVERLINK-1; the dedicated `org-a-driver-nolink` seed fixture added this phase)
+- **Reason:** Any redirect target for this case is either `/driver` itself (an infinite loop, since the guard would fail identically on the next request) or a route with no clear ownership of this specific, narrow situation. Rendering inline avoids the loop entirely rather than routing around it.
+- **Affected Product Areas:** `src/lib/auth/authorization.ts`, `src/app/driver/layout.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-110 — `getActiveMemberships()` corrected to filter by user_id explicitly (fixes a real cross-membership-visibility bug found this phase)
+
+- **Date:** 2026-09-01
+- **Category:** Security
+- **Decision:** `getActiveMemberships()` now filters `.eq("user_id", user.id)` explicitly, not merely `.eq("status", "active")`. `memberships` carries two applicable RLS policies for a caller who is an `organization_admin`: `memberships_select_self` (their own row) and `memberships_select_org_admin` (every row in an org they administer) — these OR together under RLS, they don't narrow each other. A query with no `user_id` filter therefore returned every active Membership in any organization the caller administers, not just their own, for an org_admin caller specifically.
+- **Status:** CONFIRMED — implemented and verified (found by `ROLE-1` failing against real seeded data during this phase's own integration testing — an Org A admin with exactly one Membership was incorrectly resolved as a multi-org user and routed to `/select-organization`; fixed, then the full 41-check suite re-run from a clean `supabase db reset` with zero remaining failures)
+- **Reason:** RLS correctly protected the *table* (no cross-tenant row was ever exposed to the wrong tenant) — this was an application-layer *query-intent* bug, not an RLS gap: the query asked a broader question ("what can I see in `memberships`") than the one its caller actually needed answered ("what are MY OWN organizations"), and RLS answered the question it was actually asked, correctly. Recorded because it is exactly the kind of subtle "RLS scopes rows, but a query must still express what it actually means" mistake work item §17's own caution was written to prevent, caught here by genuine integration testing against real data rather than assumed correct from a passing build.
+- **Affected Product Areas:** `src/lib/auth/membership.ts`
+- **Dependencies:** None
+- **Owner:** Security
+- **Review Trigger:** Any future query against a table with more than one applicable SELECT policy for the same role — explicitly verify which policy will actually apply for the caller in question, not just that RLS is enabled
+
 No decisions have been REJECTED or SUPERSEDED as of this update.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

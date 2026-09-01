@@ -31,8 +31,13 @@ yarn-error.log*
 .pnpm-debug.log*
 *.log
 
-# env files (can opt-in for committing if needed)
+# env files — .env.example is the one deliberate exception: it carries
+# variable NAMES only, no values/secrets, and is meant to be committed so
+# a fresh checkout knows what to configure (docs/security/
+# application-auth-boundary.md "Environment plan"). Found and fixed in
+# P1-E3-S1 — the prior blanket `.env*` pattern silently excluded it too.
 .env*
+!.env.example
 
 # vercel
 .vercel

@@ -29,6 +29,7 @@ insert into auth.users (
   ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000a3', 'authenticated', 'authenticated', 'org-a-driver-a@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000a4', 'authenticated', 'authenticated', 'org-a-driver-b@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000a5', 'authenticated', 'authenticated', 'org-a-inactive@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000a6', 'authenticated', 'authenticated', 'org-a-driver-nolink@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000b1', 'authenticated', 'authenticated', 'org-b-admin@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000b2', 'authenticated', 'authenticated', 'org-b-dispatcher@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000b3', 'authenticated', 'authenticated', 'org-b-driver@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
@@ -45,7 +46,8 @@ from auth.users
 where id in (
   '20000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000a2',
   '20000000-0000-0000-0000-0000000000a3', '20000000-0000-0000-0000-0000000000a4',
-  '20000000-0000-0000-0000-0000000000a5', '20000000-0000-0000-0000-0000000000b1',
+  '20000000-0000-0000-0000-0000000000a5', '20000000-0000-0000-0000-0000000000a6',
+  '20000000-0000-0000-0000-0000000000b1',
   '20000000-0000-0000-0000-0000000000b2', '20000000-0000-0000-0000-0000000000b3',
   '20000000-0000-0000-0000-0000000000c1', '20000000-0000-0000-0000-0000000000d1',
   '20000000-0000-0000-0000-0000000000e1'
@@ -74,6 +76,11 @@ insert into public.memberships (organization_id, user_id, role, status) values
   ('10000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000a4', 'driver', 'active'),
   -- Inactive membership — must grant zero access despite existing.
   ('10000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000a5', 'dispatcher', 'inactive'),
+  -- role=driver Membership with NO linked drivers row (P1-E3-S1 auth
+  -- fixture) — a real Driver-role Membership that nonetheless has no
+  -- resolvable Driver record; exercises the "safe account-configuration
+  -- state" path (work item §26), never a crash.
+  ('10000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000a6', 'driver', 'active'),
   ('10000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000b1', 'organization_admin', 'active'),
   ('10000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000b2', 'dispatcher', 'active'),
   ('10000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000b3', 'driver', 'active'),

@@ -1,8 +1,8 @@
 # Zenward Platform — Application Implementation Plan
 
-**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping
-**Status:** Planning/documentation only. No code was written against this plan.
-**Last updated:** 2026-08-31
+**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S1 — Authentication, Session & Role Routing Foundation (**P1-E3-S1 complete** — see status below)
+**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S1, step 1 of the order below, is now implemented and verified — see [auth-session-routing.md](./auth-session-routing.md), [application-auth-boundary.md](../security/application-auth-boundary.md), and [application-auth-test-matrix.md](../security/application-auth-test-matrix.md). Every step from P1-E3-S2 onward remains exactly as planned — not started, not marked complete prematurely (work item §71 explicit instruction).
+**Last updated:** 2026-09-01
 
 Recommended build order after S0, the frontend architecture it should follow, and the screen-by-screen implementability matrix that order is derived from.
 
@@ -10,21 +10,21 @@ Recommended build order after S0, the frontend architecture it should follow, an
 
 | Screen | Visual ready? | Backend read ready? | Backend mutation ready? | Auth ready? | Can implement next? | Blocker |
 |---|---|---|---|---|---|---|
-| Today's Operations (01) | Yes | Yes (existing RLS tables) | N/A (read screen) | **No** | No | Auth/session plumbing (P1-E3-S1) |
-| Trip Detail (02) | Yes | Yes, except Reference/Companion/Trip-Type-for-request-less-Trips | Yes (Edit Trip = direct UPDATE; Cancel/No-show/Add Note/Report Issue all exist) | **No** | No | Auth; minor field gaps are non-blocking |
-| Dispatch Board (03) | Yes | Yes | Yes (`assign_trip`/`reassign_trip` exist) | **No** | No | Auth; drag-drop UX is a separate, later refinement — a click-to-assign version is implementable without it |
-| Driver Active Trip (04) | Yes | Yes (`driver_get_trip_detail`) | Yes (all 6 `driver_*` RPCs exist) | **No** | No | Auth only — this screen has the fewest gaps of any reference |
-| Internal New Trip (05) | Yes (partially — full field set not shown) | Yes (reading a request) | **No** | **No** | **No** | GAP-1 (controlled Trip creation) — even after auth exists, this screen cannot be safely built |
-| Driver Today (06) | Yes | Yes (`driver_list_active_trips`) | N/A (read screen; actions delegate to 04) | **No** | No | Auth only |
-| Driver Trips (07) | Yes | Yes (`driver_list_active_trips`) | N/A | **No** | No | Auth only |
+| Today's Operations (01) | Yes | Yes (existing RLS tables) | N/A (read screen) | **Yes** (P1-E3-S1) | **Yes** | None |
+| Trip Detail (02) | Yes | Yes, except Reference/Companion/Trip-Type-for-request-less-Trips | Yes (Edit Trip = direct UPDATE; Cancel/No-show/Add Note/Report Issue all exist) | **Yes** | **Yes** | Minor field gaps are non-blocking |
+| Dispatch Board (03) | Yes | Yes | Yes (`assign_trip`/`reassign_trip` exist) | **Yes** | **Yes** | Drag-drop UX is a separate, later refinement — a click-to-assign version is implementable without it |
+| Driver Active Trip (04) | Yes | Yes (`driver_get_trip_detail`) | Yes (all 6 `driver_*` RPCs exist) | **Yes** | **Yes** | None — this screen has the fewest gaps of any reference |
+| Internal New Trip (05) | Yes (partially — full field set not shown) | Yes (reading a request) | Yes (`create_trip`, resolved P1-E3-S0A) | **Yes** | **Yes** | None remaining |
+| Driver Today (06) | Yes | Yes (`driver_list_active_trips`) | N/A (read screen; actions delegate to 04) | **Yes** | **Yes** | None |
+| Driver Trips (07) | Yes | Yes (`driver_list_active_trips`) | N/A | **Yes** | **Yes** | None |
 
-**Reading this matrix:** every screen except Internal New Trip is backend-ready today. Auth/session plumbing is the single common blocker for all of them — which is exactly why it must come first, not because of arbitrary sequencing preference.
+**Reading this matrix (updated after P1-E3-S1):** every one of the 7 screens is now backend-ready, auth-ready, and implementable — the two blockers this table originally tracked (GAP-1/GAP-2, resolved P1-E3-S0A; auth/session plumbing, resolved P1-E3-S1) are both closed. The recommended order below is about sequencing risk and dependency structure among ready screens, not about waiting on any remaining blocker.
 
 ## Recommended implementation order
 
 The work item's own suggested P1-E3-S1→S7 skeleton is a reasonable starting shape, but reordered here based on actual backend readiness, reference completeness, and risk — not followed blindly (work item §52 explicit instruction):
 
-1. **P1-E3-S1 — Application shell + Auth + role routing.** Unconditionally first: every other screen is blocked on this alone (GAP-5). Builds: Supabase browser/server clients, session retrieval, sign-in (no reference — build minimal/functional, GAP-4), role-based routing (`/operations` vs `/driver`), the smallest-safe multi-org resolution (route-map §Multi-org UX), and the service/query/mutation layer conventions every later phase reuses.
+1. **P1-E3-S1 — Application shell + Auth + role routing. COMPLETE.** Unconditionally first: every other screen was blocked on this alone (GAP-5, now resolved). Built: Supabase browser/server clients (`@supabase/ssr`), session retrieval, a minimal/functional sign-in page (GAP-4, resolved — no Stitch reference existed for it), live-resolved organization-scoped role routing (`/operations` vs `/driver`), the smallest-safe multi-org resolution (`/select-organization`), server-side route guards (`requireOperationsAccess`/`requireDriverAccess`) wired onto the existing placeholder route scaffold, and the query/command separation convention every later phase will reuse. Verified with 41 real integration checks against the actual running app and local Supabase Auth, including the mandatory same-session revocation matrix — zero regressions in the 204 pre-existing database security assertions. One real bug found and fixed during implementation (an org-admin's own-Membership query accidentally returning their whole team's memberships — see application-auth-boundary.md). No Stitch screen was implemented — this phase is the doorway only, exactly as scoped.
 
 2. **P1-E3-S2 — Driver Active Trip + Driver Today + Driver Trips.** Recommended *before* the Operations screens, reordering the work item's own suggested sequence, because: (a) these 3 screens have the fewest open gaps of the whole set — zero blocking gaps, only the deferred/optional items (GAP-6, GAP-7) which degrade gracefully; (b) they exercise the full, already-hardened S2/S2A/S3 RPC and read-model surface end-to-end, which is valuable to prove out early; (c) they are lower visual/interaction complexity than the Dispatch Board, reducing first-slice risk. Driver History/Profile (GAP-3) can follow immediately after using the established pattern, once their own visual references exist or a minimal version is accepted.
 
@@ -116,4 +116,4 @@ Specific, not generic, per the Stitch references actually reviewed:
 
 ## Next recommended phase
 
-**P1-E3-S1 — Application shell + Auth + role routing**, exactly as reasoned above: the one blocker common to every screen in this reference set.
+**P1-E3-S2 — Driver Active Trip + Driver Today + Driver Trips**, exactly as reasoned above (step 2): now unblocked by P1-E3-S1's completion, and still the lowest-risk, fewest-open-gaps starting point of the remaining screens.

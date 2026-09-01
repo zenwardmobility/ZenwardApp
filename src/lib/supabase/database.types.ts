@@ -1,0 +1,1185 @@
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
+
+export type Database = {
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
+  public: {
+    Tables: {
+      audit_events: {
+        Row: {
+          action: string
+          actor_user_id: string | null
+          after_data: Json | null
+          before_data: Json | null
+          entity_id: string
+          entity_type: string
+          id: string
+          occurred_at: string
+          organization_id: string
+          reason: string | null
+        }
+        Insert: {
+          action: string
+          actor_user_id?: string | null
+          after_data?: Json | null
+          before_data?: Json | null
+          entity_id: string
+          entity_type: string
+          id?: string
+          occurred_at?: string
+          organization_id: string
+          reason?: string | null
+        }
+        Update: {
+          action?: string
+          actor_user_id?: string | null
+          after_data?: Json | null
+          before_data?: Json | null
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          occurred_at?: string
+          organization_id?: string
+          reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_events_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      drivers: {
+        Row: {
+          created_at: string
+          display_name: string
+          id: string
+          organization_id: string
+          phone: string | null
+          status: string
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          display_name: string
+          id?: string
+          organization_id: string
+          phone?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          display_name?: string
+          id?: string
+          organization_id?: string
+          phone?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "drivers_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      facilities: {
+        Row: {
+          address_line1: string | null
+          address_line2: string | null
+          city: string | null
+          created_at: string
+          id: string
+          name: string
+          organization_id: string
+          postal_code: string | null
+          state: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          address_line1?: string | null
+          address_line2?: string | null
+          city?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          organization_id: string
+          postal_code?: string | null
+          state?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          address_line1?: string | null
+          address_line2?: string | null
+          city?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          organization_id?: string
+          postal_code?: string | null
+          state?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "facilities_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      memberships: {
+        Row: {
+          created_at: string
+          id: string
+          organization_id: string
+          role: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          organization_id: string
+          role: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          organization_id?: string
+          role?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "memberships_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      organizations: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      passengers: {
+        Row: {
+          assistance_notes: string | null
+          created_at: string
+          display_name: string
+          id: string
+          organization_id: string
+          phone: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          assistance_notes?: string | null
+          created_at?: string
+          display_name: string
+          id?: string
+          organization_id: string
+          phone?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          assistance_notes?: string | null
+          created_at?: string
+          display_name?: string
+          id?: string
+          organization_id?: string
+          phone?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "passengers_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      platform_admin_grants: {
+        Row: {
+          granted_at: string
+          granted_by: string | null
+          id: string
+          note: string | null
+          user_id: string
+        }
+        Insert: {
+          granted_at?: string
+          granted_by?: string | null
+          id?: string
+          note?: string | null
+          user_id: string
+        }
+        Update: {
+          granted_at?: string
+          granted_by?: string | null
+          id?: string
+          note?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      transportation_requests: {
+        Row: {
+          additional_notes: string | null
+          assistance_notes: string | null
+          created_at: string
+          destination_description: string
+          id: string
+          organization_id: string
+          passenger_id: string | null
+          pickup_description: string
+          preferred_date: string | null
+          preferred_time: string | null
+          requester_email: string | null
+          requester_name: string
+          requester_phone: string
+          requester_relationship: string
+          requester_user_id: string | null
+          return_trip_needed: string
+          state: string
+          updated_at: string
+        }
+        Insert: {
+          additional_notes?: string | null
+          assistance_notes?: string | null
+          created_at?: string
+          destination_description: string
+          id?: string
+          organization_id: string
+          passenger_id?: string | null
+          pickup_description: string
+          preferred_date?: string | null
+          preferred_time?: string | null
+          requester_email?: string | null
+          requester_name: string
+          requester_phone: string
+          requester_relationship: string
+          requester_user_id?: string | null
+          return_trip_needed: string
+          state?: string
+          updated_at?: string
+        }
+        Update: {
+          additional_notes?: string | null
+          assistance_notes?: string | null
+          created_at?: string
+          destination_description?: string
+          id?: string
+          organization_id?: string
+          passenger_id?: string | null
+          pickup_description?: string
+          preferred_date?: string | null
+          preferred_time?: string | null
+          requester_email?: string | null
+          requester_name?: string
+          requester_phone?: string
+          requester_relationship?: string
+          requester_user_id?: string | null
+          return_trip_needed?: string
+          state?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transportation_requests_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transportation_requests_passenger_id_fkey"
+            columns: ["passenger_id"]
+            isOneToOne: false
+            referencedRelation: "passengers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transportation_requests_passenger_id_organization_id_fkey"
+            columns: ["passenger_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "passengers"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      trip_assignments: {
+        Row: {
+          assigned_at: string
+          assigned_by: string | null
+          created_at: string
+          driver_id: string
+          end_reason: string | null
+          ended_at: string | null
+          id: string
+          organization_id: string
+          trip_id: string
+          vehicle_id: string | null
+        }
+        Insert: {
+          assigned_at?: string
+          assigned_by?: string | null
+          created_at?: string
+          driver_id: string
+          end_reason?: string | null
+          ended_at?: string | null
+          id?: string
+          organization_id: string
+          trip_id: string
+          vehicle_id?: string | null
+        }
+        Update: {
+          assigned_at?: string
+          assigned_by?: string | null
+          created_at?: string
+          driver_id?: string
+          end_reason?: string | null
+          ended_at?: string | null
+          id?: string
+          organization_id?: string
+          trip_id?: string
+          vehicle_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_assignments_driver_id_organization_id_fkey"
+            columns: ["driver_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "drivers"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "trip_assignments_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_assignments_trip_id_organization_id_fkey"
+            columns: ["trip_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "trip_assignments_vehicle_id_organization_id_fkey"
+            columns: ["vehicle_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "vehicles"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      trip_events: {
+        Row: {
+          actor_user_id: string | null
+          event_type: string
+          id: string
+          metadata: Json
+          occurred_at: string
+          organization_id: string
+          trip_id: string
+        }
+        Insert: {
+          actor_user_id?: string | null
+          event_type: string
+          id?: string
+          metadata?: Json
+          occurred_at?: string
+          organization_id: string
+          trip_id: string
+        }
+        Update: {
+          actor_user_id?: string | null
+          event_type?: string
+          id?: string
+          metadata?: Json
+          occurred_at?: string
+          organization_id?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_events_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_events_trip_id_organization_id_fkey"
+            columns: ["trip_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      trip_exceptions: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          description: string | null
+          exception_type: string | null
+          id: string
+          organization_id: string
+          resolution_note: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          status: string
+          trip_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          exception_type?: string | null
+          id?: string
+          organization_id: string
+          resolution_note?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          status?: string
+          trip_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          exception_type?: string | null
+          id?: string
+          organization_id?: string
+          resolution_note?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          status?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_exceptions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_exceptions_trip_id_organization_id_fkey"
+            columns: ["trip_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      trip_notes: {
+        Row: {
+          author_user_id: string | null
+          body: string
+          created_at: string
+          id: string
+          organization_id: string
+          trip_id: string
+          updated_at: string
+          visibility: string
+        }
+        Insert: {
+          author_user_id?: string | null
+          body: string
+          created_at?: string
+          id?: string
+          organization_id: string
+          trip_id: string
+          updated_at?: string
+          visibility: string
+        }
+        Update: {
+          author_user_id?: string | null
+          body?: string
+          created_at?: string
+          id?: string
+          organization_id?: string
+          trip_id?: string
+          updated_at?: string
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_notes_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_notes_trip_id_organization_id_fkey"
+            columns: ["trip_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      trips: {
+        Row: {
+          appointment_at: string | null
+          assistance_notes: string | null
+          cancellation_reason: string | null
+          cancelled_at: string | null
+          completed_at: string | null
+          created_at: string
+          destination_description: string
+          destination_facility_id: string | null
+          id: string
+          instructions: string | null
+          no_show_at: string | null
+          organization_id: string
+          passenger_id: string
+          pickup_description: string
+          pickup_facility_id: string | null
+          request_id: string | null
+          scheduled_pickup_at: string | null
+          state: string
+          updated_at: string
+        }
+        Insert: {
+          appointment_at?: string | null
+          assistance_notes?: string | null
+          cancellation_reason?: string | null
+          cancelled_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+          destination_description: string
+          destination_facility_id?: string | null
+          id?: string
+          instructions?: string | null
+          no_show_at?: string | null
+          organization_id: string
+          passenger_id: string
+          pickup_description: string
+          pickup_facility_id?: string | null
+          request_id?: string | null
+          scheduled_pickup_at?: string | null
+          state?: string
+          updated_at?: string
+        }
+        Update: {
+          appointment_at?: string | null
+          assistance_notes?: string | null
+          cancellation_reason?: string | null
+          cancelled_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+          destination_description?: string
+          destination_facility_id?: string | null
+          id?: string
+          instructions?: string | null
+          no_show_at?: string | null
+          organization_id?: string
+          passenger_id?: string
+          pickup_description?: string
+          pickup_facility_id?: string | null
+          request_id?: string | null
+          scheduled_pickup_at?: string | null
+          state?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trips_destination_facility_id_organization_id_fkey"
+            columns: ["destination_facility_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "facilities"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "trips_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trips_passenger_id_organization_id_fkey"
+            columns: ["passenger_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "passengers"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "trips_pickup_facility_id_organization_id_fkey"
+            columns: ["pickup_facility_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "facilities"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "trips_request_id_organization_id_fkey"
+            columns: ["request_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "transportation_requests"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
+      user_profiles: {
+        Row: {
+          created_at: string
+          display_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          display_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      vehicles: {
+        Row: {
+          created_at: string
+          id: string
+          label: string
+          organization_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          label: string
+          organization_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          label?: string
+          organization_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vehicles_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      _driver_execute_trip_transition: {
+        Args: {
+          p_close_assignment?: boolean
+          p_event_type: string
+          p_expected_current_state: string
+          p_from_state: string
+          p_to_state: string
+          p_trip_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      _is_valid_trip_transition: {
+        Args: { p_from_state: string; p_to_state: string }
+        Returns: boolean
+      }
+      _lock_driver_active_assignment: {
+        Args: { p_organization_id: string; p_trip_id: string }
+        Returns: {
+          assigned_at: string
+          assigned_by: string | null
+          created_at: string
+          driver_id: string
+          end_reason: string | null
+          ended_at: string | null
+          id: string
+          organization_id: string
+          trip_id: string
+          vehicle_id: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "trip_assignments"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      assign_trip: {
+        Args: { p_driver_id: string; p_trip_id: string; p_vehicle_id?: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_assignment_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_assignment_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      cancel_trip: {
+        Args: { p_reason: string; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_trip: {
+        Args: {
+          p_appointment_at?: string
+          p_assistance_notes?: string
+          p_destination_description: string
+          p_destination_facility_id?: string
+          p_instructions?: string
+          p_organization_id: string
+          p_passenger_id: string
+          p_pickup_description: string
+          p_pickup_facility_id?: string
+          p_request_id?: string
+          p_scheduled_pickup_at?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["trip_creation_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_creation_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      current_driver_id: { Args: { p_org_id: string }; Returns: string }
+      driver_arrive_at_destination: {
+        Args: { p_expected_current_state: string; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      driver_arrive_at_pickup: {
+        Args: { p_expected_current_state: string; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      driver_complete_trip: {
+        Args: { p_expected_current_state: string; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      driver_get_profile: {
+        Args: { p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["driver_profile_result"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_profile_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      driver_get_trip_detail: {
+        Args: { p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["driver_trip_detail_result"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_trip_detail_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      driver_list_active_trips: {
+        Args: { p_organization_id: string }
+        Returns: Database["public"]["CompositeTypes"]["driver_active_trip_summary"][]
+        SetofOptions: {
+          from: "*"
+          to: "driver_active_trip_summary"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      driver_list_trip_history: {
+        Args: { p_from?: string; p_organization_id: string; p_to?: string }
+        Returns: Database["public"]["CompositeTypes"]["driver_trip_history_entry"][]
+        SetofOptions: {
+          from: "*"
+          to: "driver_trip_history_entry"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      driver_mark_passenger_onboard: {
+        Args: { p_expected_current_state: string; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      driver_start_to_destination: {
+        Args: { p_expected_current_state: string; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      driver_start_to_pickup: {
+        Args: { p_expected_current_state: string; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      has_org_role: {
+        Args: { p_org_id: string; p_roles: string[] }
+        Returns: boolean
+      }
+      is_driver_assigned_to_trip: {
+        Args: { p_trip_id: string }
+        Returns: boolean
+      }
+      is_org_member: { Args: { p_org_id: string }; Returns: boolean }
+      is_platform_admin: { Args: never; Returns: boolean }
+      reassign_trip: {
+        Args: {
+          p_driver_id: string
+          p_reason?: string
+          p_trip_id: string
+          p_vehicle_id?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["trip_assignment_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_assignment_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      record_no_show: {
+        Args: { p_reason: string; p_trip_id: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      driver_active_trip_summary: {
+        trip_id: string | null
+        assignment_id: string | null
+        state: string | null
+        scheduled_pickup_at: string | null
+        appointment_at: string | null
+        pickup_description: string | null
+        destination_description: string | null
+        passenger_display_name: string | null
+        vehicle_label: string | null
+        vehicle_status: string | null
+      }
+      driver_profile_result: {
+        driver_id: string | null
+        organization_id: string | null
+        organization_name: string | null
+        display_name: string | null
+        phone: string | null
+        status: string | null
+      }
+      driver_trip_detail_result: {
+        trip_id: string | null
+        assignment_id: string | null
+        state: string | null
+        scheduled_pickup_at: string | null
+        appointment_at: string | null
+        pickup_description: string | null
+        destination_description: string | null
+        passenger_display_name: string | null
+        passenger_phone: string | null
+        assistance_notes: string | null
+        instructions: string | null
+        vehicle_label: string | null
+        vehicle_status: string | null
+        driver_notes: Json | null
+      }
+      driver_trip_history_entry: {
+        trip_id: string | null
+        scheduled_pickup_at: string | null
+        assignment_started_at: string | null
+        assignment_ended_at: string | null
+        end_reason: string | null
+        trip_outcome: string | null
+      }
+      trip_assignment_result: {
+        trip_id: string | null
+        assignment_id: string | null
+        driver_id: string | null
+        vehicle_id: string | null
+        changed: boolean | null
+      }
+      trip_creation_result: {
+        trip_id: string | null
+        organization_id: string | null
+        state: string | null
+        created: boolean | null
+      }
+      trip_transition_result: {
+        trip_id: string | null
+        previous_state: string | null
+        current_state: string | null
+        changed: boolean | null
+      }
+    }
+  }
+}
+
+type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+
+export type Tables<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+      Row: infer R
+    }
+    ? R
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
+    : never
+
+export type TablesInsert<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Insert: infer I
+    }
+    ? I
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
+    : never
+
+export type TablesUpdate<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Update: infer U
+    }
+    ? U
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
+    : never
+
+export type Enums<
+  DefaultSchemaEnumNameOrOptions extends
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    : never = never,
+> = DefaultSchemaEnumNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
+
+export type CompositeTypes<
+  PublicCompositeTypeNameOrOptions extends
+    | keyof DefaultSchema["CompositeTypes"]
+    | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    : never = never,
+> = PublicCompositeTypeNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
+  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
+
+export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
+  public: {
+    Enums: {},
+  },
+} as const
+

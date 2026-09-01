@@ -1,0 +1,520 @@
+================================================================================
+ZENWARD MOBILITY — WORK ITEM COMPLETION REPORT
+================================================================================
+Project:               Zenward Platform
+Phase:                  P1-E3-S1 — Authentication, Session & Role Routing
+                        Foundation
+Repository:             /Users/datamatics/ZenWard
+Environment:            LOCAL SUPABASE ONLY (project id "ZenWard", ports
+                        shifted +10 from CLI defaults). No remote linked.
+Git branch:             main
+Git HEAD before work:   81fed9b2b87b9e16a061da8ee21f7dc6dbb133b2
+Date/time:              2026-09-01 02:03 UTC
+================================================================================
+
+--------------------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------------------
+`git status --short` was clean; `git log --oneline -5` confirmed P1-E3-S0A
+("Implement controlled internal trip creation") as the most recent commit,
+with the full prior history (schema/RLS, mutations, driver read models)
+beneath it. No unexplained modification existed. Work proceeded.
+
+--------------------------------------------------------------------------------
+2. APPLICATION ARCHITECTURE DISCOVERED
+--------------------------------------------------------------------------------
+A substantial placeholder scaffold already existed from the P0-E2-S3/S3A
+UI-foundation phase: OperationsShell/OperationsSidebar/AppHeader,
+DriverShell/DriverHeader/DriverBottomNavigation, ~20 UI primitives
+(PageHeader, Panel, StatusBadge, DataTable, DefinitionList, Button, Input,
+etc.), Phosphor icon mapping, and Tailwind v4 design tokens matching the
+approved brand system exactly. Every /operations/* and /driver/* route
+already existed as an explicit "Placeholder only" stub. **No Supabase
+client of any kind existed anywhere in `src/`** (confirmed:
+`grep -rl "supabase" src/` returned nothing) — this phase built entirely
+new integration on top of an otherwise-ready shell, not a rewrite.
+
+--------------------------------------------------------------------------------
+3. SUPABASE PACKAGE/VERSION FINDINGS
+--------------------------------------------------------------------------------
+Installed: @supabase/ssr 0.12.5, @supabase/supabase-js 2.112.4 (current,
+non-deprecated SSR pattern — no `auth-helpers` package used anywhere).
+Next.js 16.3.3, React 19.2.8 (already present). `cookies()`/`headers()`
+are async in this Next.js version — every call site awaits them.
+
+--------------------------------------------------------------------------------
+4-6. SUPABASE CLIENT / SESSION REFRESH IMPLEMENTATION
+--------------------------------------------------------------------------------
+  src/lib/supabase/env.ts       Fail-fast env accessor
+  src/lib/supabase/client.ts    Browser client (publishable key only)
+  src/lib/supabase/server.ts    Server client (Server Components/Actions/
+                                 Route Handlers; cookie-based session)
+  src/lib/supabase/middleware.ts Session-refresh helper + pathname
+                                 propagation (x-zw-pathname header)
+  src/lib/supabase/database.types.ts  Generated via
+                                 `supabase gen types typescript --local`
+                                 (documented per work item §64 — generated
+                                 from the LOCAL instance only, no remote
+                                 link)
+  middleware.ts (root)          Registers the refresh helper; matcher
+                                 excludes _next/static, _next/image,
+                                 favicon, common image extensions
+
+--------------------------------------------------------------------------------
+7. SIGN-IN IMPLEMENTATION
+--------------------------------------------------------------------------------
+Email + password only (work item §11). `/sign-in` (Server Component,
+redirects an already-authenticated visitor to `/`) renders `SignInForm`
+(Client Component, `useActionState` + `signInAction` Server Action).
+Email normalized (trim + lowercase) server-side; generic
+`INVALID_CREDENTIALS` error never distinguishes "no such account" from
+"wrong password"; button disabled + label swap during submission (no
+double-submit); accessible labels/autocomplete via the existing `Input`
+primitive (already had full aria-describedby/aria-invalid wiring, unused
+until now). Zenward brand treatment (Care Navy background, Route
+Teal/Interactive Teal accents, Manrope brand mark + Inter form) — calm,
+not an authentication marketing page, per explicit instruction.
+
+--------------------------------------------------------------------------------
+8. AUTH CALLBACK IMPLEMENTATION
+--------------------------------------------------------------------------------
+None built — email/password via `signInWithPassword` requires no
+redirect-based callback route at all (unlike OAuth/magic-link flows).
+Confirmed this is correct or work item §10's own explicit instruction
+("the required callback/confirmation route IF the chosen flow needs one")
+before omitting it.
+
+--------------------------------------------------------------------------------
+9. SIGN-OUT IMPLEMENTATION
+--------------------------------------------------------------------------------
+`src/lib/auth/sign-out-action.ts` — a Server Action calling
+`supabase.auth.signOut()` (real session invalidation, never just deleting
+a UI-level cookie), clears the `zw_org_context` cookie, redirects to
+`/sign-in`. Verified directly: signing out invalidates the session cookie
+server-side; a subsequent request to a protected route with the same
+(now-invalid) cookie correctly redirects to `/sign-in`.
+
+--------------------------------------------------------------------------------
+10. SESSION PERSISTENCE
+--------------------------------------------------------------------------------
+Standard `@supabase/ssr` cookie-based persistence (`sb-127-auth-token`
+against the local instance) — never localStorage, never a URL parameter.
+Verified across every multi-request test in the integration suite: the
+same cookie jar, obtained once at sign-in, correctly persisted
+authorization across an arbitrary number of subsequent requests,
+including ones separated by direct database mutations.
+
+--------------------------------------------------------------------------------
+11. ACTIVE MEMBERSHIP RESOLUTION
+--------------------------------------------------------------------------------
+`getActiveMemberships()` (src/lib/auth/membership.ts): live query against
+`memberships` (joined to `organizations` for the name), filtered to the
+current user's own rows with `status='active'`. No service-role key. See
+§21/§29 below for a real bug found and fixed in this exact function
+during this phase's own testing.
+
+--------------------------------------------------------------------------------
+12. ROLE RESOLUTION
+--------------------------------------------------------------------------------
+Never a single global role — `resolveOrganizationContext()` returns a role
+scoped to one specific organization at a time. A user's role in Org A has
+zero influence on their authorization in Org B (verified: REVOKE-3a/3b,
+FOREIGNORG tests).
+
+--------------------------------------------------------------------------------
+13-16. ORGANIZATION-CONTEXT / SINGLE-ORG / MULTI-ORG / ORG-SELECTION
+IMPLEMENTATION
+--------------------------------------------------------------------------------
+`resolveOrganizationContext()` returns `none`/`single`/`selected`/
+`select-required`. Single active Membership auto-selects with no extra
+screen. Multiple require `/select-organization` — a plain, server-rendered
+list (org name + role, via the existing design system, not a new
+component) whose selection is re-validated against a fresh
+`getActiveMemberships()` call before the `zw_org_context` cookie
+(httpOnly, sameSite=lax) is set — a user cannot select an org by supplying
+an arbitrary UUID. The cookie is never trusted as authorization by
+itself: every subsequent read re-validates it, and a value matching none
+of the caller's own active Memberships (forged or stale) is treated
+exactly like no cookie at all.
+
+--------------------------------------------------------------------------------
+17. NO-MEMBERSHIP BEHAVIOR
+--------------------------------------------------------------------------------
+`/access-unavailable` — authenticated, zero active Memberships. Calm copy,
+no tenant information disclosed, sign-out is the only action offered.
+
+--------------------------------------------------------------------------------
+18. OPERATIONS AUTHORIZATION
+--------------------------------------------------------------------------------
+`requireOperationsAccess()`: auth → org context → role in
+{organization_admin, dispatcher} for THAT organization. A `driver`
+Membership is redirected to `/driver` (not a bare denial) — the "wrong
+surface for this role" case is distinguished from "no access at all."
+
+--------------------------------------------------------------------------------
+19-20. DRIVER AUTHORIZATION / DRIVER LINKAGE BEHAVIOR
+--------------------------------------------------------------------------------
+`requireDriverAccess()`: auth → org context → role=driver for that
+organization → a genuinely linked, active `drivers` row, confirmed by
+calling the SAME `driver_get_profile` RPC the secure Driver read API
+already uses (reusing the database's own authoritative
+`current_driver_id()` check rather than re-deriving it in TypeScript). A
+`driver` Membership with no resolvable Driver row does NOT redirect
+(would loop back into this same guard) — it returns a discriminated
+`link-missing` result, and the `/driver` layout renders a safe inline
+"account not yet set up" state with a sign-out action, no internal ID
+exposed. A new seed fixture (`org-a-driver-nolink@example.test`) was added
+to exercise this path with real data.
+
+--------------------------------------------------------------------------------
+21. INACTIVE MEMBERSHIP REVOCATION
+--------------------------------------------------------------------------------
+Verified with the SAME authenticated session throughout (no re-sign-in):
+an active Membership toggled to `inactive` via direct `psql` mutation
+loses `/operations` access on the very next request, redirected to
+`/access-unavailable`. Reactivating it restores access immediately, same
+session. See §31 for the full same-session test record.
+
+--------------------------------------------------------------------------------
+22. ROLE-CHANGE REVOCATION
+--------------------------------------------------------------------------------
+Same-session: dispatcher → operations works; role changed to `driver` mid-
+session → operations denied, redirected to `/driver` (correctly resolving
+to the inline link-missing state, since that fixture user has no `drivers`
+row); role restored → operations works again immediately. No stale role
+cache anywhere.
+
+--------------------------------------------------------------------------------
+23. INACTIVE DRIVER BEHAVIOR
+--------------------------------------------------------------------------------
+Covered by the same `driver_get_profile` RPC call `requireDriverAccess`
+reuses — that RPC's own authorization chain (current_driver_id, corrected
+in P1-E3-S0/ZD-100 to require BOTH an active Membership AND an active
+`drivers.status`) already fails closed for an inactive Driver row exactly
+as it does for the read API itself; no separate application-layer check
+was needed or added, avoiding duplicated logic that could drift from the
+database's own rule.
+
+--------------------------------------------------------------------------------
+24. PLATFORM ADMIN BEHAVIOR
+--------------------------------------------------------------------------------
+`PlatformAdminGrant` is never consulted by any route guard. The seeded
+platform-admin-only user (zero Memberships) is routed to
+`/access-unavailable`, identical to any other zero-Membership user —
+verified directly, not merely asserted.
+
+--------------------------------------------------------------------------------
+25-26. ROOT ROUTE / PROTECTED-ROUTE BEHAVIOR
+--------------------------------------------------------------------------------
+`src/app/page.tsx` (new, replacing the removed vestigial `(public)/page.tsx`
+— see §41): unauthenticated → `/sign-in`; zero Memberships →
+`/access-unavailable`; one Membership → role-based destination; multiple →
+`/select-organization`. `/operations/*` and `/driver/*` layouts
+(src/app/operations/layout.tsx, src/app/driver/layout.tsx) were converted
+from client-only components to server-first: a new server Layout resolves
+authorization via requireOperationsAccess/requireDriverAccess BEFORE
+rendering the extracted, behaviorally-unchanged client chrome
+(OperationsLayoutClient/DriverLayoutClient) — zero flash of the wrong
+surface.
+
+--------------------------------------------------------------------------------
+27. REDIRECT SAFETY
+--------------------------------------------------------------------------------
+`isSafeRedirectPath()` — allowlist-based (`^\/[A-Za-z0-9\-_/]*(?:\?...)?$`,
+rejects `//`, backslashes). Every `next`/`returnTo` value in the
+application passes through this single function before reaching
+`redirect()`. Verified with real malicious values (`https://evil.example`,
+`//evil.example`, `javascript:alert(1)`, `/\evil.example`) submitted both
+as a query parameter AND through a real POST to the actual sign-in Server
+Action — none were ever carried into a redirect target.
+
+--------------------------------------------------------------------------------
+28. ERROR MAPPING
+--------------------------------------------------------------------------------
+`src/lib/auth/errors.ts` — 6 named codes (INVALID_CREDENTIALS,
+SESSION_EXPIRED, NO_ACTIVE_MEMBERSHIP, ORG_CONTEXT_INVALID,
+ROLE_FORBIDDEN, DRIVER_LINK_MISSING) with safe generic copy. No raw
+Supabase/Postgres error or SQLSTATE is ever shown to a user anywhere in
+this layer.
+
+--------------------------------------------------------------------------------
+29. SEED/TEST-USER CHANGES
+--------------------------------------------------------------------------------
+One new fixture added to `supabase/seed.sql`:
+`org-a-driver-nolink@example.test` — an active `driver`-role Membership in
+Org A with NO corresponding `drivers` row, needed to exercise the
+link-missing state with real data (work item §53 item D). Full regression
+(204 SQL assertions) re-run after this change from a clean
+`supabase db reset` — zero regressions.
+
+**Separately, and more significantly:** `getActiveMemberships()`'s first
+implementation had a real bug, found by this phase's own integration
+testing (not assumed correct): it queried `memberships` filtered only by
+`status='active'`, relying on RLS alone to scope results to "my own rows."
+`memberships` carries a second applicable policy,
+`memberships_select_org_admin`, which legitimately lets an
+`organization_admin` see every membership row in their own organization
+(RLS policies OR together, they don't narrow each other) — so the
+unfiltered query returned an org_admin's entire team's memberships, not
+just their own, causing a single-Membership Org Admin to be incorrectly
+resolved as a multi-org user. Fixed by adding an explicit
+`.eq("user_id", user.id)` filter. Recorded as ZD-110. This was an
+application-layer query-intent bug, not an RLS gap — RLS correctly
+protected the table throughout; no cross-tenant data was ever exposed to
+the wrong tenant at any point.
+
+--------------------------------------------------------------------------------
+30-31. AUTH INTEGRATION TESTS / SAME-SESSION REVOCATION TESTS
+--------------------------------------------------------------------------------
+41/41 real integration checks pass, against the actual running
+`npm run dev` app and the actual local Supabase Auth service — not mocked.
+Methodology: `@supabase/ssr`'s own `createServerClient` with an in-memory
+cookie adapter (the exact library the app itself uses) to obtain
+genuinely-formatted session cookies for seeded fixture users, driving
+`fetch()` calls against `http://localhost:3000` with manual redirect
+handling. The sign-in FORM/Server Action itself was additionally exercised
+via a real `multipart/form-data` POST replicating exactly what a browser
+without JavaScript submits, using the real React Server Action reference
+fields extracted from the live-rendered page — not a mock of the action,
+the actual code path.
+
+Covers: unauthenticated access (3 checks), single-org role routing (5),
+inactive Membership (1), no-Membership/Platform-Admin-only (2),
+Driver-linkage-missing (1), multi-org selection and per-org authorization
+(5), forged/foreign organization context (2), sign-out setup (1), redirect
+safety (5), the real sign-in form end-to-end (4), and the MANDATORY
+same-session revocation matrix (9 checks across 3 scenarios: inactive-
+then-reactivated Membership, dispatcher-to-driver-and-back role change,
+multi-org Org A role change not affecting Org B). Full record:
+docs/security/application-auth-test-matrix.md.
+
+Full detail on the ONE real gap this testing found (the
+`getActiveMemberships()` bug): §29 above, and ZD-110.
+
+--------------------------------------------------------------------------------
+32-33. BROWSER QA / MOBILE QA
+--------------------------------------------------------------------------------
+**Honest limitation, stated plainly:** this session has no actual browser
+automation tool. What was performed instead — and is a faithful,
+deep verification of every server-side behavior a browser QA pass would
+exercise — is described in §30 above: the real running app, the real
+local Supabase Auth service, real session cookies, real HTTP redirect
+chains, and a real POST to the real Server Action reproducing exactly
+what a browser (with or without JavaScript) would submit. What this did
+NOT verify: actual pixel rendering, CSS layout/overflow at 390px/430px,
+focus-visible styling, or any purely client-side visual behavior. The
+sign-in page's own layout (`max-w-sm` card, `px-4` outer padding, the
+existing `Input`/`Button` primitives already used successfully throughout
+the driver mobile screens) follows the same patterns already proven at
+mobile widths elsewhere in this codebase, but this claim is inference from
+consistent patterns, not a literal viewport measurement. Recorded
+honestly as a gap, not glossed over — see "Deferred" at the bottom of this
+report.
+
+--------------------------------------------------------------------------------
+34. ACCESSIBILITY
+--------------------------------------------------------------------------------
+Sign-in form uses the existing `Input` primitive (already has
+aria-describedby/aria-invalid/associated error text — unused by any prior
+screen until this phase, now exercised for the first time), proper
+`type="email"`/`type="password"` with `autoComplete` attributes, native
+keyboard submission (a real `<form>`, no custom key handling), a
+`role="alert"` error region, and visible focus states via the existing
+design system's `focus-visible:outline` pattern (already used in
+`OrganizationSelector`). Not independently screen-reader-tested (same
+honest limitation as §32-33).
+
+--------------------------------------------------------------------------------
+35-37. TYPESCRIPT / LINT / BUILD RESULTS
+--------------------------------------------------------------------------------
+`npx tsc --noEmit`: PASS, zero errors.
+`npm run lint`: PASS, zero errors/warnings.
+`npm run build`: PASS — every expected route present and correctly marked
+dynamic (server-rendered) for every auth-gated page; static routes
+(`/foundation`, `/healthcare-providers`, `/request-transportation`,
+`/_not-found`) unaffected. Verified twice — once immediately after the
+core implementation, once again after the `getActiveMemberships()` fix.
+
+--------------------------------------------------------------------------------
+38. ROUTES CREATED
+--------------------------------------------------------------------------------
+  /sign-in
+  /select-organization
+  /access-unavailable
+  / (replaces the removed vestigial (public) homepage placeholder — §41)
+
+--------------------------------------------------------------------------------
+39. COMPONENTS CREATED
+--------------------------------------------------------------------------------
+  src/components/auth/SignInForm.tsx
+  src/components/auth/OrganizationSelector.tsx
+  src/components/operations/OperationsLayoutClient.tsx (extracted, behavior
+    unchanged from the original layout.tsx)
+  src/components/driver/DriverLayoutClient.tsx (extracted, behavior
+    unchanged)
+
+--------------------------------------------------------------------------------
+40. LIB/UTILITIES CREATED
+--------------------------------------------------------------------------------
+  src/lib/supabase/env.ts, client.ts, server.ts, middleware.ts,
+    database.types.ts
+  src/lib/auth/types.ts, redirect.ts, errors.ts, session.ts, membership.ts,
+    organization.ts, authorization.ts, sign-out-action.ts, current-path.ts
+  middleware.ts (root)
+
+--------------------------------------------------------------------------------
+41. FILES MODIFIED
+--------------------------------------------------------------------------------
+  .gitignore              Fixed a real, pre-existing bug: the blanket
+                           `.env*` pattern silently excluded `.env.example`
+                           too (which must be committed — names only, no
+                           secrets). Added `!.env.example`.
+  .env.local               CORRECTED, not merely reviewed: this file
+                           pre-dated the session (dated before this
+                           conversation began) and pointed
+                           NEXT_PUBLIC_SUPABASE_URL at a REMOTE, hosted
+                           Supabase project
+                           (https://bwqsowlbcuytsjquhxzh.supabase.co),
+                           not the local instance — a real, serious
+                           misconfiguration for a phase whose environment
+                           is explicitly LOCAL SUPABASE ONLY. Found when
+                           the first integration test run authenticated
+                           successfully but the app couldn't recognize the
+                           session (different cookie name derived from a
+                           different host). Corrected to the local
+                           instance's URL/publishable key
+                           (http://127.0.0.1:54331). This is the first
+                           phase in the whole project where any
+                           application code actually attempted to connect
+                           to Supabase — no prior phase was affected by
+                           this latent misconfiguration.
+  package.json / package-lock.json   Added @supabase/ssr, @supabase/supabase-js
+  src/app/operations/layout.tsx      Converted to a server-first
+                                      authorization gate (see §25-26)
+  src/app/driver/layout.tsx          Same
+  src/app/operations/page.tsx        Now displays real, live-resolved
+                                      session context (§ below) instead of
+                                      hardcoded sample text; still a
+                                      placeholder for the real Overview
+                                      screen
+  src/app/driver/page.tsx            Same, for the Driver Today placeholder
+  supabase/seed.sql                  One new fixture (§29)
+  docs/product/application-route-map.md         Route access matrix added,
+                                                  auth boundary marked
+                                                  implemented
+  docs/product/application-implementation-plan.md  P1-E3-S1 marked
+                                                  complete; screen
+                                                  implementability matrix
+                                                  updated (every screen now
+                                                  auth-ready)
+  docs/product/decision-register.md              ZD-103 through ZD-110
+                                                  appended
+
+DELETED: src/app/(public)/page.tsx — see §41 (renumbered from the work
+item's own item list; this report's own section header) below.
+
+--------------------------------------------------------------------------------
+41. THE REMOVED VESTIGIAL PUBLIC HOMEPAGE (architectural finding)
+--------------------------------------------------------------------------------
+`src/app/(public)/page.tsx` predated the Zenward-Web marketing-site
+separation (ZD-079) and, by its own code comment, existed only to "verify
+shared public-site primitives" before that separation was complete — it
+was never the real marketing homepage (that lives entirely in
+Zenward-Web) and had no functional purpose remaining. It occupied `/`,
+which work item §27 required to become the auth-aware routing root.
+Removed rather than left in conflict with the new `src/app/page.tsx`
+(Next.js does not permit two files resolving to the same route).
+`/request-transportation` and `/healthcare-providers` — the other two
+routes in that same `(public)` route group — were deliberately left
+untouched; this report flags, but does not decide, whether they still
+belong in this repository at all now that Zenward-Web is the settled home
+for public marketing surfaces (out of scope for an auth-focused phase).
+
+--------------------------------------------------------------------------------
+42. DOCS CREATED
+--------------------------------------------------------------------------------
+  docs/product/auth-session-routing.md
+  docs/security/application-auth-boundary.md
+  docs/security/application-auth-test-matrix.md
+  docs/reports/P1-E3-S1-completion-report.txt (this file)
+
+--------------------------------------------------------------------------------
+43. DOCS UPDATED
+--------------------------------------------------------------------------------
+  docs/product/application-route-map.md
+  docs/product/application-implementation-plan.md
+  docs/product/decision-register.md
+
+--------------------------------------------------------------------------------
+44. DECISION-REGISTER ENTRIES
+--------------------------------------------------------------------------------
+  ZD-103  SSR auth architecture (@supabase/ssr, two clients, server-first)
+  ZD-104  Organization context: cookie names a request, never authority
+  ZD-105  Route guards are UX-only; the database remains final authority
+  ZD-106  Live Membership/role/Driver-linkage resolution, no caching
+  ZD-107  Platform Admin routing posture: no tenant-Operations bypass
+  ZD-108  Redirect safety: allowlist, not denylist
+  ZD-109  Driver-linkage-missing renders inline, never redirects
+  ZD-110  getActiveMemberships() corrected to filter by user_id explicitly
+          (the real bug found and fixed this phase)
+
+--------------------------------------------------------------------------------
+45. BLOCKERS
+--------------------------------------------------------------------------------
+NONE.
+
+--------------------------------------------------------------------------------
+46. DEFERRED ITEMS
+--------------------------------------------------------------------------------
+- Actual browser/visual QA (pixel rendering, real-device touch targets,
+  screen-reader testing) — this session has no browser automation tool;
+  see §32-33's honest accounting of what real-HTTP integration testing
+  does and does not cover.
+- A richer multi-org switcher (changing context without a full
+  `/select-organization` re-visit) — the smallest-safe MVP was built, per
+  explicit instruction; a designed switcher component remains future work.
+- SESSION_EXPIRED/ORG_CONTEXT_INVALID/ROLE_FORBIDDEN as explicitly
+  surfaced error states — currently handled via silent, correct redirects
+  rather than a distinct message; the error constants exist for future
+  screens that may want to show one.
+- The `/request-transportation`/`/healthcare-providers` architectural
+  question flagged in §41 — not resolved, not acted on.
+- Actual production `app.zenwardmobility.com` configuration — untouched,
+  as instructed; `NEXT_PUBLIC_APP_URL` remains `http://localhost:3000`.
+
+================================================================================
+APPLICATION AUTH GATE:  READY
+================================================================================
+AUTH METHOD:             Email + password, via Supabase Auth
+                          (signInWithPassword), through a real Server
+                          Action with progressive-enhancement-compatible
+                          form submission. No OAuth/magic-link/MFA in this
+                          phase.
+ORG CONTEXT MODEL:       Live-resolved `resolveOrganizationContext()`;
+                          single active Membership auto-selects; multiple
+                          require server-validated selection via
+                          `/select-organization`; a `zw_org_context`
+                          cookie names only a REQUESTED context, never
+                          authority on its own — re-validated against a
+                          fresh Membership query on every request.
+ROLE ROUTING:            Organization-scoped, never a global/strongest
+                          role. organization_admin/dispatcher →
+                          /operations; driver (with a valid linked Driver
+                          record) → /driver; zero Memberships →
+                          /access-unavailable; Platform-Admin-only → same,
+                          not a tenant bypass. Resolved server-side before
+                          any protected content renders.
+BLOCKERS:                 NONE
+DEFERRED:                 See §46 above.
+NEXT RECOMMENDED PHASE:  P1-E3-S2 — Driver Application Shell & Driver
+                          Today (per the reordered implementation plan in
+                          docs/product/application-implementation-plan.md
+                          — the Driver screens have the fewest open gaps
+                          of the remaining set and exercise the full,
+                          already-hardened P1-E2-S2/S2A/S3 surface
+                          end-to-end).
+================================================================================
+
+Stopping here per instruction. Not beginning P1-E3-S2, Driver Today,
+Operations UI, Dispatch Board, or any Zenward-Web integration. Waiting for
+review.

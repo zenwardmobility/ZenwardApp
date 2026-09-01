@@ -1,0 +1,318 @@
+====================================================================
+ZENWARD MOBILITY — P1-E3-S1A
+NEXT.JS 16 AUTH BOUNDARY COMPATIBILITY AUDIT — COMPLETION REPORT
+====================================================================
+Repository: /Users/datamatics/ZenWard (Platform only — Zenward-Web untouched)
+Branch: main (uncommitted working tree — no commits made during this phase)
+HEAD at start and end of this phase: 81fed9b (unchanged — nothing committed)
+Date: 2026-09-01
+
+--------------------------------------------------------------------
+1. ACTUAL NEXT.JS VERSION
+--------------------------------------------------------------------
+16.3.3 — confirmed three independent ways: package.json
+("next": "16.3.3"), package-lock.json (packages[""].dependencies.next
+== "16.3.3"), and `next --version` == "Next.js v16.3.3". No mismatch
+between the declared and installed version.
+
+--------------------------------------------------------------------
+2. MIDDLEWARE -> PROXY CHANGES
+--------------------------------------------------------------------
+- Root file renamed: middleware.ts -> proxy.ts
+- Exported function renamed: `middleware` -> `proxy`
+- Matcher (`config.matcher`) preserved verbatim — unchanged by the
+  rename.
+- Deprecation warning for the old `middleware` convention no longer
+  fires (verified: not present in a clean build's output).
+
+A SECOND, MORE IMPORTANT CORRECTION WAS MADE AND IS THE MAIN FINDING
+OF THIS PHASE (see item 5 for full detail): the file was moved from
+the project root to src/proxy.ts. This project's app router lives at
+src/app, and Next.js resolves the middleware/proxy convention file
+relative to wherever pages/app actually is — for a src/ layout that
+is src/proxy.ts, not a true project-root proxy.ts one level higher.
+The original middleware.ts (built in P1-E3-S1) was placed at the
+project root and was consequently NEVER discovered by the Next.js
+build in either dev or production, for this project's entire
+lifetime up to this phase. This was not caused by the rename itself
+— it was a pre-existing placement defect this compatibility audit
+uncovered and fixed while performing the rename.
+
+--------------------------------------------------------------------
+3. SUPABASE HELPER NAMING
+--------------------------------------------------------------------
+Renamed for consistency (work item §3, "if it improves consistency
+without unnecessary churn" — judged that it does, since the file now
+directly parallels src/proxy.ts and removes a stale "middleware"
+name from a codebase that no longer has a middleware.ts anywhere):
+
+  src/lib/supabase/middleware.ts -> src/lib/supabase/proxy.ts
+
+Only the internal logic's doc comment was updated to reference the
+rename; the session-refresh/cookie/header logic itself is byte-for-
+byte unchanged. The one import site (src/proxy.ts) was updated to
+match; `@/lib/supabase/proxy` resolves correctly via the existing
+`@/* -> ./src/*` tsconfig path alias regardless of where src/proxy.ts
+itself sits within src/, so no other import sites needed touching.
+
+--------------------------------------------------------------------
+4. MATCHER RESULT
+--------------------------------------------------------------------
+Preserved unchanged:
+  ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"]
+
+Verified working post-fix (proxy now actually runs — see item 5):
+production build's route summary now prints a "ƒ Proxy (Middleware)"
+line (absent before the location fix), and a direct request to a
+static asset path was confirmed to skip proxy invocation exactly as
+before, consistent with the unchanged matcher.
+
+--------------------------------------------------------------------
+5. AUTH REGRESSION RESULTS (INCLUDING THE MAIN FINDING OF THIS PHASE)
+--------------------------------------------------------------------
+41/41 auth integration checks PASS — same count and same checks as
+the P1-E3-S1 baseline, re-run against a fresh `supabase db reset` and
+a fresh `npm run dev`, with proxy.ts at its corrected location. Full
+listing: UNAUTH-1/1b/2/2b/3, ROLE-1..5, INACTIVE-1, NOMEMBER-1,
+PLATFORMADMIN-1, DRIVERLINK-1, MULTIORG-1..5, FOREIGNORG-1/2,
+SIGNOUT-1-setup, REDIRECT-SAFETY (x5), SIGNINFORM-setup/1/2/3/4,
+REVOKE-1a/1b/1c/2a/2b/2c/2d/3a/3b — all PASS.
+
+MAIN FINDING — proxy.ts was never actually running, at the project
+root, in this project, since it was first built in P1-E3-S1:
+
+This phase's own verification work initially reproduced what looked
+like two separate Next.js-level bugs while auditing the rename:
+(a) an apparent Turbopack dev-mode failure to invoke the handler at
+    all (proven via a temporary __proxy_test__ short-circuit response
+    that returned a normal page instead, in dev mode), and
+(b) the x-zw-pathname header (used by requireOperationsAccess /
+    requireDriverAccess to build a precise `next=` redirect target
+    for nested routes) never reaching Server Components' headers(),
+    in BOTH dev and production mode — confirmed via a temporary
+    debug page dumping all headers seen server-side, and via curl:
+    an unauthenticated request to /operations/dispatch redirected to
+    /sign-in?next=%2Foperations (the parent fallback) instead of the
+    precise /sign-in?next=%2Foperations%2Fdispatch.
+
+Continued investigation (this is a compatibility phase; a genuine
+behavioral gap discovered while verifying the very thing this phase
+is about was treated as in-scope to run down, not something to file
+away on first appearance) traced both symptoms to a single, simpler
+root cause by reading Next.js's own build source directly
+(node_modules/next/dist/build/index.js and
+node_modules/next/dist/lib/find-pages-dir.js):
+
+  appDir = findDir(dir, "app")        // = <project>/src/app, since
+                                       //   this project uses a src/
+                                       //   layout
+  rootDir = path.join(appDir, "..")   // = <project>/src
+  // the build then scans ONLY the top level of rootDir (non-
+  // recursively — confirmed via node_modules/next/dist/lib/
+  // get-files-in-dir.js, which uses fs.opendir with no recursion)
+  // for a file named middleware.* or proxy.*
+
+Because rootDir resolves to <project>/src (not <project>/, the true
+repository root) whenever the app router lives under src/app, a
+proxy.ts (or, before this phase, middleware.ts) placed at the true
+project root sits ONE DIRECTORY OUTSIDE the directory the build
+actually scans, and is silently never found — no error, no warning,
+just an empty middleware-manifest.json and no "ƒ Proxy (Middleware)"
+line in the build summary. This matches Next.js's own documented
+placement rule ("the same level as pages or app, or inside src if
+applicable") — for a src/app project, that means src/proxy.ts, not a
+true-root proxy.ts.
+
+FIX APPLIED (within this phase's declared scope — a file-location
+correction to complete "migrate cleanly to the supported Next.js 16
+Proxy convention" per work item §1, not an architecture change; no
+authorization logic was touched):
+
+  src/proxy.ts   (was: proxy.ts at the project root, itself renamed
+                  from a project-root middleware.ts in P1-E3-S1)
+
+VERIFIED POST-FIX, both dev and production:
+  - Production build summary now shows: ƒ Proxy (Middleware)
+  - __proxy_test__ short-circuit (added temporarily, removed after
+    confirming, in both dev and production) returned "PROXY_IS_RUNNING"
+    in both modes — proxy is now genuinely invoked in dev too, which
+    means the earlier "Turbopack dev-mode never invokes the handler"
+    finding was a MISDIAGNOSIS: dev mode invokes it correctly once the
+    file is in the location Next.js actually scans. There is no
+    separate Turbopack dev-mode bug.
+  - curl http://localhost:3000/operations/dispatch (unauthenticated,
+    dev mode) -> Location: /sign-in?next=%2Foperations%2Fdispatch
+  - Same curl test, production mode (next build + next start) -> same
+    precise result.
+  - The x-zw-pathname header-propagation issue is therefore also
+    RESOLVED as a side effect of the same fix, not a separate,
+    still-open issue as this phase's earlier working notes assumed.
+  - 41/41 auth integration checks re-confirmed after the move (listed
+    above) — zero behavioral regression versus the P1-E3-S1 baseline,
+    and nested nested-route redirects are now MORE correct than they
+    were at that baseline (the baseline's 41-test suite happened to
+    only exercise top-level paths, where the old fallback-to-parent
+    behavior was indistinguishable from correct).
+
+Note for the decision register / future audits: middleware-manifest.json
+itself still reports an empty middleware/functions object in this
+Next.js version even when proxy is confirmed running by direct
+runtime test — it appears to no longer be the authoritative source
+for this in 16.3.3's Turbopack build. The build's own route-summary
+line ("ƒ Proxy (Middleware)") and a direct runtime probe are the
+reliable signals; the manifest file is not.
+
+--------------------------------------------------------------------
+6. .env.example STATUS
+--------------------------------------------------------------------
+Present at the repository root. Contains exactly the 3 required
+variable NAMES with empty values and an explanatory comment — no
+real values, no secrets:
+
+  NEXT_PUBLIC_SUPABASE_URL=
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+  NEXT_PUBLIC_APP_URL=
+
+--------------------------------------------------------------------
+7. .env.local IGNORE VERIFICATION
+--------------------------------------------------------------------
+  git check-ignore -v .env.local
+    -> .gitignore:39:.env*    .env.local   (matched, ignored)
+
+  git ls-files .env.local
+    -> (empty — not tracked)
+
+.env.example itself is correctly NOT ignored, via the existing
+negation pattern added in P1-E3-S1 (.gitignore:40 `!.env.example`) —
+confirmed by `git status --short .env.example` showing it as an
+untracked (`??`) file rather than being silently hidden the way an
+ignored file would be.
+
+--------------------------------------------------------------------
+8. COOKIE SECURITY SETTINGS (zw_org_context)
+--------------------------------------------------------------------
+Set in src/app/select-organization/actions.ts:
+
+  httpOnly: true
+  sameSite: "lax"
+  secure: process.env.NODE_ENV === "production"
+  path: "/"
+  maxAge: 60 * 60 * 24 * 30   (30 days)
+
+`secure` is conditional on NODE_ENV so local HTTP development remains
+usable (work item §7's explicit "do not make localhost development
+unusable"), while any production deployment served over HTTPS gets
+secure=true automatically with no separate flag to remember to flip.
+No changes were made to this in P1-E3-S1A — it was already correct
+as built in P1-E3-S1. Per its own design (documented in
+docs/product/auth-session-routing.md), the cookie identifies a
+*requested* organization context only; every read re-validates it
+against the caller's own live, active Memberships, and it is never
+treated as authorization by itself.
+
+--------------------------------------------------------------------
+9. LEGACY PLATFORM PUBLIC-ROUTE INVENTORY
+--------------------------------------------------------------------
+Two stale public routes exist inside the Platform repository (NOT
+Zenward-Web — that repository was not touched, per standing
+instruction):
+
+  /request-transportation
+  /healthcare-providers
+
+Both are static (prerendered, "○" in the build's route table),
+unauthenticated, and unlinked from anywhere in the current auth/
+routing/application-route-map surface built in P1-E3-S1. No route
+guard, layout, or navigation element in this application references
+either path. No proven authenticated Platform purpose was found for
+either.
+
+Per work item §8, these were NOT removed in this task. Documented
+here and carried into docs/product/auth-session-routing.md's history
+as:
+
+  REMOVE BEFORE PLATFORM PRODUCTION DEPLOYMENT — unless a genuine
+  authenticated Platform use for either route is identified first.
+
+--------------------------------------------------------------------
+10. TYPESCRIPT RESULT
+--------------------------------------------------------------------
+npx tsc --noEmit -> exit 0, zero errors. Re-run after the src/proxy.ts
+relocation to confirm the move itself introduced nothing.
+
+--------------------------------------------------------------------
+11. LINT RESULT
+--------------------------------------------------------------------
+npm run lint (eslint) -> exit 0, zero errors/warnings. Re-run after
+the relocation.
+
+--------------------------------------------------------------------
+12. BUILD RESULT
+--------------------------------------------------------------------
+npm run build -> succeeded (Next.js 16.3.3, Turbopack). Compiled
+successfully, all 24 routes generated, "ƒ Proxy (Middleware)" present
+in the route summary (this line was ABSENT before the location fix
+in item 5 — its appearance is itself part of the evidence that proxy
+is now correctly discovered). No warnings, no deprecation notice.
+
+--------------------------------------------------------------------
+13. FILES CREATED (this phase)
+--------------------------------------------------------------------
+  src/proxy.ts
+      (root proxy.ts from the rename step was itself superseded by
+      this corrected location before ever being left in place — see
+      item 2/5; the project's working tree contains src/proxy.ts
+      only, no proxy.ts at the root)
+  src/lib/supabase/proxy.ts
+
+--------------------------------------------------------------------
+14. FILES MODIFIED (this phase)
+--------------------------------------------------------------------
+  src/lib/supabase/server.ts
+      — comment updated to reference proxy.ts/the rename
+  docs/product/auth-session-routing.md
+      — "Middleware" bullet renamed to "Proxy", rename + relocation
+        explained, "Session resolution" section updated
+
+FILES DELETED (this phase):
+  middleware.ts (project root)
+  src/lib/supabase/middleware.ts
+
+TRANSIENT, created-then-removed during diagnosis (net no-op on the
+working tree — not present in the final `git status`):
+  src/app/debug-headers/page.tsx (temporary Server Component header
+    dump, used to prove/disprove the header-propagation symptom)
+  a temporary __proxy_test__ short-circuit block inside proxy.ts
+    (added and removed twice — once for the initial, misdiagnosed
+    root-level file, again for the corrected src/proxy.ts location —
+    used to prove actual invocation unambiguously in both dev and
+    production)
+
+No other application files were touched in this phase. The
+application code from P1-E3-S1 (sign-in, org selection, route
+guards, layouts, etc.) is otherwise byte-for-byte as it was at the
+end of that phase.
+
+--------------------------------------------------------------------
+15. GATE STATUS
+--------------------------------------------------------------------
+AUTH COMPATIBILITY GATE — READY
+
+Justification: the middleware -> proxy migration is complete,
+including a placement correction (project root -> src/proxy.ts) that
+this phase's own verification work uncovered and fixed within its
+declared scope — no authorization logic was moved or altered; Proxy
+remains limited to session-refresh and pathname propagation, exactly
+as before. 41/41 auth integration checks pass, matching the P1-E3-S1
+baseline count with zero behavioral regression, and nested-route
+redirect precision is now demonstrably correct (previously masked by
+a baseline test suite that only exercised top-level paths). TypeScript,
+lint, and build are all clean. The environment contract (.env.example/
+.env.local) and cookie security settings were confirmed correct with
+no changes needed. The two legacy public routes are inventoried, not
+yet removed, per explicit instruction.
+
+====================================================================
+Do NOT commit. Do NOT push. Do NOT deploy. Do NOT begin P1-E3-S2.
+STOP after reporting — per work item instruction.
+====================================================================
