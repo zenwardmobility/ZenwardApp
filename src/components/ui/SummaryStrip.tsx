@@ -32,7 +32,7 @@ export function SummaryStrip({ items, className }: SummaryStripProps) {
       )}
     >
       {items.map((item) => (
-        <div key={item.label} className="flex-1 px-lg py-md">
+        <div key={item.label} className="flex-1 px-zw-lg py-zw-md">
           <p className={cn(typography.sectionHeading, toneClasses[item.tone ?? "default"])}>
             {item.value}
           </p>

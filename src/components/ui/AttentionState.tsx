@@ -42,7 +42,7 @@ export function AttentionState({
     <div
       role="status"
       className={cn(
-        "flex items-start gap-3 rounded-md border px-lg py-md",
+        "flex items-start gap-3 rounded-md border px-zw-lg py-zw-md",
         styles.container,
         className,
       )}

@@ -34,5 +34,5 @@ export default async function DriverLayout({ children }: { children: ReactNode }
     );
   }
 
-  return <DriverLayoutClient>{children}</DriverLayoutClient>;
+  return <DriverLayoutClient driverName={access.displayName}>{children}</DriverLayoutClient>;
 }

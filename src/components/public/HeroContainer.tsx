@@ -16,7 +16,7 @@ const toneClasses = {
 export function HeroContainer({ tone = "app", children, className }: HeroContainerProps) {
   return (
     <div className={cn(toneClasses[tone], className)}>
-      <div className="mx-auto max-w-6xl px-md py-3xl lg:px-xl lg:py-4xl">{children}</div>
+      <div className="mx-auto max-w-6xl px-zw-md py-zw-3xl lg:px-zw-xl lg:py-zw-4xl">{children}</div>
     </div>
   );
 }

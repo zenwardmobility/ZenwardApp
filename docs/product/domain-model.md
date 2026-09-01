@@ -33,6 +33,7 @@ Everything above the auth layer belongs to exactly one organization. Nothing abo
 - **Classification:** SYSTEM-OWNED (creation/root control is a platform-level action — new operating entities are rare and high-stakes; a self-serve "anyone creates an org" flow is not part of this product). Settings updates within an existing org are performed by that org's admins.
 - **Tenant ownership:** Is the tenant. Tenant key = its own `id`.
 - **Key relationships:** Parent of Membership, Driver, Vehicle, Facility, Passenger, TransportationRequest, Trip (directly or via direct `organization_id`).
+- **Operational timezone** *(added P1-E3-S2C)*: `timezone` (IANA identifier, `NOT NULL`, `CHECK`-validated) — the organization's own authority for interpreting any of its `timestamptz` columns as a local calendar day/clock time. Never the server's or a user's own timezone. See [operational-timezone.md](./operational-timezone.md).
 - **Lifecycle:** Created by platform onboarding; deactivated, not deleted, if operations cease.
 - **Expected future access roles:** Read (own org) — all members. Write (settings) — Organization Admin. Create/deactivate — Platform Admin only.
 - **RLS risk:** Low (few rows, admin-managed), but a mistake here undermines every other table's isolation — treat root-level policy correctness as maximum priority regardless of row count.

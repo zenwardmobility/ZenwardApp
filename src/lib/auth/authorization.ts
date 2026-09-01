@@ -84,9 +84,16 @@ export async function requireDriverAccess(currentPath: string): Promise<DriverAc
     p_organization_id: context.organizationId,
   });
 
-  if (error || !data || !data.driver_id) {
+  if (error || !data || !data.driver_id || !data.display_name) {
     return { status: "link-missing", organization: context };
   }
 
-  return { status: "ok", organization: context, driverId: data.driver_id };
+  return {
+    status: "ok",
+    organization: context,
+    driverId: data.driver_id,
+    displayName: data.display_name,
+    phone: data.phone,
+    driverStatus: data.status,
+  };
 }

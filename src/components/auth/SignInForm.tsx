@@ -27,10 +27,10 @@ export function SignInForm({ next }: SignInFormProps) {
   const [state, formAction, pending] = useActionState(signInAction, INITIAL_STATE);
 
   return (
-    <form action={formAction} className="flex flex-col gap-lg" noValidate>
+    <form action={formAction} className="flex w-full flex-col gap-zw-lg" noValidate>
       {next ? <input type="hidden" name="next" value={next} /> : null}
 
-      <div className="flex flex-col gap-md">
+      <div className="flex w-full flex-col gap-zw-md">
         <Input
           label="Email"
           name="email"

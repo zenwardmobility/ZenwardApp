@@ -1355,6 +1355,162 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Security
 - **Review Trigger:** Any future query against a table with more than one applicable SELECT policy for the same role — explicitly verify which policy will actually apply for the caller in question, not just that RLS is enabled
 
+### ZD-111 — `requireDriverAccess` returns the full `driver_get_profile` row, not just `driver_id`
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `DriverAccessResult`'s `"ok"` branch now carries `displayName`/`phone`/`driverStatus` alongside `driverId`, all read from the `driver_get_profile` call `requireDriverAccess` already makes to resolve linkage. The Driver chrome header (avatar initials, identity subtitle) consumes these directly rather than issuing a second RPC call for the same row.
+- **Status:** CONFIRMED — implemented and verified (`docs/reports/P1-E3-S2-completion-report.txt`; real HTML content checks confirm the header renders the real `display_name`)
+- **Reason:** Matches work item §30's "prefer server-side initial data loading" and avoids a redundant round-trip for data already in hand — the authorization *decision* itself (the chain in ZD-105) is completely unchanged, only the data already being fetched for that decision is now also exposed to callers.
+- **Affected Product Areas:** `src/lib/auth/types.ts`, `src/lib/auth/authorization.ts`, `src/app/driver/layout.tsx`, `src/components/driver/DriverLayoutClient.tsx`
+- **Dependencies:** ZD-105 (route guards are UX-only; unaffected)
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-112 — Driver-facing canonical-state labels centralized in one function
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `driverTripStateLabel()` (`src/lib/driver/trip-presentation.ts`) is the single place canonical Trip state maps to a Driver-facing presentation label (`scheduled`→"Assigned", `en_route_to_pickup`→"Heading to Pickup", etc., per lifecycle-model.md §17 and the confirmed "Assigned" mapping in ui-data-action-map.md §6). The existing `TripStatus`/`TRIP_STATUS_MAP` label→category system (StatusBadge) is extended, not duplicated, with the four new leg-disambiguated labels this introduces.
+- **Status:** CONFIRMED — implemented and verified (real HTTP content check confirms "Assigned" renders for the seeded `scheduled` fixtures)
+- **Reason:** Matches ZD-089's "one place to look" principle, already applied to the backend's own transition table, extended to this presentation-layer derivation so a later Driver screen (Active Trip, Trips) reuses the same function rather than re-deriving it independently and risking drift (work item §17/§42).
+- **Affected Product Areas:** `src/lib/driver/trip-presentation.ts`, `src/components/ui/TripStatus.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** A future Driver screen needing a state label not yet in this map — extend the same function, never a second parallel mapping
+
+### ZD-113 — "Completed Today" omitted from Driver Today, not built with a degraded field set
+
+- **Date:** 2026-09-01
+- **Category:** Product / Security
+- **Decision:** Driver Today does not include a "Completed Today" section this phase. `driver_list_active_trips` structurally excludes completed trips (no active assignment remains); `driver_list_trip_history` is the only alternative and deliberately redacts passenger identity and pickup/destination text (ZD-099). Rather than showing a materially degraded version of the Stitch reference's completed row (time + "Completed" only, no passenger/route) or widening `driver_list_trip_history`'s existing redaction to force a match, the section is omitted outright, pending a deliberate future decision. See GAP-10.
+- **Status:** CONFIRMED
+- **Reason:** Work item §58 requires recording a backend gap and stopping that part rather than bypassing the boundary; widening an existing, deliberately-reasoned privacy redaction (ZD-099) to unblock one screen's visual completeness is exactly the kind of silent-widening this project's established practice avoids.
+- **Affected Product Areas:** `src/app/driver/page.tsx`
+- **Dependencies:** ZD-099
+- **Owner:** Product / Security
+- **Review Trigger:** A genuine product need for full-fidelity recently-completed trip display — design a dedicated, narrowly-scoped projection then, not by widening history's existing redaction
+
+### ZD-114 — Navigate/Call Passenger and passenger-notes content deferred to the Active Trip screen, not duplicated on Driver Today
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Product
+- **Decision:** The featured Next Trip card on Driver Today carries exactly one action — "View Trip" (navigation only) — and does not include Navigate/Call Passenger buttons or the "Call passenger on arrival" note shown in the Stitch reference. Those depend on `passenger_phone`/`driver_notes`/`assistance_notes`, fields only `driver_get_trip_detail` returns (not `driver_list_active_trips`, which Today uses). Fetching trip detail an extra time solely to populate one card was rejected in favor of the application-implementation-plan.md's own framing: Driver Today is an orientation screen whose actions "delegate to 04" (the Active Trip screen).
+- **Status:** CONFIRMED
+- **Reason:** Matches work item §24/§25's explicit instruction not to prematurely implement Active Trip content or wire extra data-fetching for actions that belong to a later, not-yet-built phase; keeps Today's data source to exactly one RPC call.
+- **Affected Product Areas:** `src/components/driver/DriverNextTripCard.tsx`, `src/app/driver/page.tsx`
+- **Dependencies:** None
+- **Owner:** Product / Engineering
+- **Review Trigger:** When the Active Trip screen (P1-E3-S3, recommended next phase) is built — revisit whether Today should link more directly into its actions, not before
+
+### ZD-115 — Driver shell capped at max-w-md and centered on wide viewports
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `DriverShell`'s inner column is constrained to `max-w-md` (448px) and horizontally centered against a neutral background, rather than stretching full-bleed at tablet/desktop widths. At the 390/430 primary target widths this has no visible effect (448px exceeds the viewport). At 768/1024 it keeps the Driver surface intentionally compact — never a second Operations-style desktop layout, and never an enforced hard block on wider access either.
+- **Status:** CONFIRMED — implemented; verified via direct inspection of the rendered HTML's class list (`max-w-md` present) and CSS reasoning, since no browser screenshot tooling was available this phase (see completion report "Mobile visual QA")
+- **Reason:** Work item §5 explicitly requires the Driver product to "remain intentionally compact" at tablet widths, not "morph into the Operations desktop UI" — an unconstrained single mobile column stretched across a 1024px viewport satisfies neither: it isn't the Operations layout, but it also isn't compact. A capped, centered column is the smallest change that satisfies the actual requirement.
+- **Affected Product Areas:** `src/components/driver/DriverShell.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-116 — Driver Today time/date formatting uses runtime-local timezone, no invented conversion architecture
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `formatTripTime`/`formatLongDate`/`isSameLocalDay` (`src/lib/driver/trip-presentation.ts`) format and compare dates using the standard `Intl` API with no explicit `timeZone` parameter — i.e., whatever timezone the Node process itself runs in. No per-organization or per-request timezone field/conversion layer is introduced, since none exists anywhere in the schema or any prior phase's architecture.
+- **Status:** CONFIRMED — documented simplification, not silently assumed correct
+- **Reason:** Work item §19 explicitly forbids inventing timezone conversion architecture in this phase. This is the smallest-possible-scope choice that still produces human-readable output; a real production deployment where the server's timezone differs from Georgia's could group a near-midnight trip into the adjacent calendar day on Driver Today — a known, bounded, cosmetic limitation, not a security or data-integrity issue.
+- **Affected Product Areas:** `src/lib/driver/trip-presentation.ts`
+- **Dependencies:** None
+- **Owner:** Product / Engineering
+- **Review Trigger:** A canonical product timezone model is defined — update this one file, not a scattered set of ad hoc date calculations
+
+### ZD-117 — Custom spacing tokens renamed to a `zw-` namespace to permanently eliminate the Tailwind v4 `--spacing-*`/`--container-*` collision
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** Every custom spacing token in `src/app/globals.css`'s `@theme` block is renamed from `--spacing-{2xs,xs,sm,md,lg,xl,2xl,3xl,4xl}` to `--spacing-zw-{2xs,xs,sm,md,lg,xl,2xl,3xl,4xl}` — numeric values unchanged. Every real consumer (36 occurrences across 19 files — `gap-*`, `p-*`/`px-*`/`py-*`, `m-*`/`mb-*`, `gap-x-*`/`gap-y-*`) was mechanically updated to the `zw-` prefixed class (e.g. `gap-md` → `gap-zw-md`, `p-lg` → `p-zw-lg`). `max-w-*`/`min-w-*` and any other Tailwind utility that reads the `--spacing-*` namespace as a fallback now resolves exclusively against Tailwind's own built-in `--container-*`/numeric scale, with nothing in this project's theme able to shadow it — for these 9 keys specifically, or for any future key, since `zw-` is not a t-shirt-size word Tailwind will ever define.
+- **Status:** CONFIRMED — implemented and verified. Compiled CSS inspected directly, post-fix: `.max-w-sm{max-width:var(--container-sm)}` (24rem), `.max-w-md{max-width:var(--container-md)}` (28rem), `.max-w-lg{max-width:var(--container-lg)}` (32rem), `.max-w-xl{max-width:var(--container-xl)}` (36rem) — all four are Tailwind v4's own documented default container values (`node_modules/tailwindcss/theme.css`), not hardcoded or guessed. Full details: `docs/reports/P1-E3-S2B-design-token-driver-visual-report.txt`.
+- **Reason:** P1-E3-S2A found and locally worked around (`max-w-[24rem]` on the sign-in card) a case of this collision; P1-E3-S2B's own repository-wide audit found it was systemic — every one of the project's 9 spacing keys shares a name with a Tailwind container-scale key, silently breaking `max-w-sm`/`md`/`lg`/`xl` (confirmed broken; `xs`/`2xs`/`2xl`/`3xl`/`4xl` share the same root cause though were unused as `max-w-*` at audit time) everywhere in the app, including `/select-organization` (`max-w-md`, silently broken since P1-E3-S1) and `DriverShell` (`max-w-md`, silently broken since P1-E3-S2 — the "448px compact Driver canvas" documented in ZD-115 was, in practice, computing to 16px until this fix). A durable fix had to remove the possibility of collision by construction (distinct namespace) rather than patch each symptom with arbitrary values, per the explicit instruction driving this phase.
+- **Affected Product Areas:** `src/app/globals.css`, and every component/page consuming the gap/padding/margin scale (see report §5 for the full 19-file list) or a named `max-w-*`/`min-w-*` utility.
+- **Dependencies:** ZD-115 (DriverShell's `max-w-md`, now genuinely 448px rather than nominally so)
+- **Owner:** Engineering / Design Systems
+- **Review Trigger:** Any future custom `@theme` addition — before naming a new token, check it against Tailwind's reserved namespace vocabulary (`--container-*`, `--text-*`, `--font-*`, `--leading-*`, `--tracking-*`, `--radius-*`, `--shadow-*`, `--ease-*`, etc., in `node_modules/tailwindcss/theme.css`) rather than assuming a project-chosen name is automatically safe — this is exactly the mistake that produced ZD-117 itself.
+
+### ZD-118 — DriverShell gains a border at `sm:` and up, matching the design system's established panel convention
+
+- **Date:** 2026-09-01
+- **Category:** Design
+- **Decision:** `DriverShell`'s capped `max-w-md` column gains `sm:border sm:border-border-subtle` alongside its existing `sm:shadow-md`, visible only at `sm:` (640px) and wider — the 390/430 primary target widths are unchanged (full-bleed, no border). Real visual QA at 768/1024/1440 (docs/design/qa/driver-today/) showed the capped column read as intentional even before this change (centered, shadowed, on a neutral `surface-secondary` background) — this is a small, additive refinement, not a fix for something broken.
+- **Status:** CONFIRMED — implemented and verified via real screenshots at all three wider widths.
+- **Reason:** The design system's own documented convention (application-implementation-plan.md "Distinguishing visual characteristics": "Subtle borders over shadows — panels are distinguished by a light border and background contrast, not drop shadows") was already established for every other panel in the app (`Panel.tsx`) but DriverShell's wider-viewport treatment used only a shadow. Adding the border brings it in line with that existing, already-approved convention rather than introducing a new decorative technique — the shadow was kept, not replaced, matching how `Panel`'s own `elevated` prop layers a shadow on top of its default border rather than substituting one for the other.
+- **Affected Product Areas:** `src/components/driver/DriverShell.tsx`
+- **Dependencies:** ZD-115
+- **Owner:** Design / Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-119 — Organization operational timezone: IANA-only, NOT NULL, no product-wide default
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Data model
+- **Decision:** `organizations.timezone` (`text`, `NOT NULL`) is added as the organization's own authority for interpreting any of its `timestamptz` columns as a local calendar day/clock time. It must be a genuine IANA zone identifier (`Area/Location`) or the literal `UTC` — never a fixed offset or abbreviation (`EST`, `GMT-5`) — enforced by a `CHECK` constraint (ZD-120), not merely a naming convention. No product-wide default timezone was hardcoded anywhere in the schema, migration, or application code — every organization states its own value explicitly (existing rows backfilled deliberately per-row at migration time, new rows required to supply one at INSERT since there is no column default).
+- **Status:** CONFIRMED — implemented and verified (217/217 SQL assertions including 13 new timezone-specific ones, real DST/midnight-boundary/multi-org/server-independence application-layer tests). Full record: docs/reports/P1-E3-S2C-operational-timezone-report.txt.
+- **Reason:** Driver Today (P1-E3-S2) originally computed "today"/displayed times using the Next.js server process's own timezone — correct only by coincidence when server and organization agree, and a genuine operational-correctness defect (not cosmetic) the moment they don't: a late-evening organization-local trip could be silently reclassified onto the wrong calendar day. The fix had to be an explicit, validated, organization-owned fact — never inferred from the server, the browser, or a hardcoded launch-market assumption, since the architecture must remain geography-neutral as Zenward expands beyond its first market.
+- **Affected Product Areas:** `organizations` table, `src/lib/auth/types.ts`/`membership.ts` (`OrganizationContext.organizationTimezone`), `src/lib/driver/trip-presentation.ts`, `src/app/driver/page.tsx`, `supabase/seed.sql`.
+- **Dependencies:** ZD-104 (org context resolution — extended, not replaced), ZD-116 (the original, now-superseded timezone simplification this decision corrects)
+- **Owner:** Engineering / Product
+- **Review Trigger:** When Operations screens (Today's Operations, Dispatch Board, Trip Detail, scheduling presentation) are built — they reuse this same `OrganizationContext.organizationTimezone` field, not a parallel mechanism (work item §15 of P1-E3-S2C).
+
+### ZD-120 — IANA timezone validator: a STABLE SQL function over `pg_timezone_names`, granted to `authenticated` (not revoked from public as the established internal-helper pattern would otherwise suggest)
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Security
+- **Decision:** `public.is_valid_iana_timezone(text)` accepts a value only if it is `UTC` or contains `/` **and** is present in `pg_timezone_names` (Postgres's own tzdata catalog) — the `/`-or-`UTC` rule specifically excludes `pg_timezone_names`' own legacy backward-compatibility entries (`EST`, `PST8PDT`, `Japan`, `GMT-0`, etc. — confirmed present in that catalog, and confirmed exactly the class this work item requires rejecting) that a bare catalog-membership check alone would not exclude. `STABLE`, not `IMMUTABLE` (it genuinely queries a system catalog) and **not** `SECURITY DEFINER` (it needs no elevated privilege — `pg_timezone_names` is already a public system view). `EXECUTE` is granted to `authenticated` — this deliberately departs from this project's established "revoke all internal helpers from public" pattern (e.g. `_is_valid_trip_transition`), because that pattern's safety depends on the helper being called only from within a `SECURITY DEFINER` wrapper (which runs as the function owner, unaffected by the caller's own grants); a `CHECK` constraint has no such wrapper — it evaluates under the privileges of whichever role is performing the `INSERT`/`UPDATE`, for **every** `CHECK` constraint on the row, regardless of which columns actually changed. Revoking `authenticated`'s `EXECUTE` was tried and directly, empirically confirmed to break an Organization Admin's ordinary `UPDATE organizations SET status = ...` (which never touches `timezone` at all) with `permission denied for function is_valid_iana_timezone` — not assumed, reproduced live before this grant was added.
+- **Status:** CONFIRMED — implemented and verified (`organization_timezone_tests.sql` TZ-VALID-1/TZ-INVALID-1/TZ-CONSTRAINT-1..3/TZ-PRIVILEGE-1/2, plus a direct live reproduction of the break-then-fix).
+- **Reason:** A narrow, maintainable, standards-based validation boundary was required (work item §6) without building a timezone-management feature. This is the correct, minimal mechanism — and the privilege nuance above is recorded explicitly so a future internal-helper function relying on the "just revoke from public" reflex doesn't silently reintroduce this exact class of bug the moment it's referenced from a `CHECK` constraint rather than a `SECURITY DEFINER` wrapper.
+- **Affected Product Areas:** `public.is_valid_iana_timezone`, `organizations_timezone_valid_iana` (the `CHECK` constraint)
+- **Dependencies:** ZD-119
+- **Owner:** Security / Engineering
+- **Review Trigger:** Any future `CHECK` constraint that calls a helper function — verify the calling role's own `EXECUTE` privilege explicitly, by live test, not by analogy to the `SECURITY DEFINER`-wrapped internal-helper pattern.
+
+### ZD-121 — Seed fixture timezones: Org A and Org B deliberately differ, neither is a product-wide default
+
+- **Date:** 2026-09-01
+- **Category:** Product / Testing
+- **Decision:** The two local seed organizations are assigned explicit, **different** timezones — Org A (`Fictional Org A`) = `America/New_York`, Org B (`Fictional Org B`) = `America/Chicago` — rather than both defaulting to the same value. Org A's value matches the Georgia-launch framing already established throughout this project's fixtures; Org B's is a deliberately distinct real US timezone chosen specifically so the existing `multi-org-user@example.test` fixture (Org A admin, Org B driver) exercises genuine multi-organization-timezone-context behavior without inventing new fixtures. Neither value is read anywhere in application/migration code as a default — the migration's own backfill (for hypothetically pre-existing rows) independently uses `America/New_York`, matching the actual current single-market reality, but that backfill path is a no-op on every fresh `db reset` (seed.sql's own explicit `INSERT ... timezone` values are what actually apply, and always will, until a real second market exists).
+- **Status:** CONFIRMED — implemented and verified (`organization_timezone_tests.sql` TZ-SEED-1; real live query against `multi-org-user@example.test`'s own session confirming both distinct values resolve correctly per organization).
+- **Reason:** Work item §5/§13 explicitly required assigning deliberate, appropriate fixture values (not a blanket default) and explicitly required real multi-org-timezone test coverage — differentiating the two existing seed organizations satisfies both without adding a third fixture organization or a third fixture user.
+- **Affected Product Areas:** `supabase/seed.sql`
+- **Dependencies:** ZD-119
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated
+
+### ZD-122 — Driver presentation helpers require an explicit timezone parameter; no fallback
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `formatTripTime`, `formatLongDate`, and `isSameOperationalDay` (renamed from `isSameLocalDay` — `src/lib/driver/trip-presentation.ts`) all take `timezone: string` as a **required**, non-optional parameter. There is no default value and no fallback to the runtime's own local timezone anywhere in this file. A future call site with no timezone available has a bug to fix at that call site, not a default to silently reach for here.
+- **Status:** CONFIRMED — implemented; TypeScript's own required-parameter checking is the enforcement mechanism (verified: `tsc --noEmit` would reject any call site omitting the argument).
+- **Reason:** Work item §10 of P1-E3-S2C explicitly forbids a silent server-local fallback for operational screens — the entire point of this phase was eliminating exactly that failure mode, so the fix had to make it a compile-time impossibility to reintroduce, not merely a documented convention.
+- **Affected Product Areas:** `src/lib/driver/trip-presentation.ts`, `src/app/driver/page.tsx`
+- **Dependencies:** ZD-119, supersedes the runtime-local-timezone approach from P1-E3-S2 (originally recorded at ZD-116)
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated — any future Driver/Operations screen needing time formatting reuses these same functions, inheriting the same guarantee.
+
+### ZD-123 — `create_trip`'s `timestamptz` scheduling parameters are already correct; the open question is a future UI's own responsibility, not an RPC change
+
+- **Date:** 2026-09-01
+- **Category:** Architecture (documentation-only decision — no code changed)
+- **Decision:** `create_trip`'s `p_scheduled_pickup_at`/`p_appointment_at` parameters (docs/data/mutation-api.md) are `timestamptz` — an absolute, already-UTC-normalized instant — and remain unchanged in this phase. This is already correct at the database layer: a `timestamptz` parameter needs no timezone tag of its own once supplied. The genuinely open question is entirely a *future UI* concern: whichever Operations "New Trip" form is eventually built (P1-E3-S6, not yet built) must convert a locally-entered wall-clock time ("10:00 AM") into a correct UTC instant using the organization's own `timezone` (now available via `OrganizationContext.organizationTimezone`) before calling `create_trip` — no such conversion exists yet because no such form exists yet.
+- **Status:** CONFIRMED — inspected, not modified, per explicit instruction (work item §16 of P1-E3-S2C: "Do not reinterpret input timestamps or redesign create_trip in this phase unless current API semantics genuinely require correction" — they don't).
+- **Reason:** Recording this now, before the relevant UI is built, means the future form's own implementation phase starts from a documented, already-identified requirement rather than rediscovering the same timezone-conversion question P1-E3-S2C exists to answer.
+- **Affected Product Areas:** None changed; `create_trip` (docs/data/mutation-api.md) is the forward reference point.
+- **Dependencies:** ZD-119, ZD-102 (`create_trip`'s original architecture)
+- **Owner:** Product / Engineering
+- **Review Trigger:** When the Internal New Trip / scheduling-presentation UI is actually built — implement the local-to-UTC conversion there, using `organizationTimezone`, before any timestamp reaches `create_trip`.
+
 No decisions have been REJECTED or SUPERSEDED as of this update.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

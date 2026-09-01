@@ -18,6 +18,11 @@ const TRIP_STATUS_MAP: Record<string, StatusCategory> = {
   "Running Late": "warning",
   Arrived: "active",
   "Passenger Onboard": "active",
+  /** Added P1-E3-S2 — Driver-facing leg-disambiguated labels (see src/lib/driver/trip-presentation.ts). */
+  "Heading to Pickup": "active",
+  "At Pickup": "active",
+  "Heading to Destination": "active",
+  "At Destination": "active",
   "Attention Required": "critical",
   "No Show": "critical",
   Completed: "completed",

@@ -56,9 +56,20 @@ where id in (
 -- ---------------------------------------------------------------------------
 -- Organizations
 -- ---------------------------------------------------------------------------
-insert into public.organizations (id, name, status) values
-  ('10000000-0000-0000-0000-0000000000a1', 'Fictional Org A', 'active'),
-  ('10000000-0000-0000-0000-0000000000b1', 'Fictional Org B', 'active');
+-- Deliberately DIFFERENT timezones for Org A/B (P1-E3-S2C), not both
+-- defaulted to the same value — this is what actually exercises the
+-- multi-org-timezone-context test matrix (a real user, multi-org-user@,
+-- already holds Memberships in both), without inventing new fixtures.
+-- Org A = America/New_York (the Georgia-launch fixture, matching every
+-- other Org A fixture's own real-world framing throughout this project);
+-- Org B is deliberately a DIFFERENT real US timezone (America/Chicago) so
+-- the two orgs are genuinely distinguishable in tests, not a second
+-- "also Georgia" org — neither value is a product-wide default (see the
+-- migration's own backfill, which uses America/New_York only for
+-- pre-existing rows at migration time, not as an application default).
+insert into public.organizations (id, name, status, timezone) values
+  ('10000000-0000-0000-0000-0000000000a1', 'Fictional Org A', 'active', 'America/New_York'),
+  ('10000000-0000-0000-0000-0000000000b1', 'Fictional Org B', 'active', 'America/Chicago');
 
 -- ---------------------------------------------------------------------------
 -- Platform admin grant
@@ -168,6 +179,48 @@ insert into public.trip_assignments (organization_id, trip_id, driver_id, vehicl
    '30000000-0000-0000-0000-0000000000a2', null, '20000000-0000-0000-0000-0000000000a2'),
   ('10000000-0000-0000-0000-0000000000b1', '80000000-0000-0000-0000-0000000000b1',
    '30000000-0000-0000-0000-0000000000b1', '50000000-0000-0000-0000-0000000000b1', '20000000-0000-0000-0000-0000000000b2');
+
+-- ---------------------------------------------------------------------------
+-- Driver Today QA fixtures (P1-E3-S2, timezone-anchored P1-E3-S2C) — two
+-- trips anchored to TODAY IN ORG A'S OWN OPERATIONAL TIMEZONE
+-- (America/New_York) — not the database session's timezone (UTC) and not
+-- a raw offset from now(), so a `db reset` run late in the UTC day (or
+-- across a DST boundary) still lands the same organization-local hour and
+-- never rolls a fixture past ORG A's OWN midnight. `midnight_ny` is
+-- America/New_York's own midnight, TODAY, computed via the standard
+-- double-AT-TIME-ZONE round-trip (see
+-- docs/reports/P1-E3-S2C-operational-timezone-report.txt), expressed back
+-- as an absolute timestamptz — exactly the same "org-local calendar day"
+-- concept src/lib/driver/trip-presentation.ts now uses to group Driver
+-- Today. Assigned to Driver A1, so Driver Today has real, non-empty,
+-- non-fabricated data to render: one "next" trip and one "later today"
+-- trip. Reuses the existing Org A passenger, driver, and vehicle fixtures
+-- rather than inventing new ones.
+-- ---------------------------------------------------------------------------
+with org_a_today as (
+  select ((now() at time zone 'America/New_York')::date)::timestamp at time zone 'America/New_York' as midnight_ny
+)
+insert into public.trips (
+  id, organization_id, passenger_id, state, scheduled_pickup_at, appointment_at,
+  pickup_description, destination_description
+)
+select '95000000-0000-0000-0000-0000000000a1'::uuid, '10000000-0000-0000-0000-0000000000a1'::uuid,
+   '40000000-0000-0000-0000-0000000000a1'::uuid, 'scheduled',
+   midnight_ny + interval '10 hours', midnight_ny + interval '11 hours',
+   '1284 Glenwood Avenue SE, Atlanta, GA 30316', 'Fictional Clinic A'
+from org_a_today
+union all
+select '95000000-0000-0000-0000-0000000000a2'::uuid, '10000000-0000-0000-0000-0000000000a1'::uuid,
+   '40000000-0000-0000-0000-0000000000a1'::uuid, 'scheduled',
+   midnight_ny + interval '14 hours', null,
+   '789 Fictional Rd, Atlanta, GA', 'Fictional Clinic A'
+from org_a_today;
+
+insert into public.trip_assignments (organization_id, trip_id, driver_id, vehicle_id, assigned_by) values
+  ('10000000-0000-0000-0000-0000000000a1', '95000000-0000-0000-0000-0000000000a1',
+   '30000000-0000-0000-0000-0000000000a1', '50000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000a2'),
+  ('10000000-0000-0000-0000-0000000000a1', '95000000-0000-0000-0000-0000000000a2',
+   '30000000-0000-0000-0000-0000000000a1', '50000000-0000-0000-0000-0000000000a1', '20000000-0000-0000-0000-0000000000a2');
 
 -- ---------------------------------------------------------------------------
 -- Trip notes (one of each visibility, on trip A1)

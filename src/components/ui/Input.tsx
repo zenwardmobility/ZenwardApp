@@ -45,7 +45,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           aria-invalid={Boolean(error) || undefined}
           className={cn(
             typography.body,
-            "rounded-sm border bg-surface-elevated text-text-primary placeholder:text-text-disabled disabled:cursor-not-allowed disabled:bg-surface-secondary disabled:text-text-disabled",
+            "w-full rounded-sm border bg-surface-elevated text-text-primary placeholder:text-text-disabled disabled:cursor-not-allowed disabled:bg-surface-secondary disabled:text-text-disabled",
             size === "lg" ? "h-12 px-4" : "h-10 px-3",
             error ? "border-critical-strong" : "border-border-strong",
             className,

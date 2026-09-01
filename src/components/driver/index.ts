@@ -6,3 +6,4 @@ export * from "./DriverTripRow";
 export * from "./DriverPrimaryAction";
 export * from "./DriverInstruction";
 export * from "./DriverRoute";
+export * from "./DriverNextTripCard";

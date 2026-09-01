@@ -1,0 +1,520 @@
+====================================================================
+Project:            Zenward Platform
+Phase:               P1-E3-S2B — Tailwind v4 Design-Token Collision & Driver Visual Validation
+Repository:          /Users/datamatics/ZenWard
+Environment:         LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:          main
+Git HEAD before work: 1f529eb419e74caf86b8c58873dd535c986f94bf (unchanged — nothing committed during this phase)
+Date/time:           2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+1. ORIGINAL TOKEN COLLISION
+--------------------------------------------------------------------
+P1-E3-S2A found (fixing the sign-in card only) that `max-w-sm` compiled
+to `max-width: var(--spacing-sm)` = 8px instead of Tailwind's intended
+~24rem, because this project's `globals.css` `@theme` block defines a
+custom `--spacing-sm` token for gap/padding use. This phase's job was
+to determine whether that was a one-off or systemic, and fix it at the
+root rather than per-symptom.
+
+--------------------------------------------------------------------
+2. TAILWIND VERSION
+--------------------------------------------------------------------
+`node_modules/tailwindcss/package.json` → **4.3.3**.
+
+--------------------------------------------------------------------
+3. AFFECTED CUSTOM TOKENS
+--------------------------------------------------------------------
+Every named key in the project's spacing scale collides with a
+same-named key in Tailwind's own built-in `--container-*` scale
+(`node_modules/tailwindcss/theme.css`, confirmed by direct inspection):
+
+| Project token (was) | Value | Tailwind's `--container-{key}` |
+|---|---|---|
+| `--spacing-2xs` | 0.125rem | `--container-2xs: 18rem` |
+| `--spacing-xs` | 0.25rem | `--container-xs: 20rem` |
+| `--spacing-sm` | 0.5rem | `--container-sm: 24rem` |
+| `--spacing-md` | 1rem | `--container-md: 28rem` |
+| `--spacing-lg` | 1.5rem | `--container-lg: 32rem` |
+| `--spacing-xl` | 2rem | `--container-xl: 36rem` |
+| `--spacing-2xl` | 3rem | `--container-2xl: 42rem` |
+| `--spacing-3xl` | 4rem | `--container-3xl: 48rem` |
+| `--spacing-4xl` | 5rem | `--container-4xl: 56rem` |
+
+All 9 project spacing keys collide — not just the 4 (sm/md/lg/xl)
+P1-E3-S2A had directly observed. `2xs`/`xs`/`2xl`/`3xl`/`4xl` had no
+real `max-w-*` consumer in the codebase at audit time (§5), so their
+breakage was latent, not yet visibly manifested — but exactly as real
+a defect, and left unfixed would have silently bitten the first future
+use of `max-w-xl`/`max-w-2xl`/etc.
+
+**Mechanism, confirmed empirically, not guessed:** Tailwind v4's
+`max-width`/`min-width` utilities resolve a named key (`sm`, `md`, …)
+by checking the shared `--spacing-*` namespace (the same namespace
+`gap-*`/`p-*`/`m-*`/etc. use) as well as their own dedicated
+`--container-*` namespace, and prefer a same-named `--spacing-*` entry
+when the project has defined one. Stock, unmodified Tailwind v4 has no
+named `--spacing-{key}` entries at all (only a single `--spacing:
+0.25rem` base multiplier for numeric utilities like `p-4`) — this
+collision exists ONLY because this project added its own named
+`--spacing-sm`/`-md`/etc. keys that happen to share Tailwind's
+reserved container-scale vocabulary. Confirmed directly from the
+compiled CSS bundle both before and after: `max-w-5xl`/`max-w-6xl`
+(sizes the project never defined a colliding `--spacing-*` entry for)
+correctly used `--container-5xl`/`--container-6xl` throughout, proving
+the mechanism precisely.
+
+--------------------------------------------------------------------
+4. AFFECTED UTILITY FAMILIES
+--------------------------------------------------------------------
+Confirmed collision: `max-w-*` (verified broken for sm/md/lg/xl;
+inferred — same mechanism, same colliding token — for 2xs/xs/2xl/3xl/
+4xl, unused in practice). `min-w-*` shares the identical Tailwind
+resolution mechanism as `max-w-*`; repository search found zero
+`min-w-{key}` usages anywhere in `src/`, so it was audited but had
+nothing to fix. `gap-*`/`p-*`/`px-*`/`py-*`/`pt-*`/`pb-*`/`pl-*`/
+`pr-*`/`m-*`/`mx-*`/`my-*`/`mt-*`/`mb-*`/`ml-*`/`mr-*`/`space-x-*`/
+`space-y-*` were never broken themselves (they correctly read
+`--spacing-*`, which is exactly what the project intended for them) —
+they are the tokens' real, working consumers, listed in full below.
+
+--------------------------------------------------------------------
+5. REPOSITORY-WIDE USAGE INVENTORY
+--------------------------------------------------------------------
+**`max-w-*` consumers found (6 real usages, all silently broken before
+this phase's fix):**
+
+| File | Class | Was resolving to | Now resolves to |
+|---|---|---|---|
+| `src/app/sign-in/page.tsx` | `max-w-[24rem]` (P1-E3-S2A workaround) | n/a (arbitrary value, unaffected by the collision) | reverted to `max-w-sm` → 24rem (§12) |
+| `src/app/access-unavailable/page.tsx` | `max-w-sm` | 8px | 24rem |
+| `src/app/foundation/page.tsx` | `max-w-sm` | 8px | 24rem |
+| `src/app/(public)/healthcare-providers/page.tsx` | `max-w-xl` | 32px | 36rem |
+| `src/app/(public)/request-transportation/page.tsx` | `max-w-xl` | 32px | 36rem |
+| `src/app/select-organization/page.tsx` | `max-w-md` | 16px | 28rem |
+| `src/components/driver/DriverShell.tsx` | `max-w-md` | 16px | 28rem |
+
+**`--spacing-*` (gap/padding/margin) real consumers found: 36
+occurrences across 19 files** — every one kept working exactly as
+before (same numeric value), now via the renamed `zw-` keys:
+
+`src/app/foundation/page.tsx` (11×`mb-lg`, `gap-md`×2, `w-sm`,
+`py-2xl`, `px-md`, `gap-2xl`), `src/app/operations/page.tsx`
+(`gap-lg`), `src/components/ui/DataTable.tsx` (`py-sm`×2, `px-md`×2),
+`src/components/ui/SummaryStrip.tsx` (`py-md`, `px-lg`),
+`src/components/ui/Panel.tsx` (`p-lg`), `src/components/ui/
+EmptyState.tsx` (`py-3xl`, `px-lg`), `src/components/ui/
+DefinitionList.tsx` (`gap-y-md`, `gap-x-lg`), `src/components/ui/
+AttentionState.tsx` (`py-md`, `px-lg`), `src/components/scaffold/
+OperationsRouteStub.tsx` (`gap-lg`), `src/components/public/
+SectionContainer.tsx` (`py-3xl`, `py-2xl`, `px-xl`, `px-md`),
+`src/components/public/PublicHeader.tsx` (`px-xl`, `px-md`),
+`src/components/public/PublicFooter.tsx` (`py-xl`, `px-xl`, `px-md`),
+`src/components/public/HeroContainer.tsx` (`py-4xl`, `py-3xl`,
+`px-xl`, `px-md`), `src/components/operations/OperationsShell.tsx`
+(`py-xl`, `py-lg`, `px-lg`), `src/components/driver/DriverTripCard.tsx`
+(`p-md`), `src/components/driver/DriverShell.tsx` (`py-md`),
+`src/components/driver/DriverNextTripCard.tsx` (`p-lg`),
+`src/components/driver/DriverInstruction.tsx` (`py-md`, `px-md`),
+`src/components/auth/SignInForm.tsx` (`gap-md`, `gap-lg`).
+
+None of the 9 spacing keys were unused overall — `2xs`/`xs` genuinely
+have zero real consumers (confirmed by grep) and were renamed anyway,
+for consistency and to future-proof against the exact same collision
+recurring the moment someone uses `max-w-xs`/`max-w-2xs`.
+
+--------------------------------------------------------------------
+6. CHOSEN DURABLE FIX
+--------------------------------------------------------------------
+Renamed every custom spacing key from `--spacing-{key}` to
+`--spacing-zw-{key}` in `src/app/globals.css` (numeric values
+unchanged), and mechanically updated all 36 real consumers to the
+`zw-` prefixed class name (`gap-md` → `gap-zw-md`, `p-lg` → `p-zw-lg`,
+etc.). This keeps the tokens under Tailwind's genuinely-intended
+`--spacing-*` namespace (so `gap-*`/`p-*`/`m-*` utility generation
+keeps working automatically, unlike moving to an entirely different
+CSS-variable prefix, which would have required manually re-declaring
+every utility with `@utility` or falling back to verbose arbitrary-
+value syntax everywhere) while making the *key* itself permanently
+un-collidable with Tailwind's reserved container/size vocabulary —
+`zw` is not, and will never be, a t-shirt-size word Tailwind defines.
+`max-w-*`/`min-w-*` (and any future utility that shares the
+`--spacing-*` fallback behavior) now resolve exclusively against
+Tailwind's own scale, with nothing in this project able to shadow it,
+for any of the 9 renamed keys or any future one. Recorded as ZD-117.
+
+Explicitly not done: no per-usage arbitrary-value patching (rejected —
+work item §4 explicit instruction, and it would have left the root
+collision live for the next person to rediscover); no deletion of the
+custom spacing scale (rejected — 36 real, working consumers depend on
+it, per work item §3's explicit caution).
+
+--------------------------------------------------------------------
+7. CUSTOM SPACING MIGRATION
+--------------------------------------------------------------------
+| Old key | New key | Value (unchanged) |
+|---|---|---|
+| `--spacing-2xs` | `--spacing-zw-2xs` | 0.125rem / 2px |
+| `--spacing-xs` | `--spacing-zw-xs` | 0.25rem / 4px |
+| `--spacing-sm` | `--spacing-zw-sm` | 0.5rem / 8px |
+| `--spacing-md` | `--spacing-zw-md` | 1rem / 16px |
+| `--spacing-lg` | `--spacing-zw-lg` | 1.5rem / 24px |
+| `--spacing-xl` | `--spacing-zw-xl` | 2rem / 32px |
+| `--spacing-2xl` | `--spacing-zw-2xl` | 3rem / 48px |
+| `--spacing-3xl` | `--spacing-zw-3xl` | 4rem / 64px |
+| `--spacing-4xl` | `--spacing-zw-4xl` | 5rem / 80px |
+
+Zero visual/numeric change to any gap, padding, or margin anywhere in
+the app — verified by (a) the values themselves being copied verbatim
+in the rename, and (b) the foundation showcase page, sign-in, Driver
+Today, and Operations pages all screenshotting with unchanged spacing
+rhythm (§14-19, §21).
+
+--------------------------------------------------------------------
+8. COMPILED max-w-sm RESULT
+--------------------------------------------------------------------
+`.max-w-sm { max-width: var(--container-sm); }` → **24rem (384px)** —
+Tailwind v4's own default `--container-sm` value, confirmed directly
+in `node_modules/tailwindcss/theme.css`, not hardcoded from this
+prompt.
+
+--------------------------------------------------------------------
+9. COMPILED max-w-md RESULT
+--------------------------------------------------------------------
+`.max-w-md { max-width: var(--container-md); }` → **28rem (448px)** —
+Tailwind's own default `--container-md`. This is the exact value
+DriverShell's own P1-E3-S2 documentation always claimed ("448px
+compact Driver canvas") — now genuinely true, not merely stated.
+
+--------------------------------------------------------------------
+10. COMPILED max-w-lg RESULT
+--------------------------------------------------------------------
+`.max-w-lg { max-width: var(--container-lg); }` → **32rem (512px)** —
+Tailwind's own default `--container-lg`. (No current consumer in this
+codebase; verified for completeness per work item §6's "at minimum
+inspect sm/md/lg/xl" instruction.)
+
+--------------------------------------------------------------------
+11. COMPILED max-w-xl RESULT
+--------------------------------------------------------------------
+`.max-w-xl { max-width: var(--container-xl); }` → **36rem (576px)** —
+Tailwind's own default `--container-xl`. Consumed by
+`healthcare-providers`/`request-transportation` (§5).
+
+--------------------------------------------------------------------
+12. SIGN-IN WORKAROUND CLEANUP
+--------------------------------------------------------------------
+`src/app/sign-in/page.tsx`: `max-w-[24rem]` → `max-w-sm`, confirmed
+safe only after §8 proved the compiled value now matches exactly
+(24rem either way — a pure semantic-class restoration, zero visual
+change). `w-full`, the full-width `Input`/`form`, and the approved
+Zenward logo (P1-E3-S2A) are all preserved unchanged. Re-screenshotted
+at 390/430/768/1440 (§21) — identical to the P1-E3-S2A "after" state.
+
+--------------------------------------------------------------------
+13. DRIVERSHELL RESULT
+--------------------------------------------------------------------
+`max-w-md` now compiles to `var(--container-md)` = 28rem/448px,
+confirmed directly from the compiled CSS (§9) — no longer 16px. Real
+screenshots (§14-18) confirm the rendered column is genuinely ~448px
+at 768/1024/1440, correctly full-width (edge-to-edge) at 390/430
+where 448px exceeds the viewport. One additional, deliberate
+refinement was made (not required to fix the collision, but judged
+worthwhile after visual review — §20): a `sm:border` was added
+alongside the existing `sm:shadow-md`, matching the design system's
+own established "borders over shadows" panel convention (ZD-118).
+
+--------------------------------------------------------------------
+14. 390 DRIVER SCREENSHOT QA
+--------------------------------------------------------------------
+Real screenshot, real authenticated session (`org-a-driver-a@
+example.test`, real Supabase Auth password grant — see §"Method"
+below), real seeded trip data:
+`docs/design/qa/driver-today/390-driver-today.png`. Card full-width
+edge-to-edge (448px cap exceeds the 390px viewport, so no visible
+constraint — correct, unchanged mobile behavior), header/avatar/
+identity/sign-out all render correctly, Next Trip card and Later
+Today row both show real data ("Fictional Passenger A1", real
+address, real times), bottom nav all 4 tabs visible with correct
+active state. **PASS.**
+
+--------------------------------------------------------------------
+15. 430 DRIVER SCREENSHOT QA
+--------------------------------------------------------------------
+`docs/design/qa/driver-today/430-driver-today.png` — same result as
+390, full-width, no overflow, no clipping. **PASS.**
+
+--------------------------------------------------------------------
+16. 768 DRIVER SCREENSHOT QA
+--------------------------------------------------------------------
+`docs/design/qa/driver-today/768-driver-today.png` — the shell caps
+at ~448px, centered, with the neutral `surface-secondary` background
+visible on both sides; card/content proportions inside remain
+identical to the mobile screenshots (same card, same spacing, same
+type scale) — confirming the cap doesn't distort the Driver-specific
+composition. **PASS.**
+
+--------------------------------------------------------------------
+17. 1024 DRIVER SCREENSHOT QA
+--------------------------------------------------------------------
+`docs/design/qa/driver-today/1024-driver-today.png` — same ~448px
+cap, now with substantially more surrounding background; the new
+`sm:border` (§13/§20) visibly delineates the panel. **PASS.**
+
+--------------------------------------------------------------------
+18. DESKTOP DRIVER SCREENSHOT QA
+--------------------------------------------------------------------
+`docs/design/qa/driver-today/1440-driver-today.png` (1440×900) — same
+result; the capped column reads clearly as a deliberate, self-
+contained panel against the wide desktop canvas rather than a
+stretched or broken layout. **PASS.**
+
+--------------------------------------------------------------------
+19. STITCH COMPARISON
+--------------------------------------------------------------------
+Directly compared `docs/design/qa/driver-today/390-driver-today.png`
+against `docs/design/stitch/references/06-driver-today.png` (the
+reference file itself was not modified — confirmed via `git status`
+showing no change to any file under
+`docs/design/stitch/references/`):
+
+- **Overall width/composition:** matches — single-column mobile card
+  stack, same section ordering (header → Today heading/date/count →
+  Next Trip → Later Today → bottom nav).
+- **Header proportions:** compact top bar, avatar-left + brand/
+  identity text + trailing action, matches the reference's density.
+  Deliberate content difference (real driver name instead of a
+  fabricated "On Shift" status, sign-out instead of a non-functional
+  bell) — documented already in P1-E3-S2 (work item §14/§27 there).
+- **Card proportions:** the featured Next Trip card's padding,
+  corner radius, and internal spacing rhythm match the reference's
+  visual language closely.
+- **Typography:** large bold "Today" heading, bold teal time, bold
+  passenger name, muted metadata labels — same hierarchy as the
+  reference.
+- **Visual hierarchy / current-next-trip emphasis:** the featured
+  card is clearly dominant (larger, bordered, CTA button) versus the
+  compact Later Today row — matches the reference's own emphasis
+  pattern.
+- **Spacing:** consistent internal rhythm, matches the reference's
+  restrained density (not cramped, not oversized).
+- **Bottom nav:** same 4-tab structure/icons/labels; active-tab
+  treatment differs slightly (color+weight change here vs. a filled
+  rounded highlight in the reference) — a minor, pre-existing,
+  non-blocking stylistic difference, not introduced this phase.
+- **Status badge:** same pill treatment, teal/mint for active states.
+- **Route display:** dot-line-dot connector with Pickup/Destination
+  labels, matching the reference's route-timeline metaphor (pin/flag
+  icons in the reference vs. colored dots here — an existing,
+  documented, reasonable simplification reusing the pre-existing
+  `DriverRoute` component, not introduced this phase).
+- **Large-screen treatment:** the reference shows no large-screen
+  variant at all (mobile-only mockup) — this phase's own contribution
+  (§13/§20) is exactly the large-screen behavior the reference is
+  silent on.
+
+**Conclusion: same design language, faithfully reproduced** — not a
+literal pixel clone (never claimed as one), consistent with every
+prior phase's own framing of this reference set.
+
+--------------------------------------------------------------------
+20. TABLET/DESKTOP DRIVER-WIDTH DECISION
+--------------------------------------------------------------------
+Assessed directly against real screenshots at 768/1024/1440 (§16-18).
+**Judgment: the ~448px capped, centered column already read as
+deliberate — not "an awkward tiny phone floating in empty space"** —
+because it is centered, sits on a neutral (not stark white/black)
+background, and already carried a shadow. It was not judged broken.
+
+One small, restrained refinement was still made: `sm:border
+sm:border-border-subtle` was added alongside the existing
+`sm:shadow-md`, so the panel is unambiguously "a deliberate object,"
+consistent with the design system's own already-established "borders
+over shadows" panel convention used everywhere else (ZD-118) — not a
+new decorative technique invented for this one component. No change
+to internal composition, no sidebar, no multi-column layout was
+added — Driver remains, deliberately, a single mobile-shaped column
+at every width, never becoming a second Operations-style dashboard.
+Full-bleed edge-to-edge behavior at the 390/430 primary target widths
+is completely unchanged.
+
+--------------------------------------------------------------------
+21. SIGN-IN REGRESSION QA
+--------------------------------------------------------------------
+Real screenshots re-captured after the token fix at 390, 430, 768,
+1440 (`/tmp/signin_qa/s2b_390.png`, `s2b_430.png` (inline-inspected as
+768 at that size — see below), `s2b_768.png`, `s2b_1440.png` — session
+scratchpad, not committed to the repo). All four: card correctly
+capped at 24rem (now via the semantic `max-w-sm` class, §12), centered,
+one-line "Sign in" heading, natural-sentence body copy, full-width
+inputs/button, no overflow, no clipping. The approved Zenward logo
+(P1-E3-S2A) renders correctly at every size. **PASS at all four
+widths — the P1-E3-S2A fix remains fully intact.** `/select-
+organization` (`max-w-md`, previously silently broken identically to
+sign-in — a genuine additional finding of this phase's audit, §5) was
+also spot-checked and confirmed now correct.
+
+--------------------------------------------------------------------
+22. BROADER MAX-WIDTH REGRESSION FINDINGS
+--------------------------------------------------------------------
+`/foundation` (showcase page, `max-w-sm`) and `/healthcare-providers`
+(`max-w-xl`) were spot-checked by real screenshot after the fix — both
+render with sensible, non-broken width and natural text wrapping, no
+unexpectedly-wide or unexpectedly-narrow panels. No component was
+found to have been accidentally relying on the broken 8px/16px
+behavior as a de facto feature — every real usage's authors clearly
+intended the standard Tailwind container width (confirmed by each
+usage's own visual context: a centered card, a body-copy width
+constraint, a compact app shell), so no compensating change was
+needed anywhere beyond the sign-in workaround cleanup (§12).
+
+--------------------------------------------------------------------
+23. DRIVER SECURE-READ REGRESSION
+--------------------------------------------------------------------
+`grep -rn "\.rpc(" src/app/driver src/components/driver src/lib/driver
+src/lib/auth/authorization.ts` → exactly 2 calls: `driver_get_profile`
+(`src/lib/auth/authorization.ts`, pre-existing) and
+`driver_list_active_trips` (`src/app/driver/page.tsx`, pre-existing).
+`grep` for any direct `passengers`/`trips`/`trip_assignments` table
+read anywhere in Driver application code → **zero matches**. No RLS
+policy, RPC, schema, or migration file was touched — confirmed via
+`git status --short supabase/migrations/` returning empty. Secure
+read architecture is completely unchanged.
+
+--------------------------------------------------------------------
+24. AUTHENTICATION REGRESSION
+--------------------------------------------------------------------
+**41/41 PASS** — full existing auth integration suite, re-run against
+the actual running app after all changes in this phase, from a fresh
+`supabase db reset`.
+
+--------------------------------------------------------------------
+25. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` → exit 0, zero errors (re-run as the final step
+before this report).
+
+--------------------------------------------------------------------
+26. LINT
+--------------------------------------------------------------------
+`npm run lint` (eslint) → exit 0, zero errors/warnings.
+
+--------------------------------------------------------------------
+27. BUILD
+--------------------------------------------------------------------
+`npm run build` → succeeded (Next.js 16.3.3, Turbopack). All 24 routes
+generated, `ƒ Proxy (Middleware)` present, no warnings.
+
+**Process note, for accuracy (matching this project's standing
+practice of reporting testing incidents honestly rather than silently
+correcting them):** the full SQL regression suite was run once mid-
+phase and returned 188/204 with 13 failures, all shaped as idempotent-
+no-op/already-mutated-state symptoms ("changed=f", "reassignment did
+not happen", accumulated note counts). This was NOT a real regression
+— it was a stale-database-state artifact from the SQL test files
+(which mutate real rows and are not designed to be re-run without an
+intervening `supabase db reset`) having been exercised more than once
+across this session's accumulated activity without a reset in
+between. Confirmed by immediately re-running `supabase db reset`
+followed by one clean suite run: **204/204 PASS, zero failures** —
+recorded as the authoritative result. No design-token/CSS change in
+this phase touches the database in any way (confirmed: zero migration
+file changes), so this was purely a test-hygiene artifact of the
+session's own accumulated manual testing, not a code defect.
+
+Final, authoritative validation, all against the same fresh-reset
+state: 204/204 SQL assertions, 41/41 auth checks, Driver Today
+functional/security checks all PASS (§24, §23).
+
+--------------------------------------------------------------------
+28. FILES CREATED
+--------------------------------------------------------------------
+docs/design/qa/driver-today/390-driver-today.png
+docs/design/qa/driver-today/430-driver-today.png
+docs/design/qa/driver-today/768-driver-today.png
+docs/design/qa/driver-today/1024-driver-today.png
+docs/design/qa/driver-today/1440-driver-today.png
+docs/reports/P1-E3-S2B-design-token-driver-visual-report.txt
+
+(docs/design/stitch/references/06-driver-today.png was NOT modified —
+confirmed via git status.)
+
+--------------------------------------------------------------------
+29. FILES MODIFIED
+--------------------------------------------------------------------
+docs/design/component-inventory.md
+docs/product/decision-register.md
+src/app/globals.css (the 9-key token rename)
+src/app/sign-in/page.tsx (workaround cleanup, §12)
+src/components/driver/DriverShell.tsx (border refinement, §13/§20)
+src/app/foundation/page.tsx
+src/app/operations/page.tsx
+src/components/auth/SignInForm.tsx
+src/components/driver/DriverInstruction.tsx
+src/components/driver/DriverNextTripCard.tsx
+src/components/driver/DriverTripCard.tsx
+src/components/operations/OperationsShell.tsx
+src/components/public/HeroContainer.tsx
+src/components/public/PublicFooter.tsx
+src/components/public/PublicHeader.tsx
+src/components/public/SectionContainer.tsx
+src/components/scaffold/OperationsRouteStub.tsx
+src/components/ui/AttentionState.tsx
+src/components/ui/DataTable.tsx
+src/components/ui/DefinitionList.tsx
+src/components/ui/EmptyState.tsx
+src/components/ui/Panel.tsx
+src/components/ui/SummaryStrip.tsx
+
+(The last 18 files above received only the mechanical `zw-` class
+rename described in §5/§7 — no other change.)
+
+(P1-E3-S2/S2A's own files — `src/lib/auth/authorization.ts`,
+`src/lib/auth/types.ts`, `src/app/driver/*`, `src/components/driver/
+DriverHeader.tsx`/`DriverLayoutClient.tsx`/`DriverBottomNavigation.tsx`/
+`DriverRoute.tsx`/`index.ts`, `src/components/ui/Input.tsx`/
+`TripStatus.tsx`, `src/app/layout.tsx`, `supabase/seed.sql`,
+`docs/product/application-implementation-plan.md`,
+`docs/product/ui-backend-gap-register.md`,
+`docs/product/driver-today-data-map.md`, the two prior reports, and
+`public/images/zenward-mobility-logo.png` — remain exactly as those
+phases left them; git status shows them modified relative to the
+original committed baseline, not relative to this phase's own start.)
+
+--------------------------------------------------------------------
+30. BLOCKERS
+--------------------------------------------------------------------
+NONE.
+
+====================================================================
+DESIGN TOKEN GATE:
+READY
+
+DRIVER VISUAL QA:
+READY
+
+SIGN-IN VISUAL REGRESSION:
+PASS
+
+TAILWIND WIDTH COLLISION:
+RESOLVED
+====================================================================
+BLOCKERS:
+NONE
+====================================================================
+Do NOT commit. Do NOT push. Do NOT deploy. Do NOT begin P1-E3-S3.
+STOP after reporting.
+====================================================================
+
+Method note (work item §9): real headless Chrome (Google Chrome
+152.0.7977.65, already installed on this machine — no new dependency)
+was driven via the Chrome DevTools Protocol (a temporary, session-
+local Node script, not committed to the repo) to inject a REAL
+authenticated session cookie obtained from the REAL local Supabase
+Auth service (`@supabase/ssr`'s password-grant call, the seeded test
+driver's real credentials — the exact same mechanism the app's own
+sign-in form uses), then navigated to /driver and captured real
+screenshots at each required viewport. No security code was modified
+to make this possible, and no bypass of any kind was left in the
+repository.

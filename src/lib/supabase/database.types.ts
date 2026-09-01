@@ -216,6 +216,7 @@ export type Database = {
           id: string
           name: string
           status: string
+          timezone: string
           updated_at: string
         }
         Insert: {
@@ -223,6 +224,7 @@ export type Database = {
           id?: string
           name: string
           status?: string
+          timezone: string
           updated_at?: string
         }
         Update: {
@@ -230,6 +232,7 @@ export type Database = {
           id?: string
           name?: string
           status?: string
+          timezone?: string
           updated_at?: string
         }
         Relationships: []
@@ -960,6 +963,7 @@ export type Database = {
       }
       is_org_member: { Args: { p_org_id: string }; Returns: boolean }
       is_platform_admin: { Args: never; Returns: boolean }
+      is_valid_iana_timezone: { Args: { p_timezone: string }; Returns: boolean }
       reassign_trip: {
         Args: {
           p_driver_id: string

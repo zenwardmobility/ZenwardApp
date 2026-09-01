@@ -6,7 +6,7 @@ import type { ActiveMembership, MembershipRole } from "./types";
 interface MembershipRow {
   organization_id: string;
   role: MembershipRole;
-  organizations: { name: string } | { name: string }[] | null;
+  organizations: { name: string; timezone: string } | { name: string; timezone: string }[] | null;
 }
 
 /**
@@ -41,7 +41,7 @@ export async function getActiveMemberships(): Promise<ActiveMembership[]> {
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from("memberships")
-    .select("organization_id, role, organizations(name)")
+    .select("organization_id, role, organizations(name, timezone)")
     .eq("user_id", user.id)
     .eq("status", "active")
     .returns<MembershipRow[]>();
@@ -55,6 +55,10 @@ export async function getActiveMemberships(): Promise<ActiveMembership[]> {
     return {
       organizationId: row.organization_id,
       organizationName: org?.name ?? "",
+      // organizations.timezone is NOT NULL at the schema level (P1-E3-S2C)
+      // — this fallback exists only so a malformed/partial join can never
+      // silently produce `undefined` here; it is not an expected runtime path.
+      organizationTimezone: org?.timezone ?? "UTC",
       role: row.role,
     };
   });

@@ -80,7 +80,7 @@ export default function FoundationPage() {
   const [searchValue, setSearchValue] = useState("");
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-2xl px-md py-2xl">
+    <div className="mx-auto flex max-w-5xl flex-col gap-zw-2xl px-zw-md py-zw-2xl">
       <PageHeader
         title="UI Foundation"
         description="Internal component showcase for P0-E2-S3 — not a canonical screen."
@@ -88,8 +88,8 @@ export default function FoundationPage() {
       />
 
       <Panel>
-        <SectionHeader title="Color tokens" description="Brand anchors, neutrals, and semantic families." className="mb-lg" />
-        <div className="grid grid-cols-2 gap-md sm:grid-cols-4">
+        <SectionHeader title="Color tokens" description="Brand anchors, neutrals, and semantic families." className="mb-zw-lg" />
+        <div className="grid grid-cols-2 gap-zw-md sm:grid-cols-4">
           <Swatch name="Care Navy" className="bg-brand-care-navy" />
           <Swatch name="Route Teal" className="bg-brand-route-teal" />
           <Swatch name="Interactive Teal" className="bg-brand-interactive-teal" />
@@ -102,7 +102,7 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Typography" className="mb-lg" />
+        <SectionHeader title="Typography" className="mb-zw-lg" />
         <div className="flex flex-col gap-3">
           <p className={typography.display}>Display — marketing hero only</p>
           <p className={typography.pageTitleMarketing}>Page title — marketing (Manrope)</p>
@@ -118,7 +118,7 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Buttons" className="mb-lg" />
+        <SectionHeader title="Buttons" className="mb-zw-lg" />
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="primary">Primary</Button>
           <Button variant="secondary">Secondary</Button>
@@ -139,7 +139,7 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Status system" description="Visual presentation only — not a state machine." className="mb-lg" />
+        <SectionHeader title="Status system" description="Visual presentation only — not a state machine." className="mb-zw-lg" />
         <div className="flex flex-wrap gap-2">
           {STATUS_CATEGORIES.map((category) => (
             <StatusBadge key={category} category={category} label={category} />
@@ -159,8 +159,8 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Forms" className="mb-lg" />
-        <div className="grid grid-cols-1 gap-md sm:grid-cols-2">
+        <SectionHeader title="Forms" className="mb-zw-lg" />
+        <div className="grid grid-cols-1 gap-zw-md sm:grid-cols-2">
           <Input label="Passenger name" placeholder="Jane Doe" />
           <Input label="Pickup time" required helpText="Use local facility time." />
           <Input label="Phone" error="Enter a valid 10-digit phone number." defaultValue="555-01" />
@@ -182,7 +182,7 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Summary strip" className="mb-lg" />
+        <SectionHeader title="Summary strip" className="mb-zw-lg" />
         <SummaryStrip
           items={[
             { label: "Scheduled today", value: 42 },
@@ -193,12 +193,12 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Data table" className="mb-lg" />
+        <SectionHeader title="Data table" className="mb-zw-lg" />
         <DataTable columns={columns} rows={sampleTrips} getRowId={(row) => row.id} />
       </Panel>
 
       <Panel>
-        <SectionHeader title="Empty & attention states" className="mb-lg" />
+        <SectionHeader title="Empty & attention states" className="mb-zw-lg" />
         <div className="flex flex-col gap-4">
           <div className="rounded-md border border-border-subtle">
             <EmptyState
@@ -217,7 +217,7 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Definition list & breadcrumb" className="mb-lg" />
+        <SectionHeader title="Definition list & breadcrumb" className="mb-zw-lg" />
         <Breadcrumb items={[{ label: "Trips", href: "/operations/trips" }, { label: "T-1042" }]} />
         <DefinitionList
           className="mt-4"
@@ -232,7 +232,7 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Avatar" className="mb-lg" />
+        <SectionHeader title="Avatar" className="mb-zw-lg" />
         <div className="flex items-center gap-3">
           <Avatar name="Sample Dispatcher" size="sm" />
           <Avatar name="Sample Dispatcher" size="md" />
@@ -241,7 +241,7 @@ export default function FoundationPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader title="Driver mobile foundation" className="mb-lg" />
+        <SectionHeader title="Driver mobile foundation" className="mb-zw-lg" />
         <div className="mx-auto flex max-w-sm flex-col gap-3">
           <DriverInstruction instruction="Head to pickup" detail="123 Main St — 6 minutes away" />
           <DriverRoute pickup="123 Main St, Atlanta, GA" destination="Grady Memorial Hospital" />

@@ -24,6 +24,7 @@ export function DriverBottomNavigation() {
     <nav
       aria-label="Primary"
       className="flex h-16 shrink-0 items-stretch border-t border-border-subtle bg-surface-elevated"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       {NAV_ITEMS.map((item) => {
         const isActive = item.href === "/driver" ? pathname === item.href : pathname.startsWith(item.href);

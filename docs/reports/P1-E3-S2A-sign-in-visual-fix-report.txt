@@ -1,0 +1,245 @@
+====================================================================
+Project:            Zenward Platform
+Phase:               P1-E3-S2A — Sign-In Visual Width Regression Fix
+Repository:          /Users/datamatics/ZenWard
+Environment:         LOCAL SUPABASE ONLY
+Git branch:          main
+Git HEAD before work: 1f529eb419e74caf86b8c58873dd535c986f94bf (unchanged — nothing committed during this phase)
+Date/time:           2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+1. EXACT ROOT CAUSE
+--------------------------------------------------------------------
+`src/app/sign-in/page.tsx`'s auth card used `max-w-sm` (intended: ~24rem
+/384px). The actual compiled CSS shows:
+
+    .max-w-sm {
+      max-width: var(--spacing-sm);
+    }
+
+`--spacing-sm` is a project-defined design token (`src/app/globals.css`
+`@theme` block) equal to **0.5rem (8px)**, added for gap/padding use —
+not a width scale. Confirmed empirically by fetching and inspecting the
+compiled Next.js CSS bundle directly (not guessed):
+
+- `.max-w-sm { max-width: var(--spacing-sm) }`  → 8px
+- `.max-w-md { max-width: var(--spacing-md) }`  → 16px
+- `.max-w-xl { max-width: var(--spacing-xl) }`  → 32px
+- `.max-w-5xl { max-width: var(--container-5xl) }` → 64rem (correct)
+- `.max-w-6xl { max-width: var(--container-6xl) }` → 72rem (correct)
+
+Tailwind v4 ships its own, separate `--container-sm: 24rem` token (
+confirmed by reading `node_modules/tailwindcss/theme.css:336` directly)
+specifically so `max-w-*` utilities don't collide with a project's own
+spacing scale. `max-w-5xl`/`max-w-6xl` correctly resolve via that
+`--container-*` namespace here, because this project's `@theme` block
+never defines a competing `--spacing-5xl`/`--spacing-6xl`. But this
+project's `@theme` block DOES define `--spacing-sm`/`-md`/`-lg`/`-xl`
+(0.5rem/1rem/1.5rem/2rem — the design system's own gap/padding scale),
+and for exactly those four key names, Tailwind's engine resolves
+`max-w-{key}` against the project's own `--spacing-{key}` instead of
+its built-in `--container-{key}` default. **This is a real, systemic
+Tailwind v4 theme-token naming collision affecting every `max-w-sm`/
+`max-w-md`/`max-w-lg`/`max-w-xl` usage in this codebase**, not
+something specific to the sign-in page's own markup.
+
+With the card's actual max-width at 8px, every descendant that DOES
+correctly fill its parent (the `<form>`, the `Button`, the block-level
+`<h1>`/`<p>`) rendered at ~8px-wide, forcing every line of text to wrap
+character-by-character and the whole card to appear as a "vertical
+strip" — exactly the reported symptom. This was confirmed visually,
+not just theoretically: a real headless-Chrome screenshot of the page
+before any fix (`/tmp/signin_qa/before_desktop.png`, this session)
+shows precisely the reported symptoms, button/labels overflowing past
+the collapsed card edge into the dark background.
+
+A second, smaller, independently real defect was also found and fixed:
+the `<input>` element inside the shared `Input` component
+(`src/components/ui/Input.tsx`) had no `w-full`/width class at all —
+relying entirely on implicit flex-stretch behavior, which is not
+reliably applied to native form controls in every browser/reset
+combination. This did not fully explain the "narrow vertical strip"
+on its own (the max-w-sm collision was the dominant cause — the card
+itself was 8px regardless), but it is a real, separately worth-fixing
+omission per the work item's own explicit "child missing w-full"
+candidate-cause list, and is now fixed.
+
+**What was NOT done:** the shared `--spacing-sm/md/lg/xl` vs.
+`--container-sm/md/lg/xl` collision in `globals.css` was **not**
+fixed globally. That token collision affects every `max-w-sm/md/lg/xl`
+usage anywhere else in the app (Operations panels, modals, etc. — not
+audited here), and correcting the shared `@theme` block is a
+wider-blast-radius change this narrow, sign-in-only work item does not
+authorize ("This task is ONLY to fix and visually harden the Sign In
+layout"). Recommended as a dedicated future design-token cleanup —
+see §2 for exactly what to change if/when that phase happens.
+
+--------------------------------------------------------------------
+2. FILES CHANGED
+--------------------------------------------------------------------
+- `src/app/sign-in/page.tsx` — `max-w-sm` → `max-w-[24rem]` (an
+  arbitrary-value utility, chosen deliberately to bypass the broken
+  named-scale lookup rather than to "look better" — 24rem matches both
+  the work item's explicit target range and Tailwind's own original
+  intent for `max-w-sm`). Documented inline with the root-cause
+  explanation above, so a future reader isn't left to rediscover it.
+  Also: replaced the placeholder brand mark with the approved logo
+  image (see §12).
+- `src/components/ui/Input.tsx` — added `w-full` to the `<input>`
+  element's className. Shared component; low-risk, universally
+  correct fix (a labeled form field should always fill its container).
+- `src/components/auth/SignInForm.tsx` — added `w-full` to the
+  `<form>` element and the field-group wrapper `<div>`, matching the
+  work item's own "Expected conceptual structure" (§2: "w-full
+  constrained auth card → full-width form fields/buttons") explicitly
+  rather than relying only on implicit block/flex default behavior.
+
+No other file was touched for the width fix. No design token
+(`globals.css`), no shared layout primitive beyond `Input`, no
+Supabase/auth code, no Driver Today code.
+
+**Not fixed, deliberately, for a future phase:**
+`src/app/globals.css` `@theme` block's `--spacing-sm/md/lg/xl` vs.
+Tailwind's `--container-sm/md/lg/xl` collision — see §1.
+
+--------------------------------------------------------------------
+3. WIDTH/LAYOUT CORRECTION
+--------------------------------------------------------------------
+Card: `w-full max-w-[24rem]` (was `w-full max-w-sm`, which compiled to
+`max-width: 8px`) — now renders at up to 384px, centered via the
+existing `flex items-center justify-center` wrapper (that wrapper was
+always correct; only the child's own max-width was broken). Matches
+the work item's target "roughly 24–26rem" exactly.
+
+Inputs: `w-full` added directly to the `<input>` element — no longer
+dependent on implicit flex-stretch.
+
+Form: `w-full` added to the `<form>` and its field-group wrapper —
+explicit rather than relied-upon-implicitly.
+
+--------------------------------------------------------------------
+4. DESKTOP VISUAL QA
+--------------------------------------------------------------------
+**Real headless-Chrome screenshot taken and inspected** (Google Chrome
+152.0.7977.65, already installed on this machine — `--headless=new
+--window-size=1440,900 --screenshot=...`, no npm dependency added).
+
+Before fix (`/tmp/signin_qa/before_desktop.png`): card ~8px wide
+vertical strip, "Sign in" headline wrapped to 2 lines, body copy
+wrapped almost word-by-word, inputs collapsed to tiny widths, button
+text overflowing the card's visible white area into the dark
+background — matches every symptom in the work item's own bug report.
+
+After fix (`/tmp/signin_qa/after_desktop.png`, then
+`/tmp/signin_qa/logo_desktop.png` after the logo correction below):
+card is a normal, centered ~384px panel. "Sign in" on one line.
+Supporting copy on one natural sentence line. Both inputs and the
+button fill the card's available width evenly. No overflow, no
+clipping, centered composition preserved. **PASS.**
+
+--------------------------------------------------------------------
+5. 768 VISUAL QA
+--------------------------------------------------------------------
+Real screenshot, `--window-size=768,1024`
+(`/tmp/signin_qa/logo_768.png`, inspected directly): card centered at
+its capped ~384px width, comfortable margin on both sides, no
+overflow, no wrapping issues, logo/heading/copy/inputs/button all
+correctly proportioned. **PASS.**
+
+--------------------------------------------------------------------
+6. 430 VISUAL QA
+--------------------------------------------------------------------
+Real screenshot, `--window-size=430,932`
+(`/tmp/signin_qa/logo_430.png`, inspected directly): card uses
+available width with comfortable page margins (the `px-4` outer
+padding), no horizontal overflow, inputs/button fill the card width,
+copy reads on natural lines. **PASS.**
+
+--------------------------------------------------------------------
+7. 390 VISUAL QA
+--------------------------------------------------------------------
+Real screenshot, `--window-size=390,844`
+(`/tmp/signin_qa/logo_390.png`, inspected directly): same result as
+430 — card fills available width with margin, no overflow, no
+clipping, fully readable. **PASS.**
+
+--------------------------------------------------------------------
+8. AUTHENTICATION REGRESSION RESULT
+--------------------------------------------------------------------
+**41/41 PASS** — the full existing auth integration suite, re-run
+against the actual running app after all changes in this phase
+(including SIGNINFORM-setup/1/2/3/4, which specifically exercise the
+real sign-in Server Action end-to-end: bad credentials rejected,
+correct credentials + safe `next` redirect works, a real Supabase
+session cookie is set, unsafe `next` falls back to `/`). No
+Supabase Auth flow, `signInAction`, session cookie, Proxy, Membership
+resolution, role routing, organization context, sign-out, or redirect
+validation code was touched — confirmed by `git status` (§ below) and
+by this suite's unchanged 41/41 result.
+
+--------------------------------------------------------------------
+9. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` → exit 0, zero errors.
+
+--------------------------------------------------------------------
+10. LINT
+--------------------------------------------------------------------
+`npm run lint` (eslint) → exit 0, zero errors/warnings.
+
+--------------------------------------------------------------------
+11. BUILD
+--------------------------------------------------------------------
+`npm run build` → succeeded (Next.js 16.3.3, Turbopack). All 24 routes
+generated, `ƒ Proxy (Middleware)` still present in the route summary
+(P1-E3-S1A's fix remains intact), no warnings.
+
+--------------------------------------------------------------------
+12. APPROVED LOGO CORRECTION (mid-phase addendum)
+--------------------------------------------------------------------
+**Source of the incorrect logo:** `src/app/sign-in/page.tsx` rendered
+a generic Phosphor `Van` icon inside a teal circle, plus separate
+"Zenward"/"MOBILITY" text lines — a placeholder brand treatment, not
+the approved Zenward Mobility mark (the stylized Z/route/location-
+pin-heart symbol + wordmark).
+
+**Component/file responsible:** `src/app/sign-in/page.tsx` only. This
+was the sole "authentication/brand surface" this phase touches —
+`AppHeader.tsx` (Operations chrome) carries no brand mark at all, and
+the only other `Van` icon usage in the codebase
+(`src/app/foundation/page.tsx`) is a generic illustrative icon inside
+an `EmptyState` showcase example ("No trips scheduled"), not a brand
+mark — left untouched, per the explicit instruction not to
+indiscriminately remove transportation icons used for actual product
+functions.
+
+**Approved asset used:** `/Users/datamatics/Zenward-Web/public/
+images/zenward-mobility-logo.png` (2172×724, exactly 3:1, RGB PNG) —
+the exact file named in this phase's instruction, inspected directly
+to confirm it is the correct mark (Z/route/pin-heart symbol +
+"Zenward MOBILITY" wordmark) before use. Copied byte-for-byte (no
+edit, no recompression, no color change) into the Platform repository
+at `public/images/zenward-mobility-logo.png` — Zenward-Web itself was
+only read from, never modified.
+
+**Locations corrected:** `src/app/sign-in/page.tsx` — the
+icon-in-circle + separate text block replaced with a single
+`next/image` `<Image>` (`width={240} height={80}`, i.e. the asset's
+own 3:1 aspect ratio, `className="h-auto w-60"`, `priority` since it's
+above-the-fold LCP content), centered above the "Sign in" heading. No
+new asset was generated; no artwork, color, or proportion was altered.
+Verified visually at all four required widths (§4–§7 screenshots, all
+taken after this correction) — the logo renders crisply, centered,
+correctly proportioned, no stretching, at every size.
+
+--------------------------------------------------------------------
+SIGN-IN VISUAL GATE:
+READY
+====================================================================
+Do NOT commit. Do NOT push. Do NOT deploy. Do NOT begin Driver Trips.
+The local dev server (`npm run dev`, http://localhost:3000) is left
+running for manual inspection of /driver, per instruction — Driver
+Today itself was not altered in this phase.
+STOP after reporting.
+====================================================================

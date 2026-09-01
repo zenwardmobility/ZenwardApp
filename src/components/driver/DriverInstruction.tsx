@@ -14,7 +14,7 @@ export function DriverInstruction({ icon, instruction, detail, className }: Driv
   return (
     <div
       className={cn(
-        "flex items-start gap-3 rounded-md border-l-2 border-l-brand-interactive-teal bg-brand-calm-mist px-md py-md",
+        "flex items-start gap-3 rounded-md border-l-2 border-l-brand-interactive-teal bg-brand-calm-mist px-zw-md py-zw-md",
         className,
       )}
     >

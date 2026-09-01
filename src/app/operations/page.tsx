@@ -21,7 +21,7 @@ export default async function OperationsOverviewPage() {
   const organization = resolution.status === "single" || resolution.status === "selected" ? resolution.context : null;
 
   return (
-    <div className="flex flex-col gap-lg">
+    <div className="flex flex-col gap-zw-lg">
       <PageHeader
         title="Overview"
         description="This screen is a UI foundation placeholder — the canonical Overview experience is built in a later phase."

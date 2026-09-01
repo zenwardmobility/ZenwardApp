@@ -1,0 +1,633 @@
+====================================================================
+Project:          Zenward Platform
+Phase:             P1-E3-S2 — Driver Application Shell & Driver Today
+Repository:        /Users/datamatics/ZenWard
+Environment:        LOCAL SUPABASE ONLY
+Git branch:         main
+Git HEAD before work: 1f529eb419e74caf86b8c58873dd535c986f94bf (unchanged — nothing committed during this phase)
+Date/time:         2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------
+`git status --short` was clean at the start of this phase. `git log
+--oneline -5` confirmed P1-E3-S1/S1A had been committed
+(1f529eb "Implement secure authentication and role routing", which
+includes the P1-E3-S1A proxy-relocation fix — `src/proxy.ts` and
+`src/lib/supabase/proxy.ts` are both present in that commit). No
+unexplained modifications existed. Proceeded per work item §1.
+
+--------------------------------------------------------------------
+2. STITCH REFERENCES INSPECTED
+--------------------------------------------------------------------
+Primary: docs/design/stitch/references/06-driver-today.png — read in
+full, directly (not summarized from the prior mapping docs alone).
+Secondary, for continuity only: 04-driver-active-trip.png (route
+timeline treatment, status badge, bottom nav, header chrome) and
+07-driver-trips.png (compact trip-row density, date grouping). Both
+04 and 07 informed the shared shell/component refinements only —
+neither screen's own content was implemented (work item §3).
+
+--------------------------------------------------------------------
+3. EXISTING DRIVER SHELL ARCHITECTURE (as found)
+--------------------------------------------------------------------
+`src/app/driver/layout.tsx` (server) already called
+`requireDriverAccess()` and rendered a safe inline "account not yet
+set up" state for the link-missing case, otherwise delegating to
+`DriverLayoutClient` (client) → `DriverShell` → `DriverHeader` +
+`DriverBottomNavigation`. `src/app/driver/page.tsx` was a placeholder
+showing raw session context + `DriverRouteStub`. A full set of Driver
+primitives already existed (`DriverTripCard`, `DriverTripRow`,
+`DriverRoute`, `DriverInstruction`, `DriverPrimaryAction`) but were
+only exercised by the `/foundation` component showcase page — none
+were wired to real data anywhere.
+
+--------------------------------------------------------------------
+4. COMPONENTS REUSED
+--------------------------------------------------------------------
+`EmptyState`, `StatusBadge`/`TripStatus`, `Avatar`, `Button`,
+`IconButton`, `LinkButton`, `DriverPrimaryAction` (imported but not
+used on Today — see §22), `DriverInstruction` (not used on Today —
+see §22). `DriverTripCard`, `DriverRoute`, `DriverShell`,
+`DriverHeader`, `DriverBottomNavigation`, `DriverLayoutClient` were
+reused and refined in place (see §6/§7/§9), not rewritten from
+scratch (work item §7).
+
+--------------------------------------------------------------------
+5. COMPONENTS CREATED
+--------------------------------------------------------------------
+- `src/components/driver/DriverNextTripCard.tsx` — the featured
+  "Next Trip" card (time, passenger, `DriverRoute`, single "View
+  Trip" `LinkButton`). The only genuinely new component this phase.
+- `src/lib/driver/trip-presentation.ts` — `driverTripStateLabel()`,
+  `formatTripTime()`, `formatLongDate()`, `isSameLocalDay()`. Not a
+  UI component, but the single source of truth for every derived
+  label/format this screen (and future Driver screens) use.
+
+--------------------------------------------------------------------
+6. DRIVER SHELL CHANGES
+--------------------------------------------------------------------
+`DriverShell`'s inner column is now capped at `max-w-md` (448px) and
+horizontally centered against a neutral background (ZD-115) — at the
+390/430 primary target widths this has no visible effect; at
+768/1024 it keeps the Driver surface intentionally compact rather
+than stretching a mobile-designed single column full-bleed across a
+wide viewport (work item §5). `DriverBottomNavigation` gained
+`padding-bottom: env(safe-area-inset-bottom)`; the root layout
+(`src/app/layout.tsx`) now exports `viewport = { viewportFit: "cover" }`
+so that inset actually has a non-zero value to read on a notched
+device (work item §44).
+
+--------------------------------------------------------------------
+7. DRIVER HEADER CHANGES
+--------------------------------------------------------------------
+`DriverHeader` gained an optional `driverName` subtitle line (real
+`driver_get_profile.display_name`, never a fabricated "On Shift"
+status — work item §14/§27) and top safe-area padding.
+`DriverLayoutClient` now renders a leading initials `Avatar` on
+ordinary routes (swapped for the existing back-button on a
+trip-detail route, unchanged from before) and a trailing sign-out
+`IconButton` inside a `<form action={signOutAction}>`, reusing the
+existing sign-out Server Action — no second session-clearing
+mechanism was created (work item §28). `driverName` is threaded from
+`DriverLayout` (server) → `DriverLayoutClient`, sourced from
+`requireDriverAccess()`'s own already-fetched `driver_get_profile`
+row (see §10, ZD-111) rather than a second RPC call.
+
+--------------------------------------------------------------------
+8. BOTTOM-NAVIGATION CHANGES
+--------------------------------------------------------------------
+Unchanged in behavior/routes/icons — only the safe-area padding
+described in §6 was added.
+
+--------------------------------------------------------------------
+9. DRIVER TODAY COMPOSITION
+--------------------------------------------------------------------
+`src/app/driver/page.tsx` is a Server Component. It re-derives
+`requireDriverAccess()` (matching the existing pre-phase pattern —
+cheap, and the parent layout has already guaranteed "ok" by the time
+this page can render at all), then calls `driver_list_active_trips`
+directly via the existing authenticated server Supabase client — no
+`useEffect`, no client-side fetch-after-mount, no service-role key
+(work item §30/§31/§32). The page filters/sorts the result into
+"Today" (§13/§16 below), renders `DriverNextTripCard` for the
+earliest trip and a list of refined `DriverTripCard` rows (each
+wrapped in a plain `next/link` `<Link>`, not a client `onClick`, so
+no additional Client Component boundary was needed) for the rest,
+and falls back to the empty or error state as appropriate. No
+`"use client"` was added to the page or any new component beyond
+what already existed (`DriverLayoutClient` was already a Client
+Component; nothing new was added to the client bundle for Today
+itself — work item §31).
+
+--------------------------------------------------------------------
+10. SECURE RPCS USED
+--------------------------------------------------------------------
+- `driver_get_profile` — already called by `requireDriverAccess()`;
+  this phase additionally consumes `display_name`/`phone`/`status`
+  from that same call (ZD-111) rather than calling it a second time.
+- `driver_list_active_trips` — the sole data source for Driver
+  Today's trip content.
+
+No other RPC, and no direct table SELECT against `trips`,
+`passengers`, or `trip_assignments`, is called anywhere in this
+phase's code. Confirmed by direct `grep` (see §29).
+
+--------------------------------------------------------------------
+11. EXACT VISIBLE FIELD MAPPING
+--------------------------------------------------------------------
+Full field-by-field table delivered as its own required document:
+docs/product/driver-today-data-map.md. Summary: every rendered field
+traces to `driver_get_profile` (header identity) or
+`driver_list_active_trips` (trip content) — `trip_id`, `state`,
+`scheduled_pickup_at`, `appointment_at`, `pickup_description`,
+`destination_description`, `passenger_display_name` — plus two
+purely client-derived values (`new Date()` for "Today"/date line,
+and a client-side count for the "N trips assigned" badge). No field
+was hardcoded to resemble the Stitch reference (work item §39).
+
+--------------------------------------------------------------------
+12. PASSENGER-DATA HANDLING
+--------------------------------------------------------------------
+Only `passenger_display_name` is ever read or rendered — the one
+Passenger field `driver_list_active_trips` returns. No
+`passenger_phone`, no assistance/medical information, no other
+Passenger field is fetched or shown anywhere on Driver Today. Direct
+`passengers` table access: absent (verified, §28/§29).
+
+--------------------------------------------------------------------
+13. TRIP-DATA HANDLING
+--------------------------------------------------------------------
+Only the 9 fields `driver_list_active_trips` actually returns are
+consumed (see database.types.ts `driver_active_trip_summary`); no
+attempt was made to reconstruct any field the projection doesn't
+carry (`instructions`, `assistance_notes`, `driver_notes`,
+`vehicle_label`/`vehicle_status` are present in the type but
+deliberately not rendered on Today — vehicle info wasn't shown in
+the Stitch reference either, and the notes/assistance fields belong
+to the deferred Active Trip screen, ZD-114).
+
+--------------------------------------------------------------------
+14. STATUS MAPPING
+--------------------------------------------------------------------
+`driverTripStateLabel()` (src/lib/driver/trip-presentation.ts) maps
+canonical `state` → Driver-facing label: `scheduled`→"Assigned"
+(confirmed derivation, ui-data-action-map.md §6 — every Trip a
+Driver sees is by construction one they're actively assigned to),
+`en_route_to_pickup`→"Heading to Pickup", `arrived_at_pickup`→"At
+Pickup", `passenger_onboard`→"Passenger Onboard",
+`en_route_to_destination`→"Heading to Destination",
+`arrived_at_destination`→"At Destination". These are UI groupings
+only — no new Trip state was invented (work item §16). The existing
+`TripStatus`/`TRIP_STATUS_MAP` label→category system was extended
+with the 4 new leg-disambiguated labels, not duplicated (ZD-112).
+
+--------------------------------------------------------------------
+15. CURRENT/NEXT-TRIP DERIVATION
+--------------------------------------------------------------------
+No new Trip state was created. "Next Trip" = the earliest-by-
+`scheduled_pickup_at` row among today's active trips (a UI grouping,
+computed in the page, not stored anywhere). "Later Today" = the
+remaining today-scoped rows, in ascending order. See §16 for the
+"today" filter itself.
+
+--------------------------------------------------------------------
+16. TIME FORMATTING
+--------------------------------------------------------------------
+`formatTripTime()`/`formatLongDate()` use the standard `Intl` API
+with no explicit `timeZone` override — the runtime's own local
+timezone, since no per-organization or per-request timezone
+architecture exists anywhere in this product yet (confirmed by
+inspection: no timezone field in schema.md/lifecycle-model.md, no
+prior phase built one). No timezone conversion architecture was
+invented (work item §19) — documented as ZD-116, including the known,
+bounded cosmetic limitation this implies near local midnight. "Today"
+grouping (`isSameLocalDay`) uses the same runtime-local basis. A
+trip with a null `scheduled_pickup_at` (optional at creation) is
+excluded from Today entirely — it isn't hidden from the product, it
+simply has no unambiguous "is this today" answer and would surface
+on the (not-yet-built) Trips screen instead.
+
+--------------------------------------------------------------------
+17. LOCATION PRESENTATION
+--------------------------------------------------------------------
+`pickup_description`/`destination_description` (Trip's own immutable
+snapshot fields) are shown as-is, with a calm fallback string
+("Pickup location not available"/"Destination not available") if
+somehow null rather than a blank line or crash. No internal Facility
+ID is ever exposed (work item §20) — none is fetched in the first
+place, since `driver_list_active_trips` doesn't return one.
+
+--------------------------------------------------------------------
+18. PHONE-ACTION BEHAVIOR
+--------------------------------------------------------------------
+Not implemented on Driver Today. `driver_list_active_trips` does not
+return `passenger_phone` (only `driver_get_trip_detail` does), and
+the deliberate scope decision (ZD-114) defers all
+Navigate/Call-Passenger actions to the Active Trip screen rather
+than issuing an extra RPC call to populate one card on Today. No
+`tel:` action exists anywhere in this phase's code.
+
+--------------------------------------------------------------------
+19. EMPTY STATE
+--------------------------------------------------------------------
+"You're clear for now" / "No trips scheduled for today yet. Check
+the Trips tab for what's coming up." — calm, no blame language, no
+fabricated future-schedule data (work item §34). Verified against
+the real running app for `org-a-driver-b@example.test` (whose only
+seeded assignment is 2 days out, so today's list is genuinely empty)
+— HTTP 200, correct empty-state markup present, zero passenger/trip
+content leaked into that response.
+
+--------------------------------------------------------------------
+20. ERROR STATE
+--------------------------------------------------------------------
+"Couldn't load your trips" / "Something went wrong loading today's
+schedule. Try again in a moment." — rendered only when the
+`driver_list_active_trips` RPC call itself returns an `error`, with
+a "Try again" link back to `/driver`. No raw Postgres error,
+SQLSTATE, or PostgREST error body is ever surfaced (work item §35).
+
+--------------------------------------------------------------------
+21. DRIVER-LINK-MISSING STATE
+--------------------------------------------------------------------
+Unchanged — still owned entirely by `src/app/driver/layout.tsx`
+(ZD-109 from P1-E3-S1). Driver Today's own page code is unreachable
+for this case; verified via the existing DRIVERLINK-1 auth
+integration check (still passing, see §23) and re-confirmed directly
+in this phase's own live inactive-Driver-row test (§25/§27).
+
+--------------------------------------------------------------------
+22. UNSUPPORTED UI CONCEPTS OMITTED/DEFERRED
+--------------------------------------------------------------------
+- **"Completed Today" section** — omitted. `driver_list_active_trips`
+  structurally excludes completed trips; `driver_list_trip_history`
+  deliberately redacts passenger/route (ZD-099). Recorded as GAP-10
+  (ui-backend-gap-register.md) and ZD-113 — not worked around.
+- **Navigate / Call Passenger / "Call passenger on arrival" note**
+  on the featured card — deferred to the Active Trip screen (ZD-114)
+  — the underlying fields aren't in `driver_list_active_trips`.
+- **"Pickup updated from X" change notice** — no field-level change
+  tracking exists anywhere (pre-existing, already-recorded gap, not
+  newly found or resolved this phase).
+- **"On Shift" header status / notification bell** — no Driver
+  availability concept exists in the schema (GAP-6, pre-existing
+  deferral); no notification backend exists at all. Neither was
+  fabricated (work item §14).
+- **Assistance Requirements / Companion** — not in
+  `driver_list_active_trips`'s field set; also not shown on the
+  Stitch Today reference itself.
+
+--------------------------------------------------------------------
+23. AUTHORIZATION REGRESSION
+--------------------------------------------------------------------
+41/41 real auth integration checks pass, re-run from a fresh
+`supabase db reset` immediately before this report — identical count
+and identical checks as the P1-E3-S1/S1A baseline (UNAUTH-1..3,
+ROLE-1..5, INACTIVE-1, NOMEMBER-1, PLATFORMADMIN-1, DRIVERLINK-1,
+MULTIORG-1..5, FOREIGNORG-1/2, SIGNOUT-1-setup, REDIRECT-SAFETY x5,
+SIGNINFORM-setup/1-4, REVOKE-1a..3b). `requireDriverAccess()`'s own
+authorization chain (authenticated → active Membership → selected
+org → role=driver → valid linked active Driver → Driver surface) is
+byte-for-byte unchanged — only the data already returned by its
+existing `driver_get_profile` call is now also exposed to callers
+(ZD-111). No client-side redirect, `useEffect` guard, localStorage
+role check, or JWT metadata check was introduced anywhere.
+
+--------------------------------------------------------------------
+24. INACTIVE MEMBERSHIP RESULT
+--------------------------------------------------------------------
+Live-tested against the real running app and database, same session
+throughout, no sign-out: `org-a-driver-a`'s Membership toggled to
+`inactive` while an authenticated session already held `/driver`
+open → next request to `/driver` returns a 307 redirect to
+`/access-unavailable`. Reactivated → immediate access restored on
+the very next request, same session. Both PASS.
+
+--------------------------------------------------------------------
+25. INACTIVE DRIVER RESULT
+--------------------------------------------------------------------
+Live-tested the same way: `org-a-driver-a`'s linked `drivers` row
+toggled to `status='inactive'` (Membership left active) → the next
+request to `/driver` renders the existing safe "Driver account not
+yet set up" inline state (HTTP 200, not a crash, not stale data).
+Reactivated → real Driver Today content (the actual seeded trip
+data) returns immediately on the next request, same session. Both
+PASS. (`current_driver_id()`'s membership+driver-status check, fixed
+at ZD-100, is what makes this correct — unchanged by this phase.)
+
+--------------------------------------------------------------------
+26. CROSS-TENANT RESULT
+--------------------------------------------------------------------
+Not independently re-derived by a new UI-level test this phase — the
+enforcement boundary is `driver_list_active_trips` itself, already
+exhaustively covered by the existing 204-assertion SQL suite
+(specifically `driver_read_authorization_tests.sql`'s ACTIVE-LIST-1
+and the 32 `rls_adversarial_tests.sql` assertions), all re-run and
+green as part of this phase's own regression pass (§29/§30). Driver
+Today calls the RPC with the resolved `organization_id` only — it
+performs no client-side org filtering of its own, so there is no
+separate application-layer surface that could leak across tenants
+independent of what the RPC itself returns.
+
+--------------------------------------------------------------------
+27. REASSIGNMENT-REVOCATION RESULT
+--------------------------------------------------------------------
+Same reasoning as §26 — `driver_list_active_trips`'s reassignment-
+revocation behavior is the RPC's own guarantee (established and
+tested in P1-E2-S3, read-api.md), unmodified by this phase. Driver
+Today inherits it automatically because it reads directly from that
+RPC on every request with no client-side caching of trip content.
+
+--------------------------------------------------------------------
+28. DIRECT PASSENGER SELECT AUDIT
+--------------------------------------------------------------------
+grep -rn "from(\"passengers\")\|\.from('passengers')\|passengers\." src/app/driver src/components/driver src/lib/driver
+→ no matches. Confirmed: NONE.
+
+--------------------------------------------------------------------
+29. BROAD CANONICAL TRIP-READ AUDIT
+--------------------------------------------------------------------
+grep -rn "from(\"trips\")\|from(\"trip_assignments\")\|\.rpc(" src/app/driver src/components/driver src/lib/driver
+→ only two `.rpc(` calls anywhere in this phase's code:
+`driver_get_profile` (src/lib/auth/authorization.ts, pre-existing)
+and `driver_list_active_trips` (src/app/driver/page.tsx, new this
+phase). No direct `trips`/`trip_assignments`/`passengers` table read
+exists anywhere in the Driver application code.
+
+--------------------------------------------------------------------
+30. RESPONSIVE IMPLEMENTATION
+--------------------------------------------------------------------
+Mobile-first: `DriverShell`'s content is a single flex column with
+no fixed pixel widths below `max-w-md`; all cards/typography use the
+existing spacing/typography tokens (no ad hoc values). At 768/1024,
+the shell caps at 448px and centers (ZD-115, §6) rather than
+stretching. `DriverNextTripCard`/`DriverTripCard` use `flex`/`gap`
+layouts with `truncate` on long text — no fixed-width overflow risk
+identified by inspection.
+
+--------------------------------------------------------------------
+31-34. 390 / 430 / 768 / 1024 QA
+--------------------------------------------------------------------
+See §36 — no automated browser screenshot tooling was available this
+phase (Playwright is not an existing project dependency; work item
+§48 explicitly cautions against adding a heavy dependency solely for
+screenshots). Verification for all four widths was performed by (a)
+direct inspection of the real rendered HTML's class list — confirmed
+`max-w-md` is present, confirmed no component uses a fixed pixel
+width incompatible with 390px, confirmed the two `env(safe-area-
+inset-*)` declarations are present — and (b) CSS/layout reasoning
+from the Tailwind utility classes themselves (flexbox, `truncate`,
+relative spacing tokens throughout, no `w-[Npx]` literals anywhere
+in the new/changed components). This is real verification of the
+underlying mechanism, not a visual pixel-level confirmation — see
+§36 for the honest characterization required by work item §48.
+
+--------------------------------------------------------------------
+35. ACCESSIBILITY REVIEW
+--------------------------------------------------------------------
+- Semantic headings: `<h1>` in `DriverHeader` (unchanged), `<h2>`
+  "Today" on the page itself.
+- Icon-only sign-out control: `IconButton` requires (and received) an
+  explicit `label="Sign out"` — never icon-only without an accessible
+  name (existing component contract, work item §47).
+- Status is never color-only: every `StatusBadge`/`TripStatus`
+  instance renders a text label alongside its color (existing
+  component contract, unchanged).
+- Touch targets: `IconButton` is `size-11` (44px, existing component
+  minimum); `LinkButton`'s `size="lg"` matches `DriverPrimaryAction`'s
+  existing large touch target; bottom-nav items are unchanged
+  (already full-height flex-1 targets).
+- Keyboard/focus: no new custom interactive element was built without
+  native semantics — the new interactive surfaces are a `<form>` +
+  native `<button type="submit">` (sign-out) and `next/link` `<Link>`
+  wraps (trip cards, View Trip) — both natively focusable/keyboard-
+  operable with the browser's default visible focus ring; nothing
+  here suppresses `:focus-visible`.
+- Phone action: not applicable this phase (§18/§22 — deferred).
+
+--------------------------------------------------------------------
+36. BROWSER QA METHOD
+--------------------------------------------------------------------
+**No automated browser rendering (Playwright or otherwise) was
+available or added this phase** — stated honestly, per work item
+§48's explicit instruction not to claim pixel-level validation that
+was not performed. `npx playwright install chromium` was attempted
+and refused by Playwright itself because `@playwright/test` is not
+an existing project dependency (adding it would be exactly the
+"heavy dependency solely for screenshots" work item §48 cautions
+against). In its place, this phase relied on: (1) real HTTP content
+verification of the actual rendered HTML in every required state
+(populated, empty, error-path code reviewed, link-missing, inactive-
+Membership, inactive-Driver) against the actual running Next.js app
+and local Supabase — not a mock; (2) direct inspection of the
+rendered class list and CSS mechanism for the responsive/safe-area
+requirements (§30/§31-34); (3) manual code-level visual-language
+review against the Stitch reference images themselves (spacing
+tokens, typography scale, icon choices, card radius/border, status
+treatment) rather than a generic reinterpretation. **MOBILE VISUAL
+QA: MANUAL REVIEW REQUIRED** — a human or a future phase with
+browser tooling should still confirm actual pixel rendering at
+390/430/768/1024 before this is considered fully closed out.
+
+--------------------------------------------------------------------
+37. SCREENSHOTS CREATED
+--------------------------------------------------------------------
+None (no browser tooling available — see §36). No files were placed
+under docs/design/qa/driver-today/ this phase.
+
+--------------------------------------------------------------------
+38. TYPESCRIPT RESULT
+--------------------------------------------------------------------
+`npx tsc --noEmit` → exit 0, zero errors. Re-run as the final step
+before writing this report, after all documentation edits.
+
+--------------------------------------------------------------------
+39. LINT RESULT
+--------------------------------------------------------------------
+`npm run lint` (eslint) → exit 0, zero errors/warnings.
+
+--------------------------------------------------------------------
+40. BUILD RESULT
+--------------------------------------------------------------------
+`npm run build` → succeeded (Next.js 16.3.3, Turbopack). All 24
+routes generated, `ƒ Proxy (Middleware)` present in the route
+summary (confirming the P1-E3-S1A fix remains intact), no warnings,
+no deprecation notices.
+
+--------------------------------------------------------------------
+41. TESTS ADDED
+--------------------------------------------------------------------
+No new SQL test files (no backend contract changed — work item §58
+compliance). Ad hoc, real-HTTP verification scripts were written to
+the session scratchpad (not part of the repository, consistent with
+how this project's prior phases have used one-off Node verification
+scripts alongside the durable SQL suites):
+`driver_today_qa.mjs` (populated + empty state, field-leak checks)
+and `driver_today_revocation_qa.mjs` (live inactive-Membership /
+inactive-Driver same-session revocation, 5 checks). Two new seed
+fixtures were added to `supabase/seed.sql` (trips
+95000000-...-a1/-a2, anchored to "today" via `date_trunc('day',
+now())` so they remain valid on every fresh `db reset`) — additive
+only, using a fresh UUID prefix; verified not to affect any existing
+SQL assertion (see §42).
+
+--------------------------------------------------------------------
+42. TESTS RUN
+--------------------------------------------------------------------
+- Full SQL regression: **204/204 PASS**, zero failures, re-run
+  against a fresh `supabase db reset` with the two new seed fixtures
+  present (verified via direct `docker exec` into the
+  `supabase_db_ZenWard` container after discovering the host has no
+  `psql` on PATH — see note below).
+- Concurrency test (`mutation_concurrency_test.sh`): PASS.
+- Auth integration suite: **41/41 PASS**.
+- Driver Today functional/security QA (ad hoc scripts): populated
+  state (7/7 real-data checks), empty state (2/2), inactive-
+  Membership same-session revocation (2/2), inactive-Driver same-
+  session revocation (2/2) — all PASS, all against the real running
+  app and real local Supabase, not mocked.
+
+**Process note, for accuracy:** an early verification pass in this
+phase used a bare `psql` command assuming it was on the host PATH;
+it silently failed ("command not found") in a way that did not
+register as a test failure, producing a false "no failures found"
+read. This was caught before being reported, and every SQL
+regression number above was re-obtained via `docker exec -i
+supabase_db_ZenWard psql ...` against the correct project's
+container (this machine also runs an unrelated second local Supabase
+project — "Maaklin" — whose container coincidentally answers on the
+port a naive guess would have used, 54322; the correct ZenWard
+port, per `supabase status`, is 54332). Recorded here rather than
+silently corrected, per this project's standing practice of
+reporting how verification was actually done.
+
+--------------------------------------------------------------------
+43. DOCS CREATED
+--------------------------------------------------------------------
+docs/product/driver-today-data-map.md
+
+--------------------------------------------------------------------
+44. DOCS UPDATED
+--------------------------------------------------------------------
+docs/design/component-inventory.md (new "Driver components —
+P1-E3-S2" section), docs/product/application-implementation-plan.md
+(screen-implementability matrix, recommended order, "Next
+recommended phase" — P1-E3-S2 marked complete for Driver Today only),
+docs/product/ui-backend-gap-register.md (GAP-10 added),
+docs/product/decision-register.md (ZD-111 through ZD-116 added).
+
+--------------------------------------------------------------------
+45. DECISION ENTRIES
+--------------------------------------------------------------------
+ZD-111 (DriverAccessResult carries the full profile row) · ZD-112
+(centralized state→label derivation) · ZD-113 ("Completed Today"
+omitted, not degraded) · ZD-114 (Navigate/Call Passenger deferred to
+Active Trip) · ZD-115 (DriverShell max-w-md cap) · ZD-116 (timezone
+formatting simplification, documented).
+
+--------------------------------------------------------------------
+46. FILES CREATED
+--------------------------------------------------------------------
+docs/product/driver-today-data-map.md
+src/components/driver/DriverNextTripCard.tsx
+src/lib/driver/trip-presentation.ts
+
+--------------------------------------------------------------------
+47. FILES MODIFIED
+--------------------------------------------------------------------
+docs/design/component-inventory.md
+docs/product/application-implementation-plan.md
+docs/product/decision-register.md
+docs/product/ui-backend-gap-register.md
+src/app/driver/layout.tsx
+src/app/driver/page.tsx
+src/app/layout.tsx
+src/components/driver/DriverBottomNavigation.tsx
+src/components/driver/DriverHeader.tsx
+src/components/driver/DriverLayoutClient.tsx
+src/components/driver/DriverRoute.tsx
+src/components/driver/DriverShell.tsx
+src/components/driver/DriverTripCard.tsx
+src/components/driver/index.ts
+src/components/ui/TripStatus.tsx
+src/lib/auth/authorization.ts
+src/lib/auth/types.ts
+supabase/seed.sql (additive fixtures only — no existing row changed)
+
+--------------------------------------------------------------------
+48. BACKEND GAPS DISCOVERED
+--------------------------------------------------------------------
+GAP-10 — Driver Today "Completed Today" section cannot be built at
+full Stitch fidelity with the currently-approved read API (see §22,
+ui-backend-gap-register.md, ZD-113). No RLS/RPC/schema change was
+made or proposed to work around it.
+
+--------------------------------------------------------------------
+49. BLOCKERS
+--------------------------------------------------------------------
+NONE.
+
+--------------------------------------------------------------------
+50. DEFERRED ITEMS
+--------------------------------------------------------------------
+Driver Trips screen (07), Driver Active Trip screen (04) and its 6
+lifecycle mutation RPCs, Driver History/Profile screens (GAP-3),
+"Completed Today" (GAP-10), Navigate/Call Passenger actions (ZD-114),
+"Pickup updated from X" (pre-existing gap), Driver Availability
+(GAP-6), automated browser screenshot QA (§36/§37).
+
+--------------------------------------------------------------------
+51. DRIVER TODAY IMPLEMENTATION GATE
+--------------------------------------------------------------------
+READY
+
+--------------------------------------------------------------------
+52. RECOMMENDED NEXT PHASE
+--------------------------------------------------------------------
+P1-E3-S3 — Driver Trips & Active Trip Experience, exactly as
+application-implementation-plan.md now recommends (step 3): completes
+the Driver surface by wiring the 6 `driver_*` mutation RPCs this
+phase deliberately left unwired, and building the Trips list /
+Active Trip detail screens Driver Today's own "View Trip" links
+currently route to as placeholders.
+
+====================================================================
+DRIVER TODAY IMPLEMENTATION GATE:
+READY
+
+SECURE DRIVER READS:
+PASS
+
+DIRECT PASSENGER SELECT:
+NONE
+
+CROSS-TENANT TEST:
+PASS
+
+REASSIGNMENT REVOCATION:
+PASS
+
+MOBILE VISUAL QA:
+MANUAL REVIEW REQUIRED — no automated browser/screenshot tooling was
+available or added this phase (see §36); real functional/content/
+security verification against the actual running app was performed
+instead, and the responsive/safe-area mechanism was verified by
+direct inspection of the rendered CSS, not a visual capture.
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S3 — Driver Trips & Active Trip Experience
+====================================================================
+Do NOT commit. Do NOT push. Do NOT deploy. Do NOT begin:
+Driver Trips, Driver Active Trip lifecycle controls, Operations UI,
+Dispatch Board, Internal New Trip UI, Zenward-Web integration,
+production deployment.
+STOP after reporting — per work item instruction.
+====================================================================
+
+REPORT FILE:
+docs/reports/P1-E3-S2-completion-report.txt

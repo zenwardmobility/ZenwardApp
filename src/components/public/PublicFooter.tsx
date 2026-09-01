@@ -19,7 +19,7 @@ export function PublicFooter({ links = [], contactPhone, contactEmail }: PublicF
 
   return (
     <footer className="border-t border-border-subtle bg-surface-elevated">
-      <div className="mx-auto max-w-6xl px-md py-xl lg:px-xl">
+      <div className="mx-auto max-w-6xl px-zw-md py-zw-xl lg:px-zw-xl">
         <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
           <div>
             <p className={cn(typography.subsectionHeading, "text-brand-care-navy")}>Zenward Mobility</p>

@@ -15,7 +15,7 @@ export interface DefinitionListProps {
 /** Label/value detail pairs — e.g. trip detail metadata. Semantic dl/dt/dd. */
 export function DefinitionList({ items, columns = 1, className }: DefinitionListProps) {
   return (
-    <dl className={cn("grid gap-x-lg gap-y-md", columns === 2 ? "grid-cols-2" : "grid-cols-1", className)}>
+    <dl className={cn("grid gap-x-zw-lg gap-y-zw-md", columns === 2 ? "grid-cols-2" : "grid-cols-1", className)}>
       {items.map((item) => (
         <div key={item.label}>
           <dt className={cn(typography.label, "text-text-muted")}>{item.label}</dt>

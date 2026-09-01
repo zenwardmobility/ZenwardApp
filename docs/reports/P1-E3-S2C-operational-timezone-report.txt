@@ -1,0 +1,455 @@
+====================================================================
+Project:            Zenward Platform
+Phase:               P1-E3-S2C — Organization Operational Timezone Boundary
+Repository:          /Users/datamatics/ZenWard
+Environment:         LOCAL SUPABASE ONLY
+Git branch:          main
+Git HEAD before work: 1f529eb419e74caf86b8c58873dd535c986f94bf (unchanged — nothing committed during this phase)
+Date/time:           2026-09-01
+====================================================================
+
+**Correction to the work item's own framing:** this phase's instructions
+stated "P1-E3-S2/S2A/S2B are complete and committed." `git status --short`
+and `git log` at the start of this phase showed otherwise — HEAD was
+still `1f529eb` (the P1-E3-S1/S1A commit), with every P1-E3-S2/S2A/S2B
+change sitting as uncommitted working-tree modifications, exactly as
+each of those phases' own explicit "Do NOT commit" instructions
+required. The substance was fully intact and correct; only the
+"committed" claim was inaccurate. Proceeded on that basis rather than
+committing anything unilaterally — see §26/§27 for the true current
+git state.
+
+--------------------------------------------------------------------
+1. ORIGINAL DEFECT
+--------------------------------------------------------------------
+Driver Today (`src/app/driver/page.tsx`, `src/lib/driver/
+trip-presentation.ts`) computed "today," trip-date grouping, and every
+displayed time/date using `Intl.DateTimeFormat` with no explicit
+`timeZone` — i.e., whichever timezone the Next.js server process
+itself happened to run in. Correct only by coincidence when server
+and organization agree; a real operational-correctness defect the
+moment they don't (a late-evening organization-local trip can be
+grouped onto the wrong calendar day by a server in a different zone).
+This was a known, explicitly documented simplification from P1-E3-S2
+(ZD-116), not a silently-introduced bug — this phase replaces it with
+a correct mechanism.
+
+--------------------------------------------------------------------
+2. SCHEMA CHANGE
+--------------------------------------------------------------------
+`supabase/migrations/20260901100000_organization_operational_timezone.sql`:
+
+    alter table public.organizations add column timezone text;
+    alter table public.organizations
+      add constraint organizations_timezone_valid_iana
+      check (public.is_valid_iana_timezone(timezone));
+    -- backfill existing rows deliberately (§4), then:
+    alter table public.organizations alter column timezone set not null;
+
+`organizations.timezone` — `text`, `NOT NULL`, IANA-validated. No
+column default (every INSERT must supply one explicitly — no silent
+product-wide assumption). Verified via `supabase gen types typescript
+--local`: `Row.timezone: string` (required, no `| null`).
+
+--------------------------------------------------------------------
+3. VALIDATION MECHANISM
+--------------------------------------------------------------------
+`public.is_valid_iana_timezone(text) returns boolean`, `STABLE`
+(genuinely queries the `pg_timezone_names` system catalog — not
+`IMMUTABLE`), no `SECURITY DEFINER` (needs none — `pg_timezone_names`
+is already publicly readable):
+
+    select p_timezone is not null
+      and (p_timezone = 'UTC' or p_timezone like '%/%')
+      and exists (select 1 from pg_timezone_names where name = p_timezone);
+
+**Why the `/`-or-`UTC` rule, not bare catalog membership:** confirmed
+empirically that `pg_timezone_names` itself contains legacy
+backward-compatibility entries — `EST`, `EDT`, `PST8PDT`, `Japan`,
+`GMT-0`, and 41 others — that a bare `exists (select 1 from
+pg_timezone_names where name = p_timezone)` check would incorrectly
+accept, despite being exactly the ambiguous/fixed-offset class this
+work item names for rejection. Live-tested against the actual
+catalog before writing the constraint (not assumed):
+
+    is_valid_iana_timezone('America/New_York') → true
+    is_valid_iana_timezone('America/Chicago')   → true
+    is_valid_iana_timezone('Africa/Lagos')       → true
+    is_valid_iana_timezone('UTC')                → true
+    is_valid_iana_timezone('Etc/UTC')            → true
+    is_valid_iana_timezone('EST')                → false
+    is_valid_iana_timezone('EDT')                → false
+    is_valid_iana_timezone('GMT-5')              → false
+    is_valid_iana_timezone('Georgia')            → false
+    is_valid_iana_timezone('Eastern')            → false
+    is_valid_iana_timezone(null / '')            → false
+
+**A genuine privilege subtlety, found by empirical testing, not
+assumed:** PostgreSQL re-validates every `CHECK` constraint on a row
+for **any** `UPDATE`, regardless of which columns actually changed,
+under the privileges of the role performing the `UPDATE` (not the
+table owner). This project's established pattern for internal helper
+functions (`_is_valid_trip_transition` et al.) revokes `EXECUTE` from
+`public` — that pattern's safety depends on the helper being called
+only from within a `SECURITY DEFINER` wrapper, which a bare `CHECK`
+constraint is not. Applying the same revoke-from-public reflex here
+was tried and reproduced live: an Organization Admin's ordinary
+`UPDATE organizations SET status = 'active' ...` (never touching
+`timezone`) failed with `permission denied for function
+is_valid_iana_timezone`. Fixed by granting `EXECUTE` to `authenticated`
+specifically (not `anon`/`public`) — recorded as ZD-120, including the
+reasoning for future internal-helper functions referenced from a
+`CHECK` constraint rather than a `SECURITY DEFINER` wrapper. This
+function reveals nothing sensitive if called directly (a boolean over
+Postgres's own public tzdata catalog), so the broader grant carries no
+real exposure risk, unlike the state-machine-revealing helpers this
+pattern was originally written to protect.
+
+No new public RPC was added for a timezone-management feature — the
+validator exists solely to back the `CHECK` constraint.
+
+--------------------------------------------------------------------
+4. MIGRATION/BACKFILL BEHAVIOR
+--------------------------------------------------------------------
+The migration is reproducible from zero: on a fresh `supabase db
+reset`, the backfill `UPDATE ... WHERE timezone IS NULL` runs against
+an empty `organizations` table (a genuine no-op, since seed.sql
+inserts its own explicit values afterward) — verified by inspection
+of the actual applied migration order and by the seed values landing
+exactly as `seed.sql` specifies (§5), not as the migration's own
+backfill default. In a hypothetical environment with real pre-existing
+organizations, that backfill deliberately sets `America/New_York` —
+the actual, current single-market reality for this product's history
+so far, not a silently-chosen convenience default — then `NOT NULL`
+is enforced immediately after, so no organization is ever left
+ambiguous.
+
+--------------------------------------------------------------------
+5. SEED TIMEZONE DECISIONS
+--------------------------------------------------------------------
+`supabase/seed.sql`: Org A (`Fictional Org A`) = `America/New_York`,
+Org B (`Fictional Org B`) = `America/Chicago` — deliberately
+**different**, not both defaulted to the same value. Org A matches
+the Georgia-launch framing already established throughout this
+project's other fixtures; Org B is a distinct real US timezone chosen
+specifically so the existing `multi-org-user@example.test` fixture
+(Org A admin, Org B driver) exercises genuine multi-org-timezone
+context without inventing new fixtures (ZD-121). The two Driver Today
+QA trip fixtures (`95000000-...-a1`/`-a2`, added P1-E3-S2) were
+re-anchored from a raw UTC-midnight offset to Org A's own real
+operational midnight (`(now() at time zone 'America/New_York')::date)
+::timestamp at time zone 'America/New_York'`, the standard
+double-AT-TIME-ZONE round-trip) — both for correctness (the fixture
+now models "10 AM Org A local," not "10 AM UTC," which is what a real
+organization's own scheduling would mean) and so the P1-E3-S2/S2B
+visual QA screenshots' displayed times ("10:00 AM"/"11:00 AM"/
+"2:00 PM") remain identical after this fix, for the correct reason
+instead of the previous coincidental one (§21).
+
+--------------------------------------------------------------------
+6. ORGANIZATION CONTEXT CHANGES
+--------------------------------------------------------------------
+`src/lib/auth/types.ts`: `ActiveMembership`/`OrganizationContext` both
+gain a required `organizationTimezone: string` field.
+`src/lib/auth/membership.ts`: `getActiveMemberships()`'s existing
+query extended from `organizations(name)` to `organizations(name,
+timezone)` — the exact same embedded join, one more column, never a
+second lookup. `src/lib/auth/organization.ts` (`resolveOrganizationContext`)
+required **zero** changes — it already returns whichever
+`ActiveMembership` object matches, and that object now carries the
+timezone automatically once the type/query were extended. The
+`zw_org_context` cookie is untouched — it still names a requested
+organization only; timezone is never read from it, always re-resolved
+live from the database on every request, same as `organizationName`
+always has been.
+
+--------------------------------------------------------------------
+7. FORMATTING HELPER CHANGES
+--------------------------------------------------------------------
+`src/lib/driver/trip-presentation.ts`: `formatTripTime(iso,
+timezone)`, `formatLongDate(date, timezone)`, and
+`isSameOperationalDay(a, b, timezone)` (renamed from
+`isSameLocalDay`) — `timezone` is a required parameter on all three,
+no default, no fallback to the runtime's own zone (TypeScript itself
+enforces this — a call site omitting the argument fails to compile).
+Internally: `Intl.DateTimeFormat(..., { timeZone: timezone })`
+throughout; `isSameOperationalDay` compares the `en-CA`-formatted
+(`YYYY-MM-DD`) calendar-date string for each instant in the given
+zone — the standard way to answer "what day is this, there" via the
+platform's own IANA/Intl implementation, no manual offset arithmetic
+anywhere (work item §11).
+
+--------------------------------------------------------------------
+8. TODAY-GROUPING CHANGES
+--------------------------------------------------------------------
+`src/app/driver/page.tsx`: `toTodayTrip()` now takes `timezone` and
+calls `isSameOperationalDay(..., timezone)` instead of the old
+`isSameLocalDay(...)`. `access.organization.organizationTimezone` is
+resolved once per request and threaded into every date/time call site
+on the page (the date/count heading, the Next Trip card, every Later
+Today row). No other page logic changed — same RPC, same fields, same
+empty/error states.
+
+--------------------------------------------------------------------
+9. UTC-SERVER TEST
+--------------------------------------------------------------------
+Ran the actual production presentation-helper module (imported
+directly via Node's native TypeScript support — no `ts-node`/`tsx`
+dependency added) under three different process `TZ` environments:
+the sandbox machine's own unmodified default (`Africa/Lagos`,
+confirmed via `Intl.DateTimeFormat().resolvedOptions().timeZone`),
+explicit `TZ=UTC`, and explicit `TZ=Africa/Lagos` again for
+confirmation. **Byte-identical 9/9 output across all three runs** —
+genuinely satisfying the work item's own named example set (UTC,
+Africa/Lagos, America/New_York — the third is the organization
+timezone under test in every case, not the server's). This holds by
+construction: no function in `trip-presentation.ts` reads
+`process.env.TZ` or any server-local API anywhere — confirmed by
+direct source inspection, not merely by this one test run.
+
+--------------------------------------------------------------------
+10. MIDNIGHT-BOUNDARY TESTS
+--------------------------------------------------------------------
+Against the real production module, `America/New_York`:
+
+  MIDNIGHT-1: 11:30 PM local and 10:00 PM local (same evening)         → SAME organizational day — PASS
+  MIDNIGHT-2: 11:45 PM local (Jun 15) vs 12:05 AM local (Jun 16),
+              both '2026-06-16' in UTC                                 → DIFFERENT organizational days — PASS
+  MIDNIGHT-3: 12:30 AM local and 1:00 AM local (same night)            → SAME organizational day — PASS
+  MIDNIGHT-4: 11:00 PM local (Jun 15) and 12:30 AM local (Jun 16)      → DIFFERENT organizational days — PASS
+
+MIDNIGHT-2 is the literal original defect scenario, reproduced and
+proven fixed: two instants that share the SAME **UTC** calendar date
+are correctly recognized as DIFFERENT **organization-local** calendar
+days once the local-midnight boundary falls between them.
+
+--------------------------------------------------------------------
+11. DST TEST
+--------------------------------------------------------------------
+`America/New_York` (a DST-observing zone), same IANA identifier, two
+seasons:
+
+  DST-1: 2026-01-15T15:00:00Z → "10:00 AM" (EST, UTC−5) — PASS
+  DST-2: 2026-07-15T15:00:00Z → "11:00 AM" (EDT, UTC−4) — PASS
+
+Same identifier, same function call shape, correct offset resolved
+automatically both times by the platform's own `Intl`/tzdata
+implementation — no DST arithmetic written anywhere in this codebase
+(work item §11 explicit instruction).
+
+--------------------------------------------------------------------
+12. MULTI-ORG TEST
+--------------------------------------------------------------------
+Two layers, both real:
+
+- **Pure-function layer:** `formatTripTime()` on the identical UTC
+  instant (`2026-06-16T02:00:00Z`) with two different organization
+  timezones → `"10:00 PM"` (America/New_York) vs. `"9:00 PM"`
+  (America/Chicago) — genuinely different, PASS.
+- **Live database/query layer:** signed in as the real seeded
+  `multi-org-user@example.test` via the real Supabase Auth service,
+  issued the exact query `getActiveMemberships()` uses (`.from(
+  "memberships").select("organization_id, role, organizations(name,
+  timezone)").eq("user_id", user.id).eq("status","active")`) through
+  the real `@supabase/ssr` client under that real session — not a
+  reimplementation. Result: Org A → `organization_admin` /
+  `America/New_York`; Org B → `driver` / `America/Chicago`. All 6
+  assertions (row count, each org's timezone, the two timezones being
+  genuinely distinct, each org's real role) PASS.
+
+Timezone belongs to the Organization, not the user — confirmed by the
+same user resolving two different values depending on which
+organization's context is active, exactly as work item §13 requires,
+and confirmed structurally: `timezone` is fetched via the identical
+embedded join `organizationName` already used (no separate,
+divergence-prone lookup mechanism exists).
+
+--------------------------------------------------------------------
+13. RLS RESULT
+--------------------------------------------------------------------
+No RLS policy was added, widened, or modified. `organizations.timezone`
+is readable through the exact same, pre-existing
+`organizations_select_members`/`organizations_select_platform_admin`
+policies as every other column on that table (SELECT was never
+column-restricted; only UPDATE is, and `timezone` is deliberately
+**not** in that UPDATE grant — §6/§18). New, focused assertions added
+this phase (`organization_timezone_tests.sql`) prove: an active member
+reads their own org's timezone (TZ-RLS-1); an Org A admin cannot see
+Org B's row/timezone at all (TZ-RLS-2); an inactive Membership cannot
+read the organization row/timezone at all (TZ-RLS-3, via the
+pre-existing, unmodified `is_org_member()`'s `status='active'`
+requirement); `anon` cannot read any organization row at all
+(TZ-RLS-4, denied at the table-grant layer — a stronger denial than
+an RLS zero-row result). All 4 PASS. No RLS widening occurred anywhere.
+
+--------------------------------------------------------------------
+14. DRIVER SECURE-READ RESULT
+--------------------------------------------------------------------
+`grep -rn "\.rpc(" src/app/driver src/components/driver src/lib/driver
+src/lib/auth/authorization.ts` → unchanged: exactly `driver_get_profile`
+and `driver_list_active_trips`, the same two calls as before this
+phase. `grep` for any direct `passengers`/`trips`/`trip_assignments`
+table read anywhere in Driver application code → zero matches,
+unchanged. No RLS policy, RPC signature, schema table, or migration
+outside `organizations.timezone` itself was touched. The Driver
+minimum-necessary Passenger projection is completely unmodified —
+`timezone` was added to `organizations`, never to `trips` or
+`passengers` (work item §14 explicit instruction).
+
+--------------------------------------------------------------------
+15. AUTH REGRESSION
+--------------------------------------------------------------------
+**41/41 PASS** — the full existing auth integration suite, re-run
+against the actual running app (production build) from a fresh
+`supabase db reset`, after all changes in this phase.
+
+--------------------------------------------------------------------
+16. DRIVER TODAY REGRESSION
+--------------------------------------------------------------------
+Real HTTP content checks against the actual running app, real seeded
+credentials: populated state (`org-a-driver-a@example.test`) — all
+real-data checks pass, no raw ISO timestamp leaked, no premature
+phone exposure; empty state (`org-a-driver-b@example.test`) — correct
+calm empty-state copy, zero Passenger content leaked. **Displayed
+times confirmed exactly correct for Org A's real timezone**
+(`America/New_York`) on a server actually running in `Africa/Lagos`:
+rendered HTML contains `"10:00 AM"`, `"11:00 AM"`, `"2:00 PM"` — the
+same values the P1-E3-S2/S2B screenshots showed, now for the correct
+reason (§5) rather than the previous server-timezone coincidence (had
+this fix NOT been applied, this same server would have rendered
+`"3:00 PM"`/`"4:00 PM"`/`"7:00 PM"` — Lagos-local, not
+New-York-local — for these exact stored instants).
+
+--------------------------------------------------------------------
+17. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` → exit 0, zero errors (final run, after all
+changes including the regenerated `database.types.ts`).
+
+--------------------------------------------------------------------
+18. LINT
+--------------------------------------------------------------------
+`npm run lint` (eslint) → exit 0, zero errors/warnings.
+
+--------------------------------------------------------------------
+19. BUILD
+--------------------------------------------------------------------
+`npm run build` → succeeded (Next.js 16.3.3, Turbopack). All 24 routes
+generated, `ƒ Proxy (Middleware)` present, no warnings.
+
+--------------------------------------------------------------------
+20. DOCS UPDATED
+--------------------------------------------------------------------
+docs/data/schema.md (new "`organizations.timezone`" section)
+docs/product/domain-model.md (Organization entity, §B entity 1)
+docs/product/auth-session-routing.md ("Organization context" section)
+docs/product/driver-today-data-map.md ("Today grouping"/timezone
+sections rewritten; field-mapping rows updated)
+docs/product/decision-register.md (ZD-119 through ZD-123)
+docs/product/application-implementation-plan.md — **not required by
+this phase's own §22 list and not touched**; no change was needed
+since P1-E3-S2's own status/scope description remains accurate (this
+phase corrected a defect within already-declared scope, not added a
+new screen)
+
+New: **docs/product/operational-timezone.md** — the concise,
+dedicated reference (timezone ownership, IANA requirement, UTC
+storage, local interpretation, multi-org behavior, DST behavior,
+server/browser non-authority), per the work item's own suggestion.
+
+--------------------------------------------------------------------
+21. DECISIONS RECORDED
+--------------------------------------------------------------------
+ZD-119 (Organization operational timezone: IANA-only, NOT NULL, no
+product-wide default) · ZD-120 (the IANA validator design, including
+the CHECK-constraint privilege subtlety found by empirical testing) ·
+ZD-121 (deliberately differentiated seed timezones) · ZD-122
+(presentation helpers require an explicit timezone parameter, no
+fallback) · ZD-123 (`create_trip`'s timestamp semantics inspected,
+confirmed already correct, not changed — the open question is a
+future UI's own responsibility).
+
+--------------------------------------------------------------------
+22. FILES CREATED
+--------------------------------------------------------------------
+supabase/migrations/20260901100000_organization_operational_timezone.sql
+supabase/tests/organization_timezone_tests.sql
+docs/product/operational-timezone.md
+docs/reports/P1-E3-S2C-operational-timezone-report.txt
+
+--------------------------------------------------------------------
+23. FILES MODIFIED
+--------------------------------------------------------------------
+docs/data/schema.md
+docs/product/domain-model.md
+docs/product/auth-session-routing.md
+docs/product/driver-today-data-map.md
+docs/product/decision-register.md
+src/lib/auth/types.ts
+src/lib/auth/membership.ts
+src/lib/driver/trip-presentation.ts
+src/app/driver/page.tsx
+src/lib/supabase/database.types.ts (regenerated from local Supabase
+  after the schema change, per work item §17 — no remote connection)
+supabase/seed.sql (organizations INSERT gains explicit `timezone`
+  values; the Driver Today QA trip fixtures re-anchored to Org A's
+  own operational midnight instead of a UTC-day offset — §5)
+
+(P1-E3-S2/S2A/S2B's own already-uncommitted files are otherwise
+untouched by this phase — see the correction at the top of this
+report regarding their actual, still-uncommitted state.)
+
+--------------------------------------------------------------------
+24. BLOCKERS
+--------------------------------------------------------------------
+NONE. (One transient, unrelated infrastructure hiccup is worth
+recording honestly: a mid-phase `supabase db reset` reported
+"supabase_storage_ZenWard container is not ready: unhealthy" as its
+final line and a non-zero exit — the actual database work (migrations
++ seed) had already completed successfully before that health-check
+failure, confirmed by direct inspection of the resulting data
+immediately afterward; the Storage service itself is not used
+anywhere in this project. Re-verified `docker ps` showed the relevant
+containers — `supabase_db_ZenWard`, `supabase_auth_ZenWard`,
+`supabase_rest_ZenWard` — healthy immediately after. Every subsequent
+reset/regression run in this phase completed cleanly with no repeat
+of this hiccup.)
+
+--------------------------------------------------------------------
+25. OPERATIONAL TIMEZONE GATE
+--------------------------------------------------------------------
+READY — every criterion in work item §23 is met: explicit operational
+timezone (1), validated (2), existing/seed rows deliberate and
+distinct (3), org context carries it (4), Driver Today grouping (5)
+and formatting (6) both use it, server-local timezone is no longer
+read anywhere in the presentation layer (7), midnight-boundary (8)
+and DST (9) tests pass, multi-org context resolves correctly per
+organization (10), Driver secure-read architecture is byte-for-byte
+unchanged (11), RLS/auth regressions remain fully green (12),
+TypeScript/lint/build all pass (13).
+
+====================================================================
+OPERATIONAL TIMEZONE GATE:
+READY
+
+SERVER TIMEZONE DEPENDENCY:
+REMOVED
+
+IANA VALIDATION:
+PASS
+
+MIDNIGHT BOUNDARY:
+PASS
+
+MULTI-ORG TIMEZONE:
+PASS
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S3 — Driver Trips & Active Trip Experience
+====================================================================
+Do NOT commit. Do NOT push. Do NOT deploy. Do NOT begin P1-E3-S3.
+STOP after reporting.
+====================================================================

@@ -54,16 +54,28 @@
   --font-display: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 
-  /* Spacing — semantic aliases layered on Tailwind's 4px scale (see design-tokens.md §5) */
-  --spacing-2xs: 0.125rem; /* 2px */
-  --spacing-xs: 0.25rem; /* 4px */
-  --spacing-sm: 0.5rem; /* 8px */
-  --spacing-md: 1rem; /* 16px */
-  --spacing-lg: 1.5rem; /* 24px */
-  --spacing-xl: 2rem; /* 32px */
-  --spacing-2xl: 3rem; /* 48px */
-  --spacing-3xl: 4rem; /* 64px */
-  --spacing-4xl: 5rem; /* 80px */
+  /* Spacing — semantic aliases layered on Tailwind's 4px scale (see design-tokens.md §5)
+     P1-E3-S2B: keyed as --spacing-zw-{size}, NOT --spacing-{size}. Tailwind v4's
+     `--spacing-*` theme namespace is shared by every spacing-family utility
+     (gap/p/m/space/inset/...) AND is also a fallback source `max-w-*`/`min-w-*`
+     check before their own dedicated `--container-*` scale (theme.css:
+     --container-3xs..7xl, e.g. --container-sm: 24rem). Naming a project
+     token --spacing-sm collides with that reserved container keyword and
+     silently hijacks max-w-sm/md/lg/xl/... down to 8px/16px/... (found and
+     fixed P1-E3-S2A/S2B — see docs/reports/P1-E3-S2B-design-token-driver-visual-report.txt
+     and decision-register.md ZD-11x). The `zw-` segment is a private
+     namespace Tailwind will never define, so this collision — and any
+     future one against Tailwind's other reserved size vocabulary — cannot
+     recur. Utilities read e.g. `gap-zw-md`/`p-zw-lg`, never bare `gap-md`. */
+  --spacing-zw-2xs: 0.125rem; /* 2px */
+  --spacing-zw-xs: 0.25rem; /* 4px */
+  --spacing-zw-sm: 0.5rem; /* 8px */
+  --spacing-zw-md: 1rem; /* 16px */
+  --spacing-zw-lg: 1.5rem; /* 24px */
+  --spacing-zw-xl: 2rem; /* 32px */
+  --spacing-zw-2xl: 3rem; /* 48px */
+  --spacing-zw-3xl: 4rem; /* 64px */
+  --spacing-zw-4xl: 5rem; /* 80px */
 
   /* Radius */
   --radius-xs: 6px;

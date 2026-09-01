@@ -21,7 +21,7 @@ export interface PublicHeaderProps {
 export function PublicHeader({ links = [], ctaLabel, ctaHref }: PublicHeaderProps) {
   return (
     <header className="border-b border-border-subtle bg-surface-elevated">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-md lg:px-xl">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-zw-md lg:px-zw-xl">
         <Link href="/" className={cn(typography.subsectionHeading, "text-brand-care-navy")}>
           Zenward Mobility
         </Link>

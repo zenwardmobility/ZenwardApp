@@ -16,7 +16,7 @@ export interface EmptyStateProps {
  */
 export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
   return (
-    <div className={cn("flex flex-col items-center gap-3 px-lg py-3xl text-center", className)}>
+    <div className={cn("flex flex-col items-center gap-3 px-zw-lg py-zw-3xl text-center", className)}>
       {icon && (
         <div className="text-text-disabled" aria-hidden>
           {icon}

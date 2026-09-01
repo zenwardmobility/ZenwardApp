@@ -19,7 +19,7 @@ export interface OperationsRouteStubProps {
  */
 export function OperationsRouteStub({ title, description, breadcrumb, sampleId }: OperationsRouteStubProps) {
   return (
-    <div className="flex flex-col gap-lg">
+    <div className="flex flex-col gap-zw-lg">
       <PageHeader title={title} description={description} breadcrumb={breadcrumb} />
       <Panel>
         <EmptyState

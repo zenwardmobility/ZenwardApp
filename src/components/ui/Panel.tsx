@@ -16,7 +16,7 @@ export function Panel({ elevated = false, className, children, ...props }: Panel
   return (
     <div
       className={cn(
-        "rounded-md border border-border-subtle bg-surface-elevated p-lg",
+        "rounded-md border border-border-subtle bg-surface-elevated p-zw-lg",
         elevated && "shadow-sm",
         className,
       )}

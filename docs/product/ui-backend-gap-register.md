@@ -71,6 +71,15 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Severity:** Low.
 - **Blocks:** Nothing in this reference set.
 
+### GAP-10 — Driver Today "Completed Today" section — not implementable at full Stitch fidelity *(found P1-E3-S2)*
+
+- **Screen:** Driver Today (06)
+- **Finding:** `driver_list_active_trips` excludes a completed trip entirely — its active assignment closes in the same transaction as `driver_complete_trip`, so a finished trip has no active assignment left to be listed under, by construction, not an oversight. `driver_list_trip_history` is the only RPC covering ended assignments, but ZD-099 deliberately redacts passenger identity and pickup/destination text from history (a past assignment is lower-need than an active one). No combination of the two approved RPCs can produce Stitch's "8:15 AM · Brenda Scott · Home → Northside Clinic · Completed" row.
+- **Severity:** Low — cosmetic completeness of one section on one screen; no security or correctness issue, and the information is not lost (it remains visible, appropriately redacted, on the deferred History tab).
+- **Recommendation:** Do not widen `driver_list_trip_history`'s existing redaction to work around this — that would undermine ZD-099's stated privacy rationale for a single section's visual completeness. If full fidelity is ever wanted, it needs its own deliberately-reviewed, narrowly-scoped "recently completed, minimally identifying" projection — a new decision, not assumed here.
+- **Resolution this phase:** Omitted from Driver Today. Not implemented, not faked. See docs/product/driver-today-data-map.md "Omitted from this phase".
+- **Blocks:** Full Stitch-reference parity on Driver Today only.
+
 ---
 
 ## OPTIONAL (would improve the product but nothing in this reference set requires it)

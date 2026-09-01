@@ -53,7 +53,7 @@ export function DataTable<T>({
                 scope="col"
                 className={cn(
                   typography.tableHeader,
-                  "px-md py-sm text-text-secondary",
+                  "px-zw-md py-zw-sm text-text-secondary",
                   alignClasses[column.align ?? "left"],
                 )}
               >
@@ -93,7 +93,7 @@ export function DataTable<T>({
                     key={column.key}
                     className={cn(
                       typography.tableCell,
-                      "px-md py-sm",
+                      "px-zw-md py-zw-sm",
                       column.primary ? "text-text-primary" : "text-text-secondary",
                       alignClasses[column.align ?? "left"],
                     )}

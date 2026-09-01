@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Manrope, Inter } from "next/font/google";
 import "./globals.css";
 
@@ -17,6 +17,16 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "Zenward Mobility",
   description: "Non-emergency medical transportation.",
+};
+
+/**
+ * `viewportFit: "cover"` lets the Driver shell's fixed header/bottom-nav
+ * read `env(safe-area-inset-*)` on notched devices (P1-E3-S2, work item
+ * §44). Harmless on Operations/desktop — it only changes behavior on
+ * devices that report a safe-area inset at all.
+ */
+export const viewport: Viewport = {
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
