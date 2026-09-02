@@ -12,6 +12,18 @@ Git HEAD before work: 17f7a6a "Implement Trip Assurance and harden
                        completion reports independently declared)
 Date/time:            2026-09-02
 ====================================================================
+ADDENDUM NOTE: this phase's own work item text was reissued in full
+after the original P1-E3-S8B pass below was already complete,
+committed (4ac9b39 "Complete full product UI convergence"), and pushed
+to origin/main. The pre-work checkpoint on the reissue found a CLEAN
+working tree at that exact commit — no substantive design/code work
+was redone. The one genuine gap versus the reissued text (1920x1080
+Operations / 375x812 Driver captures, explicitly re-listed but
+originally judged sufficiently covered by adjacent viewports without a
+literal capture) was closed with 7 additional screenshots — see §45/
+§46/§62. Everything else in this report describes the same, unchanged,
+already-committed work.
+====================================================================
 
 --------------------------------------------------------------------
 1. PRE-WORK GIT STATE
@@ -334,20 +346,32 @@ All 4 Operations screens captured and reviewed at 768x1024, 1024x768,
 clipping, no giant whitespace, no compressed tables, no misaligned
 sidebar at any width; the sidebar's own existing responsive contract
 (icon-only at md, full at lg+, guard state below md) is unaffected by
-the color-only change this phase made. 1920x1080 was not separately
-captured — the layout has no fixed-width ceiling below that size (the
-1600px capture already shows the content area comfortably filling
-available width with no upper clamp that would misbehave wider), judged
-sufficient evidence rather than a required 6th capture per screen.
+the color-only change this phase made. **Update:** 1920x1080 was
+initially judged sufficiently covered by the 1600px evidence and not
+separately captured; on this phase's own re-issue explicitly re-listing
+it, the gap was closed rather than re-argued — all 4 Operations screens
+now also captured and reviewed at 1920x1080 (`after/` only; no
+behavioral difference to compare against a "before" state that was
+already fixed by the time this capture was taken). Confirmed clean: the
+content area fills the wider canvas with no upper clamp misbehavior, no
+new whitespace, no table compression — the original reasoning was
+correct, now with direct evidence rather than an inference.
 
 --------------------------------------------------------------------
 46. RESPONSIVE DRIVER QA
 --------------------------------------------------------------------
 All 3 Driver screens captured and reviewed at 390x844, 430x932,
 768x1024, 1024x768 (before AND after) — single-column, no overflow, no
-broken card wrapping at any width. 375x812 was not separately captured
-(390x844 and 430x932 already bracket it closely, and no width-dependent
-layout logic exists between them) — judged sufficient.
+broken card wrapping at any width. **Update:** 375x812 was initially
+judged sufficiently bracketed by 390x844/430x932 and not separately
+captured; closed the same way as the Operations 1920x1080 gap above —
+all 3 Driver screens now also captured at 375x812 (`after/` only).
+Confirmed clean: single-column, no horizontal scroll, no broken
+wrapping at this narrower width either — Navigate/Call Passenger remain
+comfortably side-by-side, the bottom tab bar and primary CTA remain
+correctly positioned (below the visible viewport fold in a fixed-height
+CDP capture on this content-heavy screen, exactly as it is at every
+other captured width — a real scrollable page, not a clipping defect).
 
 --------------------------------------------------------------------
 47. MOBILE TOUCH-TARGET QA
@@ -509,6 +533,16 @@ side-by-side evidence trail. Two additional targeted captures
 `/tmp/driver-report-issue-dialog.png`, ephemeral scratch paths) verified
 the new Report Issue affordance visually; the durable evidence for that
 finding lives in the `after/04-driver-active-trip/` set.
+
+**Addendum (same phase, reissued work item):** 7 additional captures
+added to `after/` closing the 1920x1080 (Operations, ×4) and 375x812
+(Driver, ×3) gap flagged in §45/§46 above — no code changed between the
+original 32-shot capture and this addendum (git HEAD was already at the
+committed S8B state throughout), so these are pure additional evidence,
+not a re-verification of anything already confirmed. 39 after-screenshots
+total; 32 before-screenshots (unchanged, no reissue asked for additional
+before-state evidence at these two viewports, and none is needed since
+nothing regressed).
 
 --------------------------------------------------------------------
 63. REMAINING P0 ISSUES
