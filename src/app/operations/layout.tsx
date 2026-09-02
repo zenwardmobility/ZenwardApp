@@ -3,6 +3,7 @@ import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getUser } from "@/lib/auth/session";
 import { getDisplayName } from "@/lib/auth/profile";
+import { getActiveMemberships } from "@/lib/auth/membership";
 import { OperationsLayoutClient } from "@/components/operations/OperationsLayoutClient";
 
 /**
@@ -22,9 +23,18 @@ export default async function OperationsLayout({ children }: { children: ReactNo
   const organization = await requireOperationsAccess(pathname);
   const user = await getUser();
   const dispatcherDisplayName = await getDisplayName(user?.id ?? "", user?.email ?? null);
+  // Real fact, re-derived on every request (P1-E3-S8B1) — never assumed
+  // from the resolved `organization` context alone, which only reflects
+  // the CURRENT selection, not how many the caller actually holds.
+  const memberships = await getActiveMemberships();
+  const hasMultipleOrganizations = memberships.length > 1;
 
   return (
-    <OperationsLayoutClient organization={organization} dispatcherDisplayName={dispatcherDisplayName}>
+    <OperationsLayoutClient
+      organization={organization}
+      dispatcherDisplayName={dispatcherDisplayName}
+      hasMultipleOrganizations={hasMultipleOrganizations}
+    >
       {children}
     </OperationsLayoutClient>
   );

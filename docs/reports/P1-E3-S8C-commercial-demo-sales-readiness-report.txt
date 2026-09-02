@@ -1,0 +1,449 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S8C — Commercial Demo Polish & Sales Readiness
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: aa79e168524a4eb80f7ff87914270aa43e5ef7d0 "Add
+                       additional S8B responsive QA captures (1920x1080
+                       Operations, 375x812 Driver)"
+Date/time:            2026-09-02 / 2026-09-03
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK STATE
+--------------------------------------------------------------------
+`git status --short` was dirty at phase start, carrying forward the
+entire uncommitted P1-E3-S8B1 diff (Operations surface completion —
+Trips/Passengers/Facilities/Drivers/Fleet real screens, AccountMenu,
+Sign Out wiring, Billing/Reports/Settings nav removal), per S8B1's own
+explicit "do not commit" instruction. This is the same recurring
+checkpoint condition seen repeatedly this session — the diff was
+already fully explained and reported by S8B1's own completion report
+(`docs/reports/P1-E3-S8B1-operations-surface-completion-report.txt`,
+already present as an untracked file). This phase's own new work
+layers on top of that same uncommitted tree: `supabase/seed.sql`
+(the Harmony Medical Transport demo organization), `docs/commercial/`
+(new), `docs/design/qa/commercial-demo/` (new), this report, and
+`docs/product/decision-register.md` (ZD-189/ZD-190). No commit was
+attempted at any point this phase — the work item's own final
+instruction ("Do NOT commit. Do NOT push. Do NOT deploy.") makes this
+unambiguous regardless of any tooling consideration.
+
+--------------------------------------------------------------------
+2. SCOPE DISCIPLINE
+--------------------------------------------------------------------
+Confirmed via `git diff --name-status` before/after: no billing,
+broker-integration, Facility Portal, native Driver app, production
+deployment, or P1-E3-S9 (Driver onboarding) work was begun. The only
+application-code change this phase is `supabase/seed.sql` — every
+other file under `src/` was touched only by the still-uncommitted
+S8B1 diff, not by this phase. All new work is either seed data or
+documentation (`docs/commercial/`, this report, decision-register
+entries, and the commercial screenshot set).
+
+--------------------------------------------------------------------
+3. THE DEMO ORGANIZATION — "HARMONY MEDICAL TRANSPORT"
+--------------------------------------------------------------------
+Appended to `supabase/seed.sql` as a plain, additive block after the
+existing fixture organizations — no new migration, no schema change,
+no special demo-mode flag (ZD-189). Composition:
+
+  Organization:    Harmony Medical Transport (America/New_York)
+  Users/Roles:     1 Organization Admin, 1 Dispatcher, 3 Drivers
+  Drivers:         Marcus Bell, Angela Reyes, Leon Whitfield
+  Vehicles:        Ford Transit 12, Toyota Sienna 04, Dodge Grand
+                    Caravan 07
+  Facilities:      Cascade Dialysis Center, Peachtree Family Clinic,
+                    Northside Rehabilitation Center (real Atlanta-area
+                    addresses)
+  Passengers:      6, each with a plausible name and, where relevant,
+                    a real mobility/assistance note (e.g. "uses a
+                    wheelchair, needs ramp access") — no diagnosis
+                    data, no PHI beyond what the schema's own
+                    minimum-necessary projections already carry
+  Transportation
+  Request:         1 pending, facility-initiated
+  Trips (today):   12 at seed time — 2 completed, 3 en route (one
+                    with a fresh location signal, one with a stale
+                    one, one with an open exception), 1 unassigned
+                    ("Willie Thompson," the deliberate Needs
+                    Assignment case), 6 ordinary scheduled+assigned
+                    trips spread across the day and all 3 drivers
+  Open Issue:      1 (route_issue on the en-route trip with a
+                    deliberately stale-arriving location)
+  Location
+  updates:         2 (one fresh, one ~9 minutes old at seed time —
+                    both naturally continue aging by real wall-clock
+                    time after reset, which is correct, expected
+                    behavior, not a defect — see §12)
+
+Naming deliberately departs from every other fixture organization's
+`Fictional:`/`Fictional Passenger A1` convention (ZD-190) — buyer-
+facing data is realistic in appearance, fictional in substance, per
+the work item's own explicit instruction. No real PHI, no real
+organizations, no medical diagnosis data, and no implied Vehicle
+capability the schema doesn't model (vehicles are label + status
+only).
+
+--------------------------------------------------------------------
+4. SEEDING ERRORS FOUND AND FIXED (before this session's own
+   summarized portion begins, carried into this report for
+   completeness)
+--------------------------------------------------------------------
+Three real SQL errors were found and fixed while authoring the seed
+block (all confirmed via the exact `psql` error text, all fixed with
+targeted, reviewed edits, not blind retries):
+  1. An invalid hex digit (`h`) used as a fixture-tag letter — fixed
+     to `f` (the one remaining unused single hex letter after
+     a1-e1 were confirmed already used elsewhere in the file).
+  2. Missing `::uuid` casts on facility-id literals inside a
+     `select ... union all select ...` trips block — Postgres does
+     not auto-infer target-column types there the way it does for a
+     plain `insert ... values (...)`. Fixed with explicit casts.
+  3. An invalid `requester_relationship` value (`'facility'`) — the
+     real CHECK constraint only permits `('self', 'family',
+     'caregiver', 'facility_coordinator', 'other')`. Fixed to
+     `'facility_coordinator'`.
+After these fixes, `supabase db reset` succeeded cleanly and a direct
+`psql` count query confirmed every fixture count matched the intended
+design exactly.
+
+--------------------------------------------------------------------
+5. LIVE VERIFICATION — READ PATHS (all 7 core Operations screens +
+   Driver)
+--------------------------------------------------------------------
+Method: headless Chrome via CDP, real sign-in through the actual
+`/sign-in` form (never a fabricated session/cookie), signed in as
+`dispatch@harmonytransport.test` and each of the 3
+`driver.*@harmonytransport.test` accounts. 22/22 real assertions
+PASS on the first pass, covering: Today's Operations (org name,
+Willie Thompson's Needs Assignment row, no QA-name leakage), Dispatch
+board (all 3 drivers, the unassigned trip), Trips list, Passengers
+(Dorothy Simmons, Harold Jennings, no `Fictional Passenger` leakage),
+Facilities (Cascade Dialysis Center, no `Fictional Clinic` leakage),
+Drivers, Fleet, Trip Detail for the open-exception trip, and Driver
+Trips for Leon Whitfield. Full detail and screenshots:
+`docs/design/qa/commercial-demo/`.
+
+--------------------------------------------------------------------
+6. LIVE VERIFICATION — THE FULL 10-MINUTE DEMO NARRATIVE, AS REAL
+   MUTATIONS
+--------------------------------------------------------------------
+Not merely "the screens render" — the entire causal narrative in
+`zenward-demo-script.md`'s 10-minute version was executed as real
+clicks producing real, independently-verified database state
+changes, run 3 times from 3 separate fresh `supabase db reset`
+cycles (§8). Each run: 25/25 real assertions PASS, 0 manual DB
+fixes, 0 duplicate state, 0 broken navigation.
+
+Narrative exercised, end to end, on Willie Thompson's trip:
+  1. Dispatcher signs in, sees the trip in Needs Attention (Today's
+     Operations) and Needs Assignment (Dispatch).
+  2. Dispatcher assigns Leon Whitfield + Dodge Grand Caravan 07 via
+     the real Assign Driver dialog — DB confirms the assignment.
+  3. Driver (Leon) signs in, sees the trip, taps "Start to Pickup" —
+     DB confirms the trip state advances to `en_route_to_pickup`.
+  4. Driver taps "Share My Location" (CDP geolocation grant simulates
+     the browser permission grant) — DB confirms a real
+     `driver_location_updates` row is written.
+  5. Dispatcher refreshes Dispatch — the trip is no longer in Needs
+     Assignment; the freshness signal reflects the new location.
+  6. Driver taps "Report Issue," submits a real issue — DB confirms a
+     new open `trip_exceptions` row.
+  7. Dispatcher sees the new issue on Today's Operations / Trip
+     Detail, opens "Resolve," submits a resolution note — DB confirms
+     the exception's status becomes `resolved`.
+  8. Driver continues the remaining lifecycle taps (Arrived →
+     Passenger Onboard → Start to Destination → Arrived → Complete
+     Trip) — DB confirms the trip reaches `completed` and its
+     assignment closes with `end_reason = 'trip_completed'`.
+  9. Dispatcher's Today's Operations reflects the finished trip with
+     a full, real, timestamped Activity Log (assigned → en route →
+     issue flagged → issue resolved → arrived → completed), in
+     order — see `docs/design/qa/commercial-demo/
+     11-operations-completed-activity-log.png`.
+
+This is the exact "know → assign → watch → handle a problem → confirm
+it's done and recorded" narrative the work item specified, and it was
+never simulated or staged — every state transition above is a real
+RPC/Server Action call against the local Postgres database.
+
+--------------------------------------------------------------------
+7. DEMO RESET
+--------------------------------------------------------------------
+`supabase db reset` from the repository root re-seeds Harmony Medical
+Transport to its exact starting composition (§3) — no manual database
+editing before, during, or after a demo. Verified via direct `psql`
+count query after each of 3 consecutive resets this phase: identical
+counts every time (12 trips, 6 passengers, 3 drivers, 3 vehicles,
+3 facilities, 1 open exception, 2 location updates).
+
+--------------------------------------------------------------------
+8. THREE CONSECUTIVE DEMO RUNS
+--------------------------------------------------------------------
+  Run 1: fresh reset → full 10-minute narrative (§6) → 25/25 PASS
+  Run 2: fresh reset → full 10-minute narrative (§6) → 25/25 PASS
+  Run 3: fresh reset → full 10-minute narrative (§6) → 25/25 PASS
+No manual DB fixes, no duplicate state, no broken navigation, and no
+service restart was needed between or during any of the 3 runs — the
+Next.js dev server and local Supabase stack ran continuously
+throughout.
+
+--------------------------------------------------------------------
+9. ALL VISIBLE NAVIGATION
+--------------------------------------------------------------------
+Re-confirmed live, signed in as Harmony accounts, not assumed from
+S8B1's own prior conclusion: all 7 Operations nav items (Overview,
+Trips, Dispatch, Passengers, Facilities, Drivers, Fleet) are real,
+populated screens; Billing/Reports remain correctly hidden from
+navigation (files kept, not deleted, not linked); no Settings 404 is
+reachable; the account menu (organization name, role, Sign Out) is
+real. Nothing new was found broken this phase — S8B1's closure holds.
+
+--------------------------------------------------------------------
+10. QA-STYLE BUYER DATA
+--------------------------------------------------------------------
+Checked explicitly, live, across every screen in §5-6: no `Org A`,
+`Org B`, `Fictional Passenger A1`, `Fictional Driver A1`,
+`Fictional Van A1`, `Fictional Clinic A`, or `example.test`-style
+name appeared anywhere while signed in as a Harmony account. The
+older QA fixture organizations still exist in the same local database
+(tenant-isolated, never visible to a Harmony session) — this
+distinction is made explicit in `demo-navigation-map.md` so a future
+presenter cannot accidentally sign in with the wrong account in front
+of a buyer.
+
+--------------------------------------------------------------------
+11. PRODUCT CAPABILITY MATRIX
+--------------------------------------------------------------------
+`docs/commercial/product-capability-matrix.md` — AVAILABLE NOW /
+LIMITED-PILOT / PLANNED-NOT-AVAILABLE for every Operations, Driver,
+and platform-wide capability, grounded directly in
+`docs/product/ui-backend-gap-register.md` (every PLANNED-NOT-AVAILABLE
+row cites its originating GAP entry). Covers, explicitly, every
+limitation the work item named: background GPS, broker integration,
+billing, Facility Portal, native Driver app, route optimization, fake
+ETA, Driver Availability model, predictive AI, and on-time guarantees
+— all correctly marked PLANNED-NOT-AVAILABLE, none implied as present
+anywhere in the demo script or other collateral.
+
+--------------------------------------------------------------------
+12. DEMO-QUALITY AUDIT
+--------------------------------------------------------------------
+`docs/commercial/commercial-demo-readiness-audit.md` — full BLOCKER /
+HIGH-FRICTION / MEDIUM-FRICTION / POLISH / TRUTHFUL-LIMITATION
+classification of the entire buyer path. Result: 0 BLOCKER, 0
+unaddressed HIGH-FRICTION. 2 MEDIUM-FRICTION findings recorded (an
+account-menu email truncation; Dispatch vs. Today's Operations
+showing two correctly-different "trips today" counts, each accurate
+for what it measures) — both cosmetic/explainable, neither fixed this
+phase to keep the diff limited to seed data + documentation. 1 POLISH
+note (Trip Detail URLs carry a UUID — normal, not a security issue,
+noted only so a presenter never reads one aloud). Several genuine,
+correctly-NOT-faked TRUTHFUL-LIMITATION findings are recorded rather
+than silently patched over, including the location-freshness aging
+behavior: a seeded "fresh" location naturally becomes "needs update"
+purely from wall-clock time passing since reset — confirmed to be
+correct, expected system behavior (not a defect), and folded into the
+demo script itself as a live moment (the driver shares location
+during the demo, resolving the flag in front of the buyer) rather
+than something to hide.
+
+--------------------------------------------------------------------
+13. SALES CLAIMS BOUNDARY
+--------------------------------------------------------------------
+`docs/commercial/sales-claims-boundary.md` — MUST NOT CLAIM / REQUIRES
+QUALIFICATION / CAN SAY. Explicitly forbids HIPAA/SOC 2/NEMTAC/
+Medicaid certification claims, AI/predictive claims, live-GPS/live-map
+claims, broker-integration claims, billing claims, uptime-SLA claims,
+and unauthorized named-customer claims — unless and until each is
+independently and verifiably established. `zenward-demo-script.md`'s
+own "WHAT NOT TO CLAIM" line on every step defers to this document.
+
+--------------------------------------------------------------------
+14. FOUNDING OPERATOR OFFER
+--------------------------------------------------------------------
+`docs/commercial/founding-operator-program.md` — internal draft only,
+explicitly marked as requiring leadership sign-off before any external
+use. Small cohort (3-5), 90-day pilot from go-live, weekly-then-
+biweekly structured feedback, defined baseline/outcome metrics, and an
+explicit conversion decision point at the end. No pricing number is
+invented or hard-coded anywhere in this document or the application —
+confirmed via `grep -rn` for any pricing-plan/paywall construct in
+`src/`: none exists, matching the work item's explicit instruction.
+
+--------------------------------------------------------------------
+15. COMMERCIAL SCREENSHOTS
+--------------------------------------------------------------------
+`docs/design/qa/commercial-demo/` — 11 images, all captured signed in
+as Harmony accounts, no fake overlays, no synthetic data pasted in:
+Today's Operations, Dispatch, Trips, Passengers, Facilities, Drivers,
+Fleet, Trip Detail (open issue), Driver Trips (mobile), Driver Active
+Trip (mobile), and the completed-trip Activity Log demonstrating the
+full accountability trail from §6.
+
+--------------------------------------------------------------------
+16. FUNCTIONAL REGRESSION
+--------------------------------------------------------------------
+Beyond the 10-minute narrative (§6, run 3x) and read-path verification
+(§5), the remaining regression-matrix items were each independently
+exercised as real, live, DB-verified actions:
+  Create Trip (New Trip form, real Combobox passenger search/select,
+    real facility-address fields)       — 6/6 PASS, trip count +1
+  Reassign (Dispatch grid click →
+    Confirm Reassignment)               — 3/3 PASS, driver actually
+                                           changed in the DB
+  Cancel Trip                           — 3/3 PASS, state → cancelled
+  Record No-Show                        — 3/3 PASS, state → no_show
+  Add Note (with an affirmative
+    Visibility choice)                  — 3/3 PASS, persisted with
+                                           chosen visibility
+  Sign Out → re-request /operations
+    denied → back-navigation denied →
+    sign back in                        — 6/6 PASS
+Total: 46/46 real, live assertions PASS across every functional
+regression item the work item named, on top of the 3×25 = 75 demo-
+narrative assertions and the 22 read-path assertions. Grand total:
+143/143 live application-level assertions PASS this phase.
+
+`npx tsc --noEmit`: clean, 0 errors.
+`npm run lint`: 0 errors (1 pre-existing warning inside `.tmp-qa/`,
+  the disposable local QA-script directory, not application source —
+  cleaned up per §18).
+`npm run build`: clean production build, all 24 routes compiled
+  successfully.
+
+--------------------------------------------------------------------
+17. SQL REGRESSION
+--------------------------------------------------------------------
+Fresh `supabase db reset`, full 21-file suite: 276/276 PASS, 0 FAIL
+verdicts, 0 fatal psql ERROR lines — identical to the S8B/S8B1
+baseline. This phase touched zero backend/RLS/migration files
+(confirmed via `git diff --name-status`: only `supabase/seed.sql` and
+documentation changed), so an unchanged total is the correct, expected
+outcome, not a lucky coincidence.
+
+--------------------------------------------------------------------
+18. AUTHORITATIVE SQL ASSERTION COUNT
+--------------------------------------------------------------------
+276 (unchanged from S8B/S8B1's own baseline).
+
+--------------------------------------------------------------------
+19. RLS ADVERSARIAL
+--------------------------------------------------------------------
+32/32 PASS, re-confirmed from the same fresh-reset run as §17 (part of
+the same 21-file/276-assertion suite, `rls_adversarial_tests.sql`
+specifically).
+
+--------------------------------------------------------------------
+20. NEW SQL TESTS
+--------------------------------------------------------------------
+None — no new mutation contract, RLS policy, or migration was added
+this phase. `supabase/seed.sql` additions reuse only already-tested
+paths (the same RPCs/RLS policies every other fixture organization
+already exercises).
+
+--------------------------------------------------------------------
+21. HOUSEKEEPING
+--------------------------------------------------------------------
+`.tmp-qa/` (local QA helper scripts used for this phase's live
+verification) removed. Stray headless Chrome test processes
+(`pkill -9 -f "Google Chrome.*remote-debugging-port"`) cleaned up
+throughout and at phase end — carefully verified against the user's
+own regular Chrome processes (untouched) each time, consistent with
+this session's established discipline. A final fresh `supabase db
+reset` was run after all testing concluded, leaving the local database
+in a clean, deterministic seeded state (now including Harmony Medical
+Transport on every future reset, going forward).
+
+--------------------------------------------------------------------
+22. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+23. GATE VERDICT
+--------------------------------------------------------------------
+READY — see bottom verdict block. The demo data is real, deterministic,
+and free of QA-style buyer-facing artifacts; the full 10-minute
+narrative runs cleanly from a fresh reset 3 consecutive times with no
+manual intervention; all 11 required commercial documents exist and
+are internally consistent with each other and with the real product's
+actual capabilities; the demo-quality audit found no blocking or
+unaddressed high-friction issue; the full functional and SQL
+regression suites are unchanged and clean.
+
+--------------------------------------------------------------------
+RECOMMENDED NEXT PHASE
+--------------------------------------------------------------------
+P1-E3-S9 — Founding Operator Onboarding & Pilot Operations, per this
+work item's own stated expectation and GAP-15's own deferred scope
+(a real Driver + Membership + user-invite contract, reviewed on its
+own security merits) — now that the product has a demonstrable,
+honest commercial story, the next real gap is bringing an actual
+founding operator's team members into the system safely.
+====================================================================
+COMMERCIAL DEMO READINESS:
+READY
+
+DEMO DATA:
+REAL, DETERMINISTIC, NO QA-STYLE NAMES
+
+DEMO RESET:
+PASS
+
+10-MINUTE DEMO:
+PASS
+
+3 CONSECUTIVE DEMO RUNS:
+PASS (25/25, 25/25, 25/25)
+
+ALL VISIBLE NAVIGATION:
+REAL
+
+QA-STYLE BUYER DATA:
+NONE FOUND
+
+PRODUCT CAPABILITY MATRIX:
+COMPLETE
+
+SALES CLAIMS BOUNDARY:
+COMPLETE
+
+FOUNDING OPERATOR OFFER:
+DRAFTED (internal, requires leadership sign-off before external use)
+
+COMMERCIAL SCREENSHOTS:
+11 CAPTURED
+
+FUNCTIONAL REGRESSION:
+PASS (143/143 live application-level assertions)
+
+SQL REGRESSION:
+PASS
+
+AUTHORITATIVE SQL ASSERTION COUNT:
+276
+
+RLS ADVERSARIAL:
+32/32
+
+COMMERCIAL SALES READINESS GATE:
+READY
+
+BLOCKERS:
+NONE
+
+NEXT: P1-E3-S9 — Founding Operator Onboarding & Pilot Operations
+
+REPORT FILE:
+docs/reports/P1-E3-S8C-commercial-demo-sales-readiness-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed, nothing was pushed,
+nothing was deployed. This phase stops here.
+====================================================================

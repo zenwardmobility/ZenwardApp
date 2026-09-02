@@ -120,6 +120,38 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Resolution this phase:** `AssignmentGrid` renders every Trip block at the same fixed width, positioned only by its real start time (`src/lib/operations/dispatch-grid.ts`, ZD-136). Not implemented as duration-proportional, not faked.
 - **Blocks:** Full Stitch-reference visual parity of the grid's block sizing only — the grid is otherwise fully functional.
 
+### GAP-12 — Passenger Edit/Deactivate — found P1-E3-S8B1
+
+- **Screen:** Passengers (new, real as of this phase)
+- **Finding:** `passengers_update_org_operations` (RLS) plus the narrowed `display_name, phone, assistance_notes, status` column grant already exist and are already safe (org+role-scoped, non-dangerous columns only) — inspected directly before deciding, not assumed. A future Edit/Deactivate flow needs no new RLS or migration, only a form and a Server Action.
+- **Severity:** Low — a real, working Add Passenger path exists; Edit/Deactivate is a genuine capability gap, not a security concern.
+- **Recommendation:** Build when there's real product need beyond pilot operations — the existing RLS is already the hard part, done.
+- **Blocks:** Nothing critical; a mis-entered Passenger name/phone currently has no in-app correction path (would need re-creation or direct DB access).
+
+### GAP-13 — Facility Create/Edit — found P1-E3-S8B1
+
+- **Screen:** Facilities (new, real as of this phase)
+- **Finding:** `facilities_insert_org_operations`/`_update_org_operations` (RLS) already org+role-scoped and column-narrowed (`name, address_line1, address_line2, city, state, postal_code, status`). Read-only list built this phase; create/edit deliberately deferred for scope discipline (work item §39's own explicit fallback), not a safety concern.
+- **Severity:** Low.
+- **Recommendation:** Straightforward to add later — no RLS work needed.
+- **Blocks:** New Trip's Facility selector still only shows Facilities seeded/created outside the app (e.g. via `supabase/seed.sql` or a future migration) — there is currently no in-app way to add a new referring clinic.
+
+### GAP-14 — Fleet (Vehicle) Create/Edit — found P1-E3-S8B1
+
+- **Screen:** Fleet (new, real as of this phase)
+- **Finding:** `vehicles_insert_org_admin`/`_update_org_admin` (RLS) already Organization-Admin-scoped and column-narrowed (`label, status`). Read-only list built this phase; create/edit deliberately deferred, same reasoning as GAP-13.
+- **Severity:** Low.
+- **Recommendation:** Straightforward to add later — no RLS work needed.
+- **Blocks:** No in-app way to add a new vehicle to the fleet yet.
+
+### GAP-15 — Driver Onboarding (Driver + Membership + user invite) — found P1-E3-S8B1
+
+- **Screen:** Drivers (new, real as of this phase)
+- **Finding:** Unlike GAP-12/13/14, this is NOT merely a deferred form — Driver is not AuthUser/Membership, and no safe, coherent contract exists yet for inviting a new authenticated user, creating their Membership, AND linking a `drivers` row together. Building any part of this casually (e.g. a bare `drivers` INSERT with no linked user) would either fabricate a fake invite flow or risk creating orphaned auth users with no way to actually sign in.
+- **Severity:** Medium — this is real, expected pilot-onboarding functionality an operator will need, not a nice-to-have.
+- **Recommendation:** A dedicated future work item (P1-E3-S9, Driver/user invite flow, reviewed on its own — auth implications, not merely a CRUD form).
+- **Blocks:** Adding a new Driver to an organization currently requires direct database access (seed data or manual SQL) — there is no in-app path at all.
+
 ---
 
 ## PRODUCT DECISIONS REQUIRED (not backend gaps per se — need product input, not engineering, before either can be built)
@@ -136,6 +168,6 @@ These block full fidelity of specific UI concepts but are not "missing backend c
 | **Human-readable Trip/Request reference codes** ("ZW-240829-018", "ZR-240829-104", "FAC-23981") | 02, 05 | No such field exists; needs a decision on format and generation (stored vs. computed) before implementation |
 | **Trip Type / structured pickup-destination fields** | 02 | Whether `pickup_description`/`destination_description` remain single free-text fields (display-formatted) or become structured (name + address) is a product/schema decision, not just a display one |
 | **"Organization/Facility" requester field** | 05 | No dedicated column exists on `transportation_requests` for this — decide whether it's free text (reuse `requester_name`/`additional_notes`) or a real `facilities` link |
-| **Multi-org UX (org switcher)** | none directly, but implied by Membership architecture | See application-route-map.md — smallest-safe-approach recommended, not decided |
+| **Multi-org UX (org switcher)** | none directly, but implied by Membership architecture | See application-route-map.md — the smallest-safe approach (`/select-organization`) was already built in an earlier phase. **P1-E3-S8B1 update:** a multi-org user previously had no way BACK to `/select-organization` once inside Operations except typing the URL directly — the new `AccountMenu`'s conditional "Switch Organization" item (rendered only when `getActiveMemberships()` genuinely returns >1) closes that specific navigational gap. A richer IN-PLACE switcher (changing context without a full re-selection screen) remains the still-open, still-undecided future enhancement — not attempted here. |
 
 None of these are proposed to be resolved in this phase, per explicit instruction (work item §50).

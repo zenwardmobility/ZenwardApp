@@ -365,3 +365,220 @@ union all
 select '10000000-0000-0000-0000-0000000000a1'::uuid, '96000000-0000-0000-0000-0000000000a4'::uuid,
    'driver_assigned', '20000000-0000-0000-0000-0000000000a2'::uuid, midnight_ny + interval '7 hours'
 from org_a_today;
+
+-- =============================================================================
+-- COMMERCIAL DEMO ORGANIZATION — "Harmony Medical Transport" (P1-E3-S8C)
+-- =============================================================================
+-- A single, coherent, entirely fictional NEMT operator for buyer-facing
+-- demonstrations — deliberately separate from the `a1`/`b1`/etc. QA
+-- fixture organizations above, under its own `h`-suffix UUID namespace
+-- (unused anywhere else, grep-verified before use). This is NOT a
+-- special "demo mode" — it is ordinary tenant data, seeded the same way
+-- every other fixture in this file is, reachable through the exact same
+-- application code a real operator would use (work item §36 of the
+-- original phase text this satisfies: "the demo should be the REAL
+-- application operating on deterministic fictional tenant data").
+--
+-- Deliberately does NOT use the `Fictional:`/`Fictional X` prefix
+-- convention every other fixture above uses — that prefix exists so
+-- engineering QA output is unambiguously test data at a glance; a buyer
+-- watching a live demo should see plausible, professional-sounding
+-- content instead. Realistic in appearance, fictional in substance: no
+-- real person, no real clinic, no real address is used anywhere below.
+-- No diagnosis or clinical history appears anywhere — only operational
+-- mobility notes (walker/wheelchair/cane), matching work item §8's own
+-- explicit example ("Passenger uses walker," not a medical record).
+insert into auth.users (
+  instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+  confirmation_token, recovery_token, email_change_token_new, email_change,
+  email_change_token_current, reauthentication_token
+) values
+  ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000f1', 'authenticated', 'authenticated', 'owner@harmonytransport.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000f2', 'authenticated', 'authenticated', 'dispatch@harmonytransport.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000f3', 'authenticated', 'authenticated', 'driver.marcus@harmonytransport.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000f4', 'authenticated', 'authenticated', 'driver.angela@harmonytransport.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', '20000000-0000-0000-0000-0000000000f5', 'authenticated', 'authenticated', 'driver.leon@harmonytransport.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', '');
+
+insert into auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+select id::text, id, jsonb_build_object('sub', id::text, 'email', email), 'email', now(), now(), now()
+from auth.users
+where id in (
+  '20000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f2',
+  '20000000-0000-0000-0000-0000000000f3', '20000000-0000-0000-0000-0000000000f4',
+  '20000000-0000-0000-0000-0000000000f5'
+);
+
+insert into public.organizations (id, name, status, timezone) values
+  ('10000000-0000-0000-0000-0000000000f1', 'Harmony Medical Transport', 'active', 'America/New_York');
+
+insert into public.memberships (organization_id, user_id, role, status) values
+  ('10000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f1', 'organization_admin', 'active'),
+  ('10000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f2', 'dispatcher', 'active'),
+  ('10000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f3', 'driver', 'active'),
+  ('10000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f4', 'driver', 'active'),
+  ('10000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f5', 'driver', 'active');
+
+insert into public.drivers (id, organization_id, user_id, display_name, phone, status) values
+  ('30000000-0000-0000-0000-0000000000f1', '10000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f3', 'Marcus Bell', '(404) 555-0142', 'active'),
+  ('30000000-0000-0000-0000-0000000000f2', '10000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f4', 'Angela Reyes', '(404) 555-0187', 'active'),
+  ('30000000-0000-0000-0000-0000000000f3', '10000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f5', 'Leon Whitfield', '(404) 555-0163', 'active');
+
+insert into public.vehicles (id, organization_id, label, status) values
+  ('50000000-0000-0000-0000-0000000000f1', '10000000-0000-0000-0000-0000000000f1', 'Ford Transit 12', 'active'),
+  ('50000000-0000-0000-0000-0000000000f2', '10000000-0000-0000-0000-0000000000f1', 'Toyota Sienna 04', 'active'),
+  ('50000000-0000-0000-0000-0000000000f3', '10000000-0000-0000-0000-0000000000f1', 'Dodge Grand Caravan 07', 'active');
+
+insert into public.facilities (id, organization_id, name, address_line1, city, state, postal_code, status) values
+  ('60000000-0000-0000-0000-0000000000f1'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Cascade Dialysis Center', '3210 Cascade Rd SW', 'Atlanta', 'GA', '30311', 'active'),
+  ('60000000-0000-0000-0000-0000000000f2'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Peachtree Family Clinic', '1745 Peachtree St NE', 'Atlanta', 'GA', '30309', 'active'),
+  ('60000000-0000-0000-0000-0000000000f3'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Northside Rehabilitation Center', '960 Johnson Ferry Rd NE', 'Atlanta', 'GA', '30342', 'active');
+
+insert into public.passengers (id, organization_id, display_name, phone, assistance_notes, status) values
+  ('40000000-0000-0000-0000-0000000000f1', '10000000-0000-0000-0000-0000000000f1', 'Dorothy Simmons', '(404) 555-0201', 'Uses a walker', 'active'),
+  ('40000000-0000-0000-0000-0000000000f2', '10000000-0000-0000-0000-0000000000f1', 'Harold Jennings', '(404) 555-0212', 'Uses a wheelchair; needs ramp access', 'active'),
+  ('40000000-0000-0000-0000-0000000000f3', '10000000-0000-0000-0000-0000000000f1', 'Patricia Nguyen', '(404) 555-0223', null, 'active'),
+  ('40000000-0000-0000-0000-0000000000f4', '10000000-0000-0000-0000-0000000000f1', 'Robert Alvarez', '(404) 555-0234', 'Uses a cane', 'active'),
+  ('40000000-0000-0000-0000-0000000000f5', '10000000-0000-0000-0000-0000000000f1', 'Linda Okafor', '(404) 555-0245', null, 'active'),
+  ('40000000-0000-0000-0000-0000000000f6', '10000000-0000-0000-0000-0000000000f1', 'Willie Thompson', '(404) 555-0256', 'Needs assistance to and from the vehicle', 'active');
+
+-- One pending TransportationRequest — a facility calling in on behalf of
+-- an existing Passenger — real, working "Import request details" demo
+-- material for New Trip (never a fabricated inline requester-editor
+-- field; see new-trip-data-map.md for why those were never built).
+insert into public.transportation_requests (
+  id, organization_id, passenger_id, requester_name, requester_relationship, requester_phone,
+  pickup_description, destination_description, return_trip_needed, state
+) values (
+  '70000000-0000-0000-0000-0000000000f1', '10000000-0000-0000-0000-0000000000f1', '40000000-0000-0000-0000-0000000000f1',
+  'Cascade Dialysis Center', 'facility_coordinator', '(404) 555-0100',
+  '482 Ashford Dunwoody Rd, Atlanta, GA', 'Cascade Dialysis Center', 'no', 'pending'
+);
+
+-- Twelve Trips anchored to Harmony's own "today" (America/New_York),
+-- covering the exact Trip Assurance/lifecycle mix the demo story needs:
+-- 2 completed, 3 active (one healthy/fresh-location, one open-exception,
+-- one stale-location), 1 needs-assignment (unassigned, later today), and
+-- 6 ordinary scheduled+assigned trips later in the day. Every count on
+-- Today's Operations/Dispatch is a REAL derived count from these rows —
+-- nothing is hard-coded.
+with harmony_today as (
+  select ((now() at time zone 'America/New_York')::date)::timestamp at time zone 'America/New_York' as midnight_ny
+)
+insert into public.trips (
+  id, organization_id, passenger_id, state, scheduled_pickup_at, appointment_at,
+  pickup_description, destination_description, destination_facility_id, completed_at
+)
+select '80000000-0000-0000-0000-0000000000f1'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f1'::uuid, 'completed',
+   midnight_ny + interval '7 hours', midnight_ny + interval '7 hours 30 minutes',
+   '482 Ashford Dunwoody Rd, Atlanta, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
+   midnight_ny + interval '7 hours 25 minutes'
+from harmony_today
+union all
+select '80000000-0000-0000-0000-0000000000f2'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f4'::uuid, 'completed',
+   midnight_ny + interval '7 hours 30 minutes', midnight_ny + interval '8 hours',
+   '215 Briarcliff Rd NE, Atlanta, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
+   midnight_ny + interval '7 hours 55 minutes'
+from harmony_today
+union all
+select '80000000-0000-0000-0000-0000000000f3'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f3'::uuid, 'en_route_to_pickup',
+   midnight_ny + interval '8 hours', midnight_ny + interval '8 hours 30 minutes',
+   '77 Vinings Ridge Dr, Smyrna, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-0000000000f4'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f2'::uuid, 'en_route_to_destination',
+   midnight_ny + interval '8 hours 15 minutes', midnight_ny + interval '9 hours',
+   '1440 Camp Creek Pkwy, East Point, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-0000000000f5'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f5'::uuid, 'en_route_to_pickup',
+   midnight_ny + interval '8 hours 30 minutes', midnight_ny + interval '9 hours 15 minutes',
+   '908 Candler Park Dr NE, Atlanta, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-0000000000f6'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f6'::uuid, 'scheduled',
+   midnight_ny + interval '9 hours 15 minutes', null,
+   '36 Marietta Commons Blvd, Marietta, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-0000000000f7'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f1'::uuid, 'scheduled',
+   midnight_ny + interval '10 hours', null,
+   '482 Ashford Dunwoody Rd, Atlanta, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-0000000000f8'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f2'::uuid, 'scheduled',
+   midnight_ny + interval '11 hours', null,
+   '215 Briarcliff Rd NE, Atlanta, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-0000000000f9'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f3'::uuid, 'scheduled',
+   midnight_ny + interval '12 hours 30 minutes', null,
+   '77 Vinings Ridge Dr, Smyrna, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-000000000f10'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f4'::uuid, 'scheduled',
+   midnight_ny + interval '14 hours', null,
+   '1440 Camp Creek Pkwy, East Point, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-000000000f11'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f5'::uuid, 'scheduled',
+   midnight_ny + interval '15 hours 30 minutes', null,
+   '908 Candler Park Dr NE, Atlanta, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
+   null
+from harmony_today
+union all
+select '80000000-0000-0000-0000-000000000f12'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
+   '40000000-0000-0000-0000-0000000000f6'::uuid, 'scheduled',
+   midnight_ny + interval '16 hours 30 minutes', null,
+   '36 Marietta Commons Blvd, Marietta, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
+   null
+from harmony_today;
+
+-- Active/closed assignments matching each Trip's own state above.
+insert into public.trip_assignments (id, organization_id, trip_id, driver_id, vehicle_id, assigned_by, ended_at, end_reason) values
+  ('31000000-0000-0000-0000-0000000000f1', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f1', '30000000-0000-0000-0000-0000000000f1', '50000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f2', now(), 'trip_completed'),
+  ('31000000-0000-0000-0000-0000000000f2', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f2', '30000000-0000-0000-0000-0000000000f2', '50000000-0000-0000-0000-0000000000f2', '20000000-0000-0000-0000-0000000000f2', now(), 'trip_completed'),
+  ('31000000-0000-0000-0000-0000000000f3', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f3', '30000000-0000-0000-0000-0000000000f3', '50000000-0000-0000-0000-0000000000f3', '20000000-0000-0000-0000-0000000000f2', null, null),
+  ('31000000-0000-0000-0000-0000000000f4', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f4', '30000000-0000-0000-0000-0000000000f2', '50000000-0000-0000-0000-0000000000f2', '20000000-0000-0000-0000-0000000000f2', null, null),
+  ('31000000-0000-0000-0000-0000000000f5', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f5', '30000000-0000-0000-0000-0000000000f1', '50000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f2', null, null),
+  ('31000000-0000-0000-0000-0000000000f7', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f7', '30000000-0000-0000-0000-0000000000f3', '50000000-0000-0000-0000-0000000000f3', '20000000-0000-0000-0000-0000000000f2', null, null),
+  ('31000000-0000-0000-0000-0000000000f8', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f8', '30000000-0000-0000-0000-0000000000f1', '50000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f2', null, null),
+  ('31000000-0000-0000-0000-0000000000f9', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f9', '30000000-0000-0000-0000-0000000000f2', '50000000-0000-0000-0000-0000000000f2', '20000000-0000-0000-0000-0000000000f2', null, null),
+  ('31000000-0000-0000-0000-000000000f10', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-000000000f10', '30000000-0000-0000-0000-0000000000f3', '50000000-0000-0000-0000-0000000000f3', '20000000-0000-0000-0000-0000000000f2', null, null),
+  ('31000000-0000-0000-0000-000000000f11', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-000000000f11', '30000000-0000-0000-0000-0000000000f1', '50000000-0000-0000-0000-0000000000f1', '20000000-0000-0000-0000-0000000000f2', null, null),
+  ('31000000-0000-0000-0000-000000000f12', '10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-000000000f12', '30000000-0000-0000-0000-0000000000f2', '50000000-0000-0000-0000-0000000000f2', '20000000-0000-0000-0000-0000000000f2', null, null);
+-- Trip h6 (Willie Thompson, 9:15) is deliberately left WITHOUT an
+-- assignment row — the one real "Needs Assignment" Trip Assurance
+-- condition the demo story opens with.
+
+-- Real Driver location: one FRESH (Leon, on Trip h3 — "healthy") and one
+-- STALE (Angela, on Trip h4 — surfaces "Location needs update"),
+-- assignment-scoped exactly the way driver_record_location itself
+-- enforces (never a stale former Driver's position).
+insert into public.driver_location_updates (organization_id, driver_id, trip_id, assignment_id, latitude, longitude, accuracy_meters, recorded_at) values
+  ('10000000-0000-0000-0000-0000000000f1', '30000000-0000-0000-0000-0000000000f3', '80000000-0000-0000-0000-0000000000f3', '31000000-0000-0000-0000-0000000000f3', 33.881, -84.469, 12, now()),
+  ('10000000-0000-0000-0000-0000000000f1', '30000000-0000-0000-0000-0000000000f2', '80000000-0000-0000-0000-0000000000f4', '31000000-0000-0000-0000-0000000000f4', 33.660, -84.442, 15, now() - interval '9 minutes');
+
+-- One real open operational exception — Trip h5 (Linda Okafor, en route
+-- to pickup) — the "Open issue" the demo story surfaces and resolves.
+insert into public.trip_exceptions (organization_id, trip_id, exception_type, description, status, created_by) values
+  ('10000000-0000-0000-0000-0000000000f1', '80000000-0000-0000-0000-0000000000f5', 'route_issue', 'Detour in effect near the pickup address due to road construction — driver is taking an alternate route.', 'open', '20000000-0000-0000-0000-0000000000f2');

@@ -3,12 +3,19 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Gear, MapPin } from "@phosphor-icons/react/dist/ssr";
+import { MapPin } from "@phosphor-icons/react/dist/ssr";
 import { navIcons } from "@/design/icons";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 import { Avatar } from "@/components/ui/Avatar";
 
+// P1-E3-S8B1 (work item §26/§32): Billing and Reports are removed from
+// visible navigation — both routes remain real Next.js pages on disk
+// (still reachable directly if ever needed for internal testing), but
+// neither has real product behavior yet, and a visible sidebar entry
+// leading to it would be exactly the "convincing-looking dead
+// navigation" this phase exists to close. Restore once each has a real
+// screen, not merely to fill this list back out.
 const NAV_ITEMS: { key: keyof typeof navIcons; label: string; href: string }[] = [
   { key: "overview", label: "Overview", href: "/operations" },
   { key: "trips", label: "Trips", href: "/operations/trips" },
@@ -17,8 +24,6 @@ const NAV_ITEMS: { key: keyof typeof navIcons; label: string; href: string }[] =
   { key: "facilities", label: "Facilities", href: "/operations/facilities" },
   { key: "drivers", label: "Drivers", href: "/operations/drivers" },
   { key: "fleet", label: "Fleet", href: "/operations/fleet" },
-  { key: "billing", label: "Billing", href: "/operations/billing" },
-  { key: "reports", label: "Reports", href: "/operations/reports" },
 ];
 
 export interface OperationsSidebarProps {
@@ -31,7 +36,6 @@ export interface OperationsSidebarProps {
   orgUnit: string;
   dispatcherName: string;
   dispatcherRole?: string;
-  settingsHref?: string;
 }
 
 /**
@@ -45,7 +49,6 @@ export function OperationsSidebar({
   orgUnit,
   dispatcherName,
   dispatcherRole,
-  settingsHref = "/operations/settings",
 }: OperationsSidebarProps) {
   const pathname = usePathname();
 
@@ -133,19 +136,7 @@ export function OperationsSidebar({
           </div>
         </div>
 
-        <Link
-          href={settingsHref}
-          title="Settings"
-          className={cn(
-            typography.bodySmall,
-            "flex items-center gap-3 rounded-sm px-3 py-2 font-medium text-navy-text-muted hover:bg-navy-hover-bg hover:text-white",
-          )}
-        >
-          <Gear className="size-5 shrink-0" aria-hidden />
-          <span className="hidden lg:inline">Settings</span>
-        </Link>
-
-        <div className="mt-2 flex items-center gap-3 px-1">
+        <div className="flex items-center gap-3 px-1">
           <Avatar name={dispatcherName} size="sm" />
           <div className="hidden lg:block">
             <p className={cn(typography.bodySmall, "font-medium text-white")}>{dispatcherName}</p>

@@ -33,17 +33,17 @@ Every one of these is a placeholder rendering `OperationsRouteStub`/`DriverRoute
 | Route | Screen (Stitch ref) | Roles | Desktop/mobile behavior | Nav label | Icon (existing mapping) | Notes |
 |---|---|---|---|---|---|---|
 | `/operations` | Today's Operations (01) | organization_admin, dispatcher | Desktop/tablet primary; see responsive boundary below | Overview | `SquaresFour` | Default landing page for Ops roles |
-| `/operations/trips` | (list view — no dedicated Stitch reference; implied by Trip Detail's breadcrumb "Trips ›") | organization_admin, dispatcher | Desktop/tablet | Trips | `Path` (Route not in Phosphor — ZD-035) | List screen itself not in the reference set — see gap register (non-blocking, low-risk to infer) |
+| `/operations/trips` | (list view — no dedicated Stitch reference; implied by Trip Detail's breadcrumb "Trips ›") | organization_admin, dispatcher | Desktop/tablet | Trips | `Path` (Route not in Phosphor — ZD-035) | **REAL as of P1-E3-S8B1** — search/date/assignment filters, server-side pagination. See operations-surface-map.md |
 | `/operations/trips/[tripId]` | Trip Detail (02) | organization_admin, dispatcher | Desktop/tablet | — (detail, not nav-level) | — | |
-| `/operations/trips/new` | Internal New Trip (05) | organization_admin, dispatcher | Desktop/tablet | — (reached via "New Trip" CTA, not nav-level) | — | **Blocked on backend gap** — see gap register |
+| `/operations/trips/new` | Internal New Trip (05) | organization_admin, dispatcher | Desktop/tablet | — (reached via "New Trip" CTA, not nav-level) | — | REAL since P1-E3-S7 |
 | `/operations/dispatch` | Dispatch Board (03) | organization_admin, dispatcher | Desktop/tablet — dense 3-column layout, not viable narrow | Dispatch | `NavigationArrow` | |
-| `/operations/passengers` | (no dedicated reference) | organization_admin, dispatcher | Desktop/tablet | Passengers | `Users` | Existing stub; not in this Stitch batch |
-| `/operations/facilities` | (no dedicated reference) | organization_admin, dispatcher | Desktop/tablet | Facilities | `Buildings` | Existing stub; not in this Stitch batch |
-| `/operations/drivers` | (no dedicated reference) | organization_admin, dispatcher | Desktop/tablet | Drivers | `IdentificationCard` | Existing stub; not in this Stitch batch |
-| `/operations/fleet` | (no dedicated reference) | organization_admin, dispatcher | Desktop/tablet | Fleet | `Van` | Existing stub; not in this Stitch batch |
-| `/operations/billing` | (no dedicated reference) | organization_admin only (billing is an admin-sensitive concern — role split not yet confirmed by any reference) | Desktop/tablet | Billing | `Receipt` | Existing stub; not in this Stitch batch; role restriction is a recommendation, not yet confirmed |
-| `/operations/reports` | (no dedicated reference, "Export Day Sheet" hints at related capability) | organization_admin, dispatcher | Desktop/tablet | Reports | `ChartBar` | Existing stub |
-| `/operations/settings` (implied by sidebar footer, no dedicated route file confirmed) | — | organization_admin only (org settings) | Desktop/tablet | Settings | `Gear` | Not enumerated in the file listing above — confirm during S1 |
+| `/operations/passengers` | (no dedicated reference) | organization_admin, dispatcher | Desktop/tablet | Passengers | `Users` | **REAL as of P1-E3-S8B1** (list + Add Passenger; Edit/Deactivate deferred). See operations-surface-map.md |
+| `/operations/facilities` | (no dedicated reference) | organization_admin, dispatcher | Desktop/tablet | Facilities | `Buildings` | **REAL as of P1-E3-S8B1** (read-only list; Create/Edit deferred). See operations-surface-map.md |
+| `/operations/drivers` | (no dedicated reference) | organization_admin, dispatcher | Desktop/tablet | Drivers | `IdentificationCard` | **REAL as of P1-E3-S8B1** (read-only list; no fake Availability; onboarding deferred to P1-E3-S9). See operations-surface-map.md |
+| `/operations/fleet` | (no dedicated reference) | organization_admin, dispatcher | Desktop/tablet | Fleet | `Van` | **REAL as of P1-E3-S8B1** (read-only list; Create/Edit deferred). See operations-surface-map.md |
+| `/operations/billing` | (no dedicated reference) | organization_admin only (billing is an admin-sensitive concern — role split not yet confirmed by any reference) | Desktop/tablet | — (removed from visible nav, P1-E3-S8B1) | `Receipt` | **UNLINKED as of P1-E3-S8B1** — route file kept (honestly-labeled stub), but no sidebar entry leads to it anymore; role restriction remains a recommendation, not yet confirmed |
+| `/operations/reports` | (no dedicated reference, "Export Day Sheet" hints at related capability) | organization_admin, dispatcher | Desktop/tablet | — (removed from visible nav, P1-E3-S8B1) | `ChartBar` | **UNLINKED as of P1-E3-S8B1** — same treatment as Billing above |
+| `/operations/settings` (implied by sidebar footer, no dedicated route file confirmed) | — | organization_admin only (org settings) | Desktop/tablet | — (removed from visible nav, P1-E3-S8B1) | `Gear` | **No route file exists** — confirmed absent (not merely unconfirmed); the sidebar's own broken link to it was removed this phase rather than building an empty page to avoid the 404 |
 
 ## Driver routes
 

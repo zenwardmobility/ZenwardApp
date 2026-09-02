@@ -1,0 +1,661 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S8B1 — Operations Surface Completion & Navigation Closure
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: aa79e16 "Add additional S8B responsive QA captures
+                       (1920x1080 Operations, 375x812 Driver)"
+Date/time:            2026-09-02
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK STATE
+--------------------------------------------------------------------
+`git status --short` was CLEAN. `git log --oneline -7` showed `aa79e16`
+at HEAD (the S8B responsive-QA addendum commit). `git rev-parse HEAD`
+confirmed `aa79e168524a4eb80f7ff87914270aa43e5ef7d0`. S8B itself (commit
+`4ac9b39`) was already confirmed genuinely committed by that same
+commit's own ancestry. No unexplained changes were present; the
+checkpoint required no intervention.
+
+--------------------------------------------------------------------
+2. ACTUAL NAVIGATION BEFORE
+--------------------------------------------------------------------
+Manually re-derived from the live application and real source files —
+NOT trusted from P1-E3-S8B's own "navigation truthfulness re-confirmed"
+conclusion, per this phase's own explicit instruction:
+
+  Overview    REAL
+  Trips       PLACEHOLDER ("Structural placeholder... built in a later phase")
+  Dispatch    REAL
+  Passengers  PLACEHOLDER
+  Facilities  PLACEHOLDER
+  Drivers     PLACEHOLDER
+  Fleet       PLACEHOLDER
+  Billing     PLACEHOLDER
+  Reports     PLACEHOLDER
+  Settings    404 (no route file exists at all)
+  Sign Out    MISSING (no menu, no click handler on the avatar anywhere
+              in Operations)
+
+7 of 11 visible navigation destinations were placeholders, a 404, or an
+entirely missing capability. Full detail:
+docs/product/operations-navigation-truthfulness-audit.md §1.
+
+--------------------------------------------------------------------
+3. PLACEHOLDERS FOUND
+--------------------------------------------------------------------
+`OperationsRouteStub` rendered, per route, at Trips/Passengers/
+Facilities/Drivers/Fleet/Billing/Reports: `"{title} is not yet
+implemented"` and `"This route exists to verify the operations shell
+foundation renders correctly."` — the exact phrases this phase's own
+instructions named, confirmed by reading the component and every call
+site directly.
+
+--------------------------------------------------------------------
+4. 404s FOUND
+--------------------------------------------------------------------
+`/operations/settings` — confirmed via `find src/app/operations -name
+page.tsx`: no `settings/page.tsx` exists anywhere.
+
+--------------------------------------------------------------------
+5. DEAD CONTROLS FOUND
+--------------------------------------------------------------------
+The missing Sign Out affordance (see §21). No other enabled dead
+control was found — every control on the pre-existing real screens
+(Export Day Sheet, Dispatch Settings, day navigator, Edit Trip) was
+already honestly disabled per prior phases' own audits, re-confirmed
+unchanged.
+
+--------------------------------------------------------------------
+6. FINAL VISIBLE NAVIGATION
+--------------------------------------------------------------------
+`Overview · Trips · Dispatch · Passengers · Facilities · Drivers ·
+Fleet` — exactly 7 items, confirmed live via a real DOM query against
+the running app (`test-surface-closure.mjs`). Every one resolves to
+real, non-placeholder content (7/7 PASS — the placeholder-phrase regex
+matched zero of the 7 rendered pages).
+
+--------------------------------------------------------------------
+7. TRIPS IMPLEMENTATION
+--------------------------------------------------------------------
+`src/lib/operations/trips-list.ts` (new) + `src/app/operations/
+trips/page.tsx` (rewritten). Real Trip inventory: search (passenger
+name via a pre-resolved id set, OR pickup/destination text — both
+folded into one server-side `.or()` filter, never a client-side
+re-filter), date filter (today/upcoming/past/all, using the same
+`organizationDayBoundsUtc` helper Dispatch already established),
+assignment filter (assigned/unassigned/all, resolved via the org's
+active-assignment trip-id set BEFORE pagination). `DataTable` with
+Passenger/Route/Driver/Status columns, row navigation via a `<Link>` on
+the Passenger cell (the same convention Today's Operations already
+uses, not `onRowClick` — keeps the page server-rendered, no client JS
+required for the table itself).
+
+--------------------------------------------------------------------
+8. TRIPS QUERY/FILTER/PAGINATION
+--------------------------------------------------------------------
+Server-side pagination via `.range()`, `TRIPS_LIST_PAGE_SIZE = 25`
+rows/page — never an unbounded historical load. A real, found-and-fixed
+bug in this module's own first draft: search and assignment filters
+were initially applied as a client-side re-filter AFTER `.range()` —
+this would have silently dropped matching rows outside the current page
+and reported a wrong `totalCount`. Rewritten so every filter resolves
+to a real database condition (a resolved Passenger-id set for search, a
+resolved active-assignment-id set for assignment) BEFORE pagination —
+one correct, correctly-counted query. A two-phase driver-name lookup
+(the same discipline `dispatch-board.ts` established) scoped to exactly
+the current page's Trip ids, never a broader per-org scan.
+
+--------------------------------------------------------------------
+9. PASSENGERS IMPLEMENTATION
+--------------------------------------------------------------------
+`src/lib/operations/passengers-list.ts` (new) + `src/app/operations/
+passengers/page.tsx` (rewritten). Minimized fields only (display name,
+phone, status) — no assistance/medical text browsed as a directory
+field (that stays scoped to Trip Detail). Search by name or phone,
+bounded to 100 rows (a pilot-sized operator, work item §4, is nowhere
+near that count). `AddPassengerButton` (new, thin client wrapper)
+reuses the EXISTING `AddPassengerDialog`/`addPassengerAction` New Trip
+already established — the same safe, org-scoped `passengers` INSERT,
+not a second implementation; only the post-success behavior differs
+(`router.refresh()` here vs. New Trip's in-memory form append).
+
+--------------------------------------------------------------------
+10. PASSENGER MUTATION DECISION
+--------------------------------------------------------------------
+List + Add: REAL. Edit/Deactivate: NOT built this phase, deliberately.
+`passengers_update_org_operations` (RLS) plus the narrowed `display_
+name, phone, assistance_notes, status` column grant were inspected
+directly and are already safe — a future edit flow needs no new RLS,
+only a form and action. Deferred purely for scope discipline (5
+surfaces + account menu + sign-out in one phase), not a safety concern
+— recorded as GAP-12.
+
+--------------------------------------------------------------------
+11. FACILITIES IMPLEMENTATION
+--------------------------------------------------------------------
+`src/lib/operations/facilities-list.ts` (new) + `src/app/operations/
+facilities/page.tsx` (rewritten). Read-only: name, city/state, status.
+Facility is not Organization — this is the operator's own referring
+clinics, scoped to their tenant.
+
+--------------------------------------------------------------------
+12. FACILITY MUTATION DECISION
+--------------------------------------------------------------------
+Read-only, deliberately. `facilities_insert_org_operations`/`_update_
+org_operations` (RLS) inspected directly — already org+role-scoped,
+column-narrowed (`name, address_line1, address_line2, city, state,
+postal_code, status`). A future Create/Edit flow needs no new RLS.
+Work item §39's own explicit fallback ("prove real existing Facilities
+render correctly") followed directly — GAP-13.
+
+--------------------------------------------------------------------
+13. DRIVERS IMPLEMENTATION
+--------------------------------------------------------------------
+`src/lib/operations/drivers-list.ts` (new) + `src/app/operations/
+drivers/page.tsx` (rewritten). Name, phone, status, plus a REAL
+current-trip fact (the Passenger name on any currently-active
+assignment, via a bounded second query scoped to this page's own
+Driver ids) — never "Available." Verified live: the rendered page
+contains zero occurrences of the word "Available" anywhere.
+
+--------------------------------------------------------------------
+14. DRIVER ONBOARDING/MUTATION DECISION
+--------------------------------------------------------------------
+Read-only, and NOT a scope-discipline deferral like Facilities/Fleet —
+a structural one. Driver is not AuthUser/Membership; no safe contract
+exists for inviting a new authenticated user, creating their
+Membership, and linking a `drivers` row together. Building any part of
+that casually risks fabricating a fake invite flow or orphaned auth
+users with no sign-in path. Explicitly recorded as real, expected
+P1-E3-S9 work (GAP-15), not a "someday" item — work item §19's own
+instruction followed to the letter.
+
+--------------------------------------------------------------------
+15. FLEET IMPLEMENTATION
+--------------------------------------------------------------------
+`src/lib/operations/vehicles-list.ts` (new) + `src/app/operations/
+fleet/page.tsx` (rewritten). Label, status, plus the real current
+Driver name on any active assignment (same bounded two-phase pattern as
+Drivers). No wheelchair-accessible/ambulatory/stretcher-capable claims
+— the schema has no such columns and none is fabricated.
+
+--------------------------------------------------------------------
+16. VEHICLE MUTATION DECISION
+--------------------------------------------------------------------
+Read-only, deliberately, same reasoning as Facilities. `vehicles_
+insert_org_admin`/`_update_org_admin` (RLS, Organization-Admin-scoped,
+column-narrowed to `label, status`) already safe — GAP-14.
+
+--------------------------------------------------------------------
+17. BILLING DECISION
+--------------------------------------------------------------------
+Removed from visible navigation (`NAV_ITEMS`). Route file kept on disk
+(`OperationsRouteStub`, honestly labeled) — reachable by direct URL
+only, linked from nowhere in the app. See ZD-188.
+
+--------------------------------------------------------------------
+18. REPORTS DECISION
+--------------------------------------------------------------------
+Same treatment as Billing — removed from visible navigation, route file
+kept, unlinked.
+
+--------------------------------------------------------------------
+19. SETTINGS DECISION
+--------------------------------------------------------------------
+The broken bottom-rail link (pointing at a route with no file at all)
+was removed entirely from `OperationsSidebar` — not redirected, not
+stubbed with an empty page (explicitly rejected per work item §31: "Do
+NOT create an empty fake Settings page merely to avoid 404"). The
+now-unused `settingsHref` prop and `Gear` import were removed from the
+component as dead code, not left half-wired.
+
+--------------------------------------------------------------------
+20. ACCOUNT MENU
+--------------------------------------------------------------------
+`src/components/operations/AccountMenu.tsx` (new) replaces the
+previously static, non-interactive `<Avatar>` in `AppHeader`. A real
+WAI-ARIA menu-button pattern: `aria-haspopup="menu"`/`aria-expanded`
+on the trigger, `role="menu"`/`role="menuitem"` on the popup and its
+items, Escape closes and returns focus to the trigger, click-outside
+closes. Shows the real organization name and real role (from the live-
+resolved `OrganizationContext`, never a placeholder), a conditional
+"Switch Organization" link (only rendered when a real, live
+`getActiveMemberships()` call in the Server Component `layout.tsx`
+returns more than one active Membership — never assumed from the
+current single-org selection alone), and Sign Out.
+
+--------------------------------------------------------------------
+21. SIGN-OUT IMPLEMENTATION
+--------------------------------------------------------------------
+Reused `src/lib/auth/sign-out-action.ts` verbatim — this action already
+existed, was already correct, and was already wired into the Driver
+header (`DriverLayoutClient.tsx`) since P1-E3-S2. It was simply never
+imported anywhere in the Operations tree. No second sign-out mechanism
+was built.
+
+--------------------------------------------------------------------
+22. SIGN-OUT SESSION CLEANUP
+--------------------------------------------------------------------
+`supabase.auth.signOut()` — real Supabase session invalidation, not a
+client-only cookie delete. Unchanged, confirmed by reading the existing
+action's own source before reusing it.
+
+--------------------------------------------------------------------
+23. ORGANIZATION-CONTEXT CLEANUP
+--------------------------------------------------------------------
+`cookieStore.delete(ORG_CONTEXT_COOKIE)` (`zw_org_context`) — already
+part of the existing action, confirmed still present, unchanged.
+
+--------------------------------------------------------------------
+24. PLACEHOLDER-SOURCE AUDIT
+--------------------------------------------------------------------
+Searched `src/` for every flagged phrase. Classified every hit:
+  - `operations/billing/page.tsx`, `operations/reports/page.tsx` (the
+    actual rendered description text) — **UNLINKED**.
+  - `OperationsRouteStub.tsx`/`DriverRouteStub.tsx` (shared scaffold
+    component text) — **UNLINKED** (only imported by the 2 unlinked
+    routes above, plus pre-existing out-of-scope Driver stubs).
+  - 3 new doc comments in the rewritten pages explaining what was
+    replaced — **DOC** (never rendered).
+  - `(public)/healthcare-providers`, `(public)/request-transportation`
+    — **DOC/OUT-OF-SCOPE** (pre-existing public marketing-adjacent
+    routes, unrelated to this phase's `/operations/*` mandate).
+  - `DriverNextTripCard.tsx` comment — **DOC**, unrelated.
+**VISIBLE hits after this phase: ZERO.**
+
+--------------------------------------------------------------------
+25. 404 CRAWL
+--------------------------------------------------------------------
+All 7 real sidebar destinations plus header controls (Notifications/
+Help/account menu/New Trip/Export/Dispatch Settings) — zero 404s.
+`/operations/settings` remains a genuine 404 by direct URL, but is
+linked from nowhere (confirmed: `document.querySelector('a[href=
+"/operations/settings"]')` returns null on every screen tested).
+
+--------------------------------------------------------------------
+26. DEAD-CONTROL AUDIT
+--------------------------------------------------------------------
+Every visible control on the 5 new/converted surfaces performs a real
+action or is simply absent (Facilities/Drivers/Fleet have no Add/Edit
+button at all, rather than a fake-looking disabled one — the preferred
+pattern the work item itself names, §35).
+
+--------------------------------------------------------------------
+27. TODAY'S OPERATIONS → TRIPS INTEGRATION
+--------------------------------------------------------------------
+"View all trips" already pointed at `/operations/trips` (built
+correctly in an earlier phase, anticipating this one) — no code change
+was needed there; the fix was entirely on the destination side. PASS.
+
+--------------------------------------------------------------------
+28. NEW TRIP → TRIPS E2E
+--------------------------------------------------------------------
+Real browser, real DB (`test-inactive-rolechange-e2e.mjs`): created a
+Passenger inline via "Add New Passenger," created a Trip via the real
+New Trip form, confirmed navigation to the correct real Trip Detail,
+navigated to `/operations/trips`, confirmed the new Trip genuinely
+appears with the correct row link, opened it, confirmed correct Trip
+Detail content. 5/5 PASS (one initial FAIL was a test-script timing
+artifact — 1500ms was insufficient for the Create Trip round-trip;
+fixed to 2500ms and re-confirmed against real DB state before
+concluding anything, per this project's own established discipline).
+
+--------------------------------------------------------------------
+29. PASSENGER E2E
+--------------------------------------------------------------------
+Real browser, real DB: Add Passenger from the Passengers page itself
+creates a real row, immediately visible in the list after a
+`router.refresh()`. 1/1 PASS (`test-surface-closure.mjs`; one initial
+FAIL was again a test-script timing artifact — 1200ms insufficient for
+the Server Action round-trip, confirmed via direct DB query the
+Passenger WAS created before "fixing" anything, then fixed to 2500ms
+and re-confirmed).
+
+--------------------------------------------------------------------
+30. FACILITY E2E
+--------------------------------------------------------------------
+Mutation intentionally deferred (§12). Proved instead: real existing
+Facilities render correctly (`test-surface-closure.mjs` — the seeded
+"Fictional Clinic A" is genuinely visible on the Facilities list). PASS
+per the work item's own explicit fallback (§39).
+
+--------------------------------------------------------------------
+31. DRIVER E2E
+--------------------------------------------------------------------
+Real Drivers used by Dispatch appear correctly on the Drivers list;
+assignment context ("On [Passenger]'s trip") is truthful — verified the
+rendered page contains no "Available" anywhere. PASS.
+
+--------------------------------------------------------------------
+32. FLEET E2E
+--------------------------------------------------------------------
+Real Vehicles used by Dispatch appear correctly on the Fleet list with
+truthful current-assignment context. PASS.
+
+--------------------------------------------------------------------
+33. TENANT ISOLATION
+--------------------------------------------------------------------
+Real browser, Org B admin session, all 5 new/converted surfaces
+(`test-signout-tenant.mjs`): zero Org A strings (passenger name,
+facility name, driver name, vehicle label) appear anywhere in Org B's
+own Trips/Passengers/Facilities/Drivers/Fleet lists. 5/5 PASS.
+
+--------------------------------------------------------------------
+34. DRIVER DENIAL
+--------------------------------------------------------------------
+Real browser, Driver-role session, all 5 routes: every request is
+redirected away from the requested Operations URL (to `/driver`),
+never served. 5/5 PASS.
+
+--------------------------------------------------------------------
+35. INACTIVE MEMBERSHIP
+--------------------------------------------------------------------
+Real browser + a live toggle-and-restore on the actual `memberships`
+row (`status='inactive'` then restored), all 5 routes: every request is
+redirected to `/access-unavailable`, never served. 5/5 PASS.
+
+--------------------------------------------------------------------
+36. ROLE CHANGE
+--------------------------------------------------------------------
+Real browser, single continuous session: a dispatcher loads `/
+operations/trips` successfully; their Membership `role` is changed to
+`driver` (a live DB update, no re-login); the SAME session's next
+request to the SAME route is denied (redirected to `/driver`). 2/2
+PASS — live-checked, not cached.
+
+--------------------------------------------------------------------
+37. RESPONSIVE QA
+--------------------------------------------------------------------
+Trips captured at all 6 required Operations widths (768x1024, 1024x768,
+1280x800, 1440x900, 1600x1000, 1920x1080). Passengers/Facilities/
+Drivers/Fleet captured at 1024x768 and 1440x900. Sidebar captured at
+1024/1440/1920 (paired with 768/900/1080 heights, matching the
+established Operations height convention). All under `docs/design/qa/
+operations-surface-closure/`. No horizontal clipping, no absurd
+whitespace, no compressed tables at any captured width — visually
+confirmed, not merely inferred from responsive class names.
+
+--------------------------------------------------------------------
+38. VISUAL QA
+--------------------------------------------------------------------
+Reviewed directly (not merely captured): Trips at 1440x900 shows a
+dense, real, well-proportioned table matching the converged design
+system (dark sidebar, DataTable styling, StatusBadge/TripStatus
+treatment) — no giant empty cards, no generic SaaS panels, no
+structural-placeholder residue anywhere. Passengers at 1440x900 shows
+the same clean convergence with a working search bar and Add Passenger
+CTA.
+
+--------------------------------------------------------------------
+39. ACCESSIBILITY
+--------------------------------------------------------------------
+No regression to S8B's own accessibility baseline — confirmed by
+re-using the identical patterns (real `<h1>` per `PageHeader`, real
+`DataTable` keyboard row-activation already built, real form labels on
+every `SearchInput`/`Select`). `AccountMenu` specifically verified live:
+real `aria-haspopup`/`aria-expanded` on the trigger, real `role="menu"`/
+`role="menuitem"` semantics, Escape closes and returns `aria-expanded`
+to `false`, the trigger carries a real descriptive `aria-label`
+("Account menu — {name}, {role} at {organization}"). No status
+conveyed by color alone (StatusBadge text labels unchanged).
+
+--------------------------------------------------------------------
+40. COMMERCIAL-LANGUAGE AUDIT
+--------------------------------------------------------------------
+Zero occurrences of "Structural placeholder"/"not yet implemented"/
+"built in a later phase"/"foundation renders correctly"/"later phase"
+on any of the 7 visible Operations screens (confirmed live via regex
+against `document.body.innerText`, not merely absent from source).
+Existing QA seed names ("Fictional Passenger A1" etc.) remain visible —
+explicitly out of scope for this phase (work item §49: "Do not turn
+this into Commercial Demo Data work. S8C will replace" them) and
+already scheduled for replacement in the very next phase.
+
+--------------------------------------------------------------------
+41. EXISTING APP REGRESSION
+--------------------------------------------------------------------
+12/12 PASS (`test-broader-regression.mjs`, real browser + real DB):
+sign back in after sign out, Assign (real Dispatch UI), Reassign (real
+Dispatch UI), Report Issue, Resolve, Add Note, Cancel Trip, Record
+No-Show, Driver Today, Driver Trips, Driver Active Trip, full 6-step
+Driver lifecycle to a real `completed` state. One initial FAIL (Add
+Note) was investigated before being "fixed": the dialog's own required
+Visibility `<Select>` was never filled by the test script, so native
+HTML5 validation correctly blocked submission — a real, correct product
+behavior, not a bug. Fixed the test script (not the app) and
+re-confirmed clean.
+
+--------------------------------------------------------------------
+42. SQL REGRESSION
+--------------------------------------------------------------------
+Fresh `supabase db reset`, full 21-file suite: 276/276 PASS, 0 FAIL
+verdicts, 0 fatal psql ERROR lines — identical to the S8B baseline.
+This phase touched zero backend/RLS/migration files (confirmed: `git
+diff --name-status` shows only `src/app/`, `src/lib/operations/*-list.ts`,
+`src/components/operations/*`, and docs), so an unchanged total is the
+correct, expected outcome per this phase's own explicit condition
+("if this phase adds no backend mutation contract: expected total
+remains 276"), not a lucky coincidence.
+
+--------------------------------------------------------------------
+43. NEW SQL TESTS
+--------------------------------------------------------------------
+None — no new mutation contract was added. The 5 new list surfaces
+reuse existing, already-tested SELECT RLS policies (`trips_select_org_
+operations`, `passengers_select_org_operations`, `facilities_select_
+org_operations`, `drivers_select_org_operations`, `vehicles_select_org_
+operations`) and the existing, already-tested `passengers` INSERT path
+(reused via `AddPassengerDialog`) — all already covered by prior
+phases' own SQL suites.
+
+--------------------------------------------------------------------
+44. AUTHORITATIVE SQL TOTAL
+--------------------------------------------------------------------
+276 — counted directly from raw NOTICE output of a fresh reset + full
+suite run, not copied forward.
+
+--------------------------------------------------------------------
+45. RLS ADVERSARIAL TOTAL
+--------------------------------------------------------------------
+32/32 — unchanged, re-confirmed against the same fresh reset as §42.
+
+--------------------------------------------------------------------
+46. CONCURRENCY
+--------------------------------------------------------------------
+`mutation_concurrency_test.sh` re-run fresh: PASS (Session B blocked
+~1.80s on the Trip row lock, correctly observed Session A's committed
+assignment, rejected with `assignment_conflict`) — unaffected, as
+expected for a frontend-only phase.
+
+--------------------------------------------------------------------
+47. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit`: clean, 0 errors — confirmed after every major
+change and again as the final pre-report check.
+
+--------------------------------------------------------------------
+48. LINT
+--------------------------------------------------------------------
+`npm run lint`: 0 errors. One pre-existing-pattern warning (unused
+variable) in a since-deleted `.tmp-qa/` scratch script — not shipped
+code.
+
+--------------------------------------------------------------------
+49. BUILD
+--------------------------------------------------------------------
+`npm run build`: succeeded, all 24 routes compiled — identical route
+count to before this phase (5 routes rewritten in place, none added or
+removed; Billing/Reports/Settings routes are unchanged files, simply
+unlinked from navigation).
+
+--------------------------------------------------------------------
+50. DOCS CREATED
+--------------------------------------------------------------------
+docs/product/operations-surface-map.md (purpose/data/authorization/
+actions/maturity for every `/operations/*` route); docs/product/
+operations-navigation-truthfulness-audit.md (the full before/after
+navigation audit, the placeholder-source classification, the live
+sign-out security test).
+
+--------------------------------------------------------------------
+51. DOCS UPDATED
+--------------------------------------------------------------------
+docs/design/component-inventory.md (new "Operations surface completion
+& navigation closure" section); docs/product/application-route-map.md
+(all 11 Operations route rows updated: REAL/UNLINKED/ABSENT
+classifications); docs/product/application-implementation-plan.md
+(S8B1 entry added, next-phase pointer corrected); docs/product/
+ui-backend-gap-register.md (GAP-12 through GAP-15 added; the
+"Multi-org UX" product-decision row updated to reflect the new
+AccountMenu's Switch Organization link); docs/product/decision-
+register.md (ZD-185 through ZD-188 added).
+
+--------------------------------------------------------------------
+52. FILES CREATED
+--------------------------------------------------------------------
+src/lib/operations/trips-list.ts
+src/lib/operations/passengers-list.ts
+src/lib/operations/facilities-list.ts
+src/lib/operations/drivers-list.ts
+src/lib/operations/vehicles-list.ts
+src/components/operations/AccountMenu.tsx
+src/components/operations/passengers/AddPassengerButton.tsx
+docs/product/operations-surface-map.md
+docs/product/operations-navigation-truthfulness-audit.md
+docs/design/qa/operations-surface-closure/ (17 screenshots)
+docs/reports/P1-E3-S8B1-operations-surface-completion-report.txt (this
+  file)
+
+--------------------------------------------------------------------
+53. FILES MODIFIED
+--------------------------------------------------------------------
+src/app/operations/trips/page.tsx (rewritten)
+src/app/operations/passengers/page.tsx (rewritten)
+src/app/operations/facilities/page.tsx (rewritten)
+src/app/operations/drivers/page.tsx (rewritten)
+src/app/operations/fleet/page.tsx (rewritten)
+src/app/operations/layout.tsx (hasMultipleOrganizations threaded through)
+src/components/operations/OperationsSidebar.tsx (NAV_ITEMS reduced to 7;
+  Settings link + settingsHref prop + Gear import removed)
+src/components/operations/AppHeader.tsx (AccountMenu wired in place of
+  the bare Avatar)
+src/components/operations/OperationsLayoutClient.tsx (org name/role/
+  hasMultipleOrganizations threaded to every buildHeaderProps() branch)
+docs/design/component-inventory.md, docs/product/application-route-map.md,
+docs/product/application-implementation-plan.md, docs/product/
+ui-backend-gap-register.md, docs/product/decision-register.md
+  (documentation updates, §51)
+
+--------------------------------------------------------------------
+54. DEFERRED WORK
+--------------------------------------------------------------------
+Passenger Edit/Deactivate (GAP-12), Facility Create/Edit (GAP-13),
+Fleet Create/Edit (GAP-14) — all scope-discipline deferrals with
+already-safe RLS, straightforward to add later. Driver onboarding
+(GAP-15) — a real, structural gap requiring its own dedicated,
+security-reviewed design (invite + Membership + Driver-row contract),
+explicitly recommended as P1-E3-S9 work, not a casual addition. A
+richer in-place organization switcher (vs. the new link to the existing
+`/select-organization` page) remains open, unchanged from its
+pre-existing status.
+
+--------------------------------------------------------------------
+55. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+56. GATE VERDICT
+--------------------------------------------------------------------
+READY — see bottom verdict block. All 5 converted surfaces are REAL;
+Billing/Reports are HIDDEN (not deleted, not faked); Settings has NO
+visible exposure; Sign Out is real and verified secure; tenant
+isolation, role denial, inactive-Membership denial, and mid-session
+role-change denial all hold on every new surface; the SQL/RLS/
+concurrency baseline is unchanged, as expected for a frontend-only
+phase.
+
+--------------------------------------------------------------------
+RECOMMENDED NEXT PHASE
+--------------------------------------------------------------------
+P1-E3-S8C — Commercial Demo Polish & Sales Readiness, per this work
+item's own stated expectation — now that the Operations shell itself is
+truthful end-to-end, a commercial demo walkthrough will not surface a
+dead-navigation surprise partway through.
+====================================================================
+OPERATIONS SURFACE COMPLETION GATE:
+READY
+
+TRIPS:
+REAL
+
+PASSENGERS:
+REAL
+
+FACILITIES:
+REAL
+
+DRIVERS:
+REAL
+
+FLEET:
+REAL
+
+BILLING NAVIGATION:
+HIDDEN
+
+REPORTS NAVIGATION:
+HIDDEN
+
+SETTINGS 404 EXPOSURE:
+NONE
+
+SIGN OUT:
+PASS
+
+VISIBLE STRUCTURAL PLACEHOLDERS:
+NONE
+
+VISIBLE 404 NAVIGATION:
+NONE
+
+ENABLED DEAD CONTROLS:
+NONE
+
+TENANT ISOLATION:
+PASS
+
+FUNCTIONAL REGRESSION:
+PASS
+
+SQL REGRESSION:
+PASS
+
+AUTHORITATIVE SQL ASSERTION COUNT:
+276
+
+RLS ADVERSARIAL:
+32/32
+
+COMMERCIAL PRODUCT SHELL:
+READY
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S8C — Commercial Demo Polish & Sales Readiness
+
+REPORT FILE:
+docs/reports/P1-E3-S8B1-operations-surface-completion-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; nothing was
+deployed. S8C was not begun. This phase stops here.
+====================================================================

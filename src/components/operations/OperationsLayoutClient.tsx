@@ -38,6 +38,8 @@ const ROLE_LABEL: Record<OrganizationContext["role"], string> = {
 export interface OperationsLayoutClientProps {
   organization: OrganizationContext;
   dispatcherDisplayName: string;
+  /** Real fact from a live `getActiveMemberships()` call (P1-E3-S8B1) — gates the account menu's "Switch Organization" item, never assumed. */
+  hasMultipleOrganizations: boolean;
   children: ReactNode;
 }
 
@@ -81,12 +83,24 @@ function HeaderSearch() {
   );
 }
 
-function buildHeaderProps(pathname: string, organization: OrganizationContext, avatarName: string): AppHeaderProps {
+function buildHeaderProps(
+  pathname: string,
+  organization: OrganizationContext,
+  avatarName: string,
+  hasMultipleOrganizations: boolean,
+): AppHeaderProps {
+  const identity = {
+    avatarName,
+    organizationName: organization.organizationName,
+    roleLabel: ROLE_LABEL[organization.role],
+    hasMultipleOrganizations,
+  };
+
   if (pathname === "/operations") {
     return {
       title: "Today's Operations",
       description: formatOperationsLongDate(new Date(), organization.organizationTimezone),
-      avatarName,
+      ...identity,
       actions: (
         <>
           <HeaderSearch />
@@ -105,7 +119,7 @@ function buildHeaderProps(pathname: string, organization: OrganizationContext, a
     return {
       title: "Dispatch",
       description: formatOperationsLongDate(new Date(), organization.organizationTimezone),
-      avatarName,
+      ...identity,
       actions: (
         <>
           {/* Day navigator — real, visible, disabled (matching the Export
@@ -160,7 +174,7 @@ function buildHeaderProps(pathname: string, organization: OrganizationContext, a
   // live in the scrollable content below. Excludes `/operations/trips/new`
   // (its own future screen) and the bare `/operations/trips` list.
   if (/^\/operations\/trips\/[^/]+$/.test(pathname) && !pathname.endsWith("/new")) {
-    return { title: "Trip Detail", avatarName };
+    return { title: "Trip Detail", ...identity };
   }
 
   // New Trip (P1-E3-S7) — the reference's own fixed top bar (05-internal-
@@ -170,13 +184,18 @@ function buildHeaderProps(pathname: string, organization: OrganizationContext, a
   // same two-`<h1>` mistake S6 found and fixed for Trip Detail, this time
   // by not introducing a second h1 in the first place).
   if (pathname === "/operations/trips/new") {
-    return { contextLabel: "New Trip", avatarName };
+    return { contextLabel: "New Trip", ...identity };
   }
 
-  return { contextLabel: getContextLabel(pathname), avatarName };
+  return { contextLabel: getContextLabel(pathname), ...identity };
 }
 
-export function OperationsLayoutClient({ organization, dispatcherDisplayName, children }: OperationsLayoutClientProps) {
+export function OperationsLayoutClient({
+  organization,
+  dispatcherDisplayName,
+  hasMultipleOrganizations,
+  children,
+}: OperationsLayoutClientProps) {
   const pathname = usePathname();
 
   return (
@@ -187,7 +206,7 @@ export function OperationsLayoutClient({ organization, dispatcherDisplayName, ch
         dispatcherName: dispatcherDisplayName,
         dispatcherRole: ROLE_LABEL[organization.role],
       }}
-      header={buildHeaderProps(pathname, organization, dispatcherDisplayName)}
+      header={buildHeaderProps(pathname, organization, dispatcherDisplayName, hasMultipleOrganizations)}
     >
       {children}
     </OperationsShell>

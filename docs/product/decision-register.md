@@ -2249,6 +2249,78 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Design
 - **Review Trigger:** A future phase that also builds a real Driver shift-status concept, at which point this header composition is worth revisiting as a package with that feature, not in isolation.
 
+### ZD-185 — Five Operations master-data surfaces built as real screens, not left as placeholders
+
+- **Date:** 2026-09-02
+- **Category:** Product / Security
+- **Decision:** `/operations/trips`, `/operations/passengers`, `/operations/facilities`, `/operations/drivers`, `/operations/fleet` all replace the "Structural placeholder" `OperationsRouteStub` they previously rendered with real, org-scoped, RLS-backed screens. Each one's create/edit scope was decided only AFTER inspecting the actual RLS policies and column grants for that table (not assumed): Trips (full CRUD already existed via New Trip/Trip Detail, this phase adds the missing LIST); Passengers (list + Add, reusing the existing safe `passengers` INSERT path); Facilities/Drivers/Fleet (read-only lists — see ZD-186 for why).
+- **Status:** CONFIRMED — implemented, 58/58 real application-level assertions PASS across 4 test suites (navigation truthfulness, tenant isolation, role/Membership denial, sign-out security, functional E2E).
+- **Reason:** A manual product walkthrough found 5 of 7 sidebar-linked screens were still convincing-looking dead ends — unacceptable for any commercial evaluation, let alone the demo-readiness phase this directly precedes. Building real screens (not merely hiding the broken links) was the only option that actually closes the gap, since Passengers/Facilities/Drivers/Vehicles are canonical operating entities Trips/Dispatch/Assignments already depend on — an Operations user genuinely needs to see them.
+- **Affected Product Areas:** `src/app/operations/{trips,passengers,facilities,drivers,fleet}/page.tsx`, `src/lib/operations/{trips,passengers,facilities,drivers,vehicles}-list.ts`
+- **Dependencies:** None
+- **Owner:** Product / Engineering
+- **Review Trigger:** None anticipated for the read surfaces; GAP-12/13/14/15 track the deferred mutation capabilities' own future review.
+
+### ZD-186 — Facilities/Drivers/Fleet stay read-only this phase; Driver onboarding explicitly NOT casually built
+
+- **Date:** 2026-09-02
+- **Category:** Security / Architecture
+- **Decision:** Facilities and Fleet ship as read-only lists this phase, even though their underlying RLS (`facilities_insert_org_operations`/`_update_org_operations`, `vehicles_insert_org_admin`/`_update_org_admin`) is already safe and would support a create/edit flow with no new migration. Drivers is read-only for a DIFFERENT, stronger reason: no safe contract exists yet for inviting a new authenticated user + creating their Membership + linking a `drivers` row together — building any part of that casually risks fabricating a fake invite flow or creating orphaned auth users with no way to sign in.
+- **Status:** CONFIRMED — implemented (by omission for Facilities/Fleet; by explicit refusal for Drivers).
+- **Reason:** Work item §17/§19/§21's own explicit instruction: "do NOT broaden RLS merely for CRUD convenience," and for Drivers specifically, "Do not casually implement 'Add Driver' unless the product has a safe, coherent Driver + Membership + user-invite contract... Record Driver onboarding as S9 work." Facilities/Fleet's own deferral is pure scope discipline (already-safe RLS, just not enough phase budget to also build the forms) — Drivers' deferral is a real, structural gap (GAP-15) that needs its own dedicated, security-reviewed design, not a rushed form.
+- **Affected Product Areas:** `src/lib/operations/{facilities,drivers,vehicles}-list.ts`
+- **Dependencies:** None
+- **Owner:** Security / Product
+- **Review Trigger:** GAP-15 (Driver onboarding) is real, expected P1-E3-S9 work — not merely a "someday" item.
+
+### ZD-187 — A real, accessible account menu with working Sign Out, reusing an already-correct but unwired action
+
+- **Date:** 2026-09-02
+- **Category:** Security / Accessibility
+- **Decision:** The top-right Operations avatar becomes a real `AccountMenu` (WAI-ARIA menu-button pattern: keyboard open, `Escape`, click-outside, `aria-haspopup`/`aria-expanded`/`role="menu"`) showing the real organization name, real role, a conditional Switch Organization link, and Sign Out. Sign Out calls the PRE-EXISTING `signOutAction` (`src/lib/auth/sign-out-action.ts`) — real `supabase.auth.signOut()`, the `zw_org_context` cookie cleared, redirect to `/sign-in` — unchanged, not reimplemented; it was already correct and already used by the Driver header, simply never wired into Operations.
+- **Status:** CONFIRMED — implemented and verified with a real, live sign-out security test (4/4 PASS): pre-sign-out access works, Sign Out redirects to `/sign-in`, the SAME session's next `/operations` request is denied, and browser back-navigation does not restore a functional authenticated view.
+- **Reason:** Zero visible way to sign out of Operations is a genuine trust/security-hygiene problem for any commercial evaluation, not merely a UX gap — a shared or public machine had no in-app way to end an Operations session. Discovering the fix required no new mutation logic (the action already existed, correctly) reinforced that this was a pure navigation-wiring gap, not a missing capability.
+- **Affected Product Areas:** `src/components/operations/AccountMenu.tsx` (new), `src/components/operations/AppHeader.tsx`, `src/components/operations/OperationsLayoutClient.tsx`, `src/app/operations/layout.tsx`
+- **Dependencies:** None
+- **Owner:** Security
+- **Review Trigger:** None anticipated.
+
+### ZD-188 — Billing/Reports/Settings removed from visible navigation; routes kept unlinked, not deleted or faked
+
+- **Date:** 2026-09-02
+- **Category:** Product / Design
+- **Decision:** `OperationsSidebar`'s `NAV_ITEMS` drops Billing and Reports (both real Next.js route files, both real `OperationsRouteStub` placeholders — kept on disk, reachable by direct URL only, linked from nowhere in the app). The bottom-rail Settings link (pointing at `/operations/settings`, which has no route file at all — a genuine 404) is removed entirely, not redirected or stubbed.
+- **Status:** CONFIRMED — implemented, verified live (0 sidebar items beyond the real 7; zero `a[href="/operations/settings"]` anywhere in the DOM).
+- **Reason:** Work item §26/§31/§32's own explicit instructions: hide, don't fake, and don't delete the underlying files "unless there is a compelling code-cleanup reason" (none exists — they remain useful scaffolding for whenever each is actually built). Building an empty Settings page merely to avoid a 404 was explicitly rejected — an empty page is its own kind of dishonest surface, not meaningfully better than a 404 a normal user would never reach anyway once the link is gone.
+- **Affected Product Areas:** `src/components/operations/OperationsSidebar.tsx`
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** Restore Billing/Reports navigation once either has a real screen; build `/operations/settings` before ever linking to it again.
+
+### ZD-189 — Commercial demo data seeded through the same `supabase/seed.sql` path as every other fixture, no special demo mode
+
+- **Date:** 2026-09-02
+- **Category:** Architecture / Sales Enablement
+- **Decision:** "Harmony Medical Transport" (the commercial demo organization) is a plain, additive block appended to the existing `supabase/seed.sql`, created via the exact same `auth.users`/`organizations`/`memberships`/`trips`/etc. rows every other fixture organization uses, reachable through the exact same application code, RLS policies, and RPCs. No `demo=true` flag, feature branch, or parallel data path exists or was considered.
+- **Status:** CONFIRMED — implemented, verified live across 3 consecutive `supabase db reset` cycles (25/25 real end-to-end checks each run — assign, driver lifecycle, location sharing, issue report/resolve, completion — all real database mutations through the production code path).
+- **Reason:** Work item's own explicit instruction. A special demo mode would risk two products silently diverging (the one shown to buyers vs. the one actually shipped) and would undermine every "this is real, not staged" claim in `zenward-demo-script.md`/`sales-claims-boundary.md` — the honesty of the demo depends entirely on it running through the same code as production use.
+- **Affected Product Areas:** `supabase/seed.sql` only — no application code touched this phase.
+- **Dependencies:** None
+- **Owner:** Product / Engineering
+- **Review Trigger:** Any future work that adds a genuinely separate demo/sandbox environment should revisit this decision explicitly rather than let one grow silently.
+
+### ZD-190 — Buyer-facing demo data deliberately does NOT use the `Fictional:`/`Fictional X` QA-fixture naming convention
+
+- **Date:** 2026-09-02
+- **Category:** Sales Enablement / Data Design
+- **Decision:** Every other fixture organization in `supabase/seed.sql` (Org A, Org B, etc.) uses an explicit `Fictional:`/`Fictional Passenger A1`-style prefix so engineering test output is unambiguously test data. Harmony Medical Transport's passengers, drivers, facilities, and vehicles use plausible, professional-sounding names instead (e.g. "Dorothy Simmons," "Cascade Dialysis Center") — documented explicitly in the seed file's own comment block, not merely an unstated inconsistency.
+- **Status:** CONFIRMED — implemented, verified live: no QA-style name appeared on any Harmony-signed-in screen across the full verification pass (`docs/commercial/commercial-demo-readiness-audit.md`).
+- **Reason:** A buyer evaluating Zenward needs to see "realistic in appearance, fictional in substance" — a QA-prefixed name in front of a prospective operator would read as unfinished or careless, undermining the exact trust the demo exists to build. This is a deliberate, reviewed departure from the codebase's own established fixture convention, not an oversight — the two conventions serve genuinely different audiences (engineers verifying test isolation vs. a buyer evaluating a product).
+- **Affected Product Areas:** `supabase/seed.sql` only.
+- **Dependencies:** None
+- **Owner:** Product / Sales
+- **Review Trigger:** None anticipated — revisit only if a future phase needs the demo org's own data to double as engineering test fixtures (not recommended; keep the two concerns separate).
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

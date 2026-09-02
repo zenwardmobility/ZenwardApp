@@ -172,6 +172,21 @@ Full audit and before/after evidence: [ui-convergence-audit.md](./ui-convergence
 
 Full field-level rationale and the complete FIXED/JUSTIFIED/DEFERRED disposition of every finding: [ui-convergence-audit.md](./ui-convergence-audit.md).
 
+## Operations surface completion & navigation closure — P1-E3-S8B1
+
+Full rationale: [operations-surface-map.md](../product/operations-surface-map.md), [operations-navigation-truthfulness-audit.md](../product/operations-navigation-truthfulness-audit.md).
+
+| Component | Status | Change |
+|---|---|---|
+| `/operations/trips` | **Rewritten** | Was a "Structural placeholder." Now the canonical Trip inventory — `getTripsList()` (new query module: server-side search/date/assignment filters, bounded pagination), `DataTable`, a filter `<form method="get">` (plain HTTP, no client JS needed). |
+| `/operations/passengers` | **Rewritten** | Was a placeholder. Now a real Passenger directory — `getPassengersList()` (new), plus `AddPassengerButton` (new thin client wrapper reusing the EXISTING `AddPassengerDialog`/`addPassengerAction` from New Trip, not a second implementation). |
+| `/operations/facilities` | **Rewritten** | Was a placeholder. Now a real, read-only Facility directory — `getFacilitiesList()` (new). |
+| `/operations/drivers` | **Rewritten** | Was a placeholder. Now a real, read-only Driver directory — `getDriversList()` (new) — a real current-trip fact, never a fabricated "Available" status (GAP-6, still open). |
+| `/operations/fleet` | **Rewritten** | Was a placeholder. Now a real, read-only Fleet directory — `getVehiclesList()` (new). |
+| `OperationsSidebar` | **Extended again** | `NAV_ITEMS` reduced from 9 to 7 (Billing/Reports removed — real routes remain on disk, unlinked); the broken `/operations/settings` link (a genuine 404, no route file exists) removed from the bottom rail entirely. |
+| `AccountMenu` | **New** | Replaces the previously non-interactive top-right `<Avatar>`. A real WAI-ARIA menu-button pattern (keyboard open/close, `Escape`, click-outside, `aria-haspopup`/`aria-expanded`/`role="menu"`/`role="menuitem"`) showing the real organization name, real role, a conditional **Switch Organization** (only when `getActiveMemberships()` genuinely returns >1), and **Sign Out** — reusing the pre-existing, already-correct `signOutAction` (previously wired into the Driver header only). |
+| `AppHeader` | **Extended** | Swapped the bare `<Avatar>` for `<AccountMenu>`; gained `organizationName`/`roleLabel`/`hasMultipleOrganizations` props threaded from `OperationsLayoutClient` → the Server Component `layout.tsx` (a real `getActiveMemberships()` call, not assumed). |
+
 ## Explicitly not building generically
 
 Per work item §35's own caution: no generic "Card" or "ListItem" abstraction is proposed merely for reuse. `DispatchQueueCard`, `DriverCapacityCard`, `TripRouteTimeline`, etc. are each named for what they specifically show, following the existing codebase's own pattern (`DriverTripCard`, not a generic `Card`).
