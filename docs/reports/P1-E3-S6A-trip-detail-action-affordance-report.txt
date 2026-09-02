@@ -1,0 +1,246 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S6A — Trip Detail Action Affordance Audit
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Date/time:            2026-09-02
+====================================================================
+
+--------------------------------------------------------------------
+1. EDIT TRIP BEHAVIOR FOUND
+--------------------------------------------------------------------
+Inspected the actual rendered implementation directly (not the S6
+report's own prose summary) in:
+  - src/components/operations/trip-detail/TripDetailActionBar.tsx
+  - src/app/operations/trips/[tripId]/page.tsx
+
+Finding: "Edit Trip" is ALREADY rendered as a genuinely disabled
+control, not an enabled dead one:
+
+  <Button variant="outline" disabled
+    title="Editing a trip's own details is not available yet.">
+    Edit Trip
+  </Button>
+
+Three independent layers confirm this is real, not cosmetic:
+  1. The native HTML `disabled` attribute is set (via `Button`'s
+     `isDisabled = disabled || loading` -> `<button disabled={isDisabled}>`)
+     — the element is genuinely inert; no click handler exists on it at
+     all (no `onClick` prop is even passed), so there is nothing for a
+     click to invoke regardless.
+  2. `buttonClassNames()` applies `cursor-not-allowed opacity-50` to any
+     disabled button — a real, visibly muted treatment distinct from
+     every enabled button beside it (confirmed both in code and in the
+     real rendered screenshots, §5/§6 below).
+  3. A `title` attribute gives an honest reason on hover: "Editing a
+     trip's own details is not available yet."
+
+This was live-verified via real DOM inspection in the running
+application (not just static code reading): a headless-Chrome/CDP
+session, signed in as org-a-admin@example.test, loaded the real Trip
+Detail page for a real seeded Trip and queried the actual button
+element:
+
+  editTripFound: true
+  editTripDisabled: true
+  editTripTitle: "Editing a trip's own details is not available yet."
+
+CONCLUSION: Edit Trip is option B from the work item's own "Acceptable
+Outcomes" (§3) — visibly disabled, preserving the Stitch composition —
+and was ALREADY implemented this way during P1-E3-S6, not left as an
+enabled/dead control. The S6 completion report's own §22/§77 prose
+("Edit Trip / More / Contact Driver -> direct labeled buttons") was
+imprecise in isolation (it did not call out disabled-vs-enabled
+explicitly for this one control), which is what prompted this audit —
+but the actual shipped code and behavior were already correct.
+
+--------------------------------------------------------------------
+2. CHANGE MADE, IF ANY
+--------------------------------------------------------------------
+NONE. No code change was required for Edit Trip — it already satisfies
+the work item's own preferred outcome (§3.B) exactly: rendered,
+visually disabled, honest tooltip, no route invented, no form built.
+
+One documentation clarification was made to close the gap that
+prompted this audit: the existing code comment directly above
+`TripDetailActionBar` already stated "Edit Trip is rendered, real, and
+disabled" — this was reconfirmed accurate and left unchanged, since it
+already correctly documents the outcome this audit was asked to verify.
+No other files were modified.
+
+--------------------------------------------------------------------
+3. ALL VISIBLE ACTIONS AUDITED
+--------------------------------------------------------------------
+Every visible Trip Detail action, re-verified by direct code inspection
+AND live DOM/network behavior in the real running application (not
+assumed from the S6 report's own prior claims):
+
+  Edit Trip
+    Code:  disabled, no onClick, honest title.
+    Live:  disabled=true, title correct. TRUTHFUL (inert-by-design).
+
+  Contact Driver
+    Code:  `<LinkButton href={`tel:${driverPhone}`}>`, only rendered
+           when `driverPhone` is non-null (real assigned Driver's real
+           phone column, from `TripAssignment` -> `drivers.phone`).
+    Live:  real `<a>` element, `href="tel:555-0101"` (a real seeded
+           Driver phone, not a placeholder). TRUTHFUL.
+
+  Manage Assignment / Assign Driver
+    Code:  `<LinkButton href="/operations/dispatch">` in
+           `CurrentStatusPanel`, label switches on
+           `hasActiveAssignment` (derived from the real
+           `trip_assignments` active row, not guessed).
+    Live:  real `<a>` element, `href="/operations/dispatch"` — a real,
+           existing, canonical route. TRUTHFUL.
+
+  Record No-Show
+    Code:  only rendered when `eligibleForNoShow` (derived from
+           `trip.state`, matching `record_no_show`'s own real SQL
+           eligibility exactly); opens `NoShowDialog`, which submits a
+           real `<form action={formAction}>` to `recordNoShowAction`
+           (Server Action) -> the real `record_no_show` RPC.
+    Live:  not present on this fixture (Trip is `assigned`, not
+           `en_route_to_pickup`/`arrived_at_pickup`) — correctly absent
+           rather than shown-then-failing. Its presence/RPC wiring was
+           already exercised end-to-end with DB-verified outcomes in
+           P1-E3-S6 (§50/§51 of that report) and is unchanged code this
+           phase. TRUTHFUL.
+
+  Cancel Trip
+    Code:  only rendered when `eligibleForCancel` (any non-terminal
+           state); opens `CancelTripDialog` -> `cancelTripAction` ->
+           the real `cancel_trip` RPC.
+    Live:  present and enabled (Trip is `assigned`, a non-terminal
+           state) — same treatment/weight as Contact Driver, correctly
+           distinct from the muted Edit Trip beside it. Already
+           exercised end-to-end with DB-verified outcomes in P1-E3-S6
+           (§48/§49) and unchanged this phase. TRUTHFUL.
+
+  Add Note
+    Code:  `TripNotesPanel`'s "+ Add Note" opens `AddNoteDialog` ->
+           `addNoteAction` (Server Action) -> a real, RLS-scoped
+           `trip_notes` INSERT (`trip_notes_insert_operations`).
+    Live:  unchanged code this phase; already exercised in P1-E3-S6.
+           TRUTHFUL.
+
+  Report Issue
+    Code:  `<Button variant="outline" disabled title="Reporting a new
+           issue from Operations is not available yet.">` in
+           `TripExceptionsPanel` — identical disabled pattern to Edit
+           Trip.
+    Live:  reportIssueDisabled: true, title correct (verified by the
+           same live DOM query). TRUTHFUL (inert-by-design, matching
+           ZD-125/ZD-151's established Driver-side precedent).
+
+--------------------------------------------------------------------
+4. DEAD-CONTROL AUDIT
+--------------------------------------------------------------------
+A "dead control" is defined here as any element that (a) LOOKS enabled
+(full-opacity, normal cursor, no honest disabled affordance) but (b)
+performs no real, backend-verified action when activated.
+
+Checked every clickable element on the page (`<button>` and `<a>`
+elements) against this definition, by code inspection and live DOM
+query:
+
+  Edit Trip        -> genuinely disabled (opacity-50, cursor-not-allowed,
+                       native `disabled`, no onClick). NOT a dead
+                       control — it is an honestly-inert one.
+  Report Issue     -> same treatment. NOT a dead control.
+  Cancel Trip      -> enabled, real RPC. Not dead.
+  Record No-Show   -> enabled (when shown), real RPC. Not dead.
+  Contact Driver   -> enabled (when shown), real `tel:` href. Not dead.
+  Manage Assignment/Assign Driver -> enabled, real route. Not dead.
+  Add Note         -> enabled, real RLS insert. Not dead.
+  Dialog "Cancel"/"Keep Trip"/close (X) buttons -> real `onClose`
+                       state handlers, close the real open dialog.
+                       Not dead.
+  Breadcrumb "Trips" link, "Back to Trips" (unavailable state) ->
+                       real `<Link href="/operations/trips">`. Not
+                       dead.
+
+No visibly-enabled control was found anywhere on Trip Detail that
+performs no real action.
+
+ENABLED DEAD CONTROLS FOUND: NONE.
+
+--------------------------------------------------------------------
+5. 1024 QA
+--------------------------------------------------------------------
+docs/design/qa/trip-detail-action-audit/action-row-1024x768.png — real
+screenshot, signed in as org-a-admin@example.test, real seeded Trip
+(80000000-...-a1, assigned). The action row wraps to a second line at
+this width (Edit Trip / Cancel Trip on one row, Contact Driver
+following) — the muted Edit Trip button is clearly visually distinct
+from the solid-outlined Cancel Trip and solid-teal Contact Driver
+beside it. Composition remains deliberate and legible; no clipping, no
+overlap.
+
+--------------------------------------------------------------------
+6. 1440 QA
+--------------------------------------------------------------------
+docs/design/qa/trip-detail-action-audit/action-row-1440x900.png — same
+real Trip, single-row action cluster (Edit Trip, Cancel Trip, Contact
+Driver) directly under the title, matching the Stitch reference's own
+top-right action-cluster placement. The disabled/enabled contrast
+(muted gray vs. solid dark-outline vs. solid teal) is immediately
+legible at this primary desktop width — matches the reference's own
+implied hierarchy (a de-emphasized secondary action beside emphasized
+primary ones) even though the reference mockup itself doesn't depict a
+disabled state explicitly.
+
+--------------------------------------------------------------------
+7. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, zero errors.
+
+--------------------------------------------------------------------
+8. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, zero errors, zero warnings.
+
+--------------------------------------------------------------------
+9. BUILD
+--------------------------------------------------------------------
+`npm run build` — succeeded. All 24 routes compiled, `/operations/
+trips/[tripId]` dynamic (ƒ) as before.
+
+--------------------------------------------------------------------
+10. FILES MODIFIED
+--------------------------------------------------------------------
+NONE (application code). This audit found the existing implementation
+already correct and required no fix.
+
+Created (audit artifacts only):
+  - docs/design/qa/trip-detail-action-audit/action-row-1024x768.png
+  - docs/design/qa/trip-detail-action-audit/action-row-1440x900.png
+  - docs/reports/P1-E3-S6A-trip-detail-action-affordance-report.txt
+    (this file)
+
+No production source file, migration, seed, or other documentation was
+changed. `git status --short` reflects exactly the pre-existing P1-E3-
+S6 diff plus these three new report/screenshot artifacts.
+
+====================================================================
+TRIP DETAIL ACTION AFFORDANCE GATE:
+READY
+
+ENABLED DEAD CONTROLS:
+NONE
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S7 — Internal New Trip
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; no
+deployment occurred; no Edit Trip form or new route was built. This
+phase stops here.
+====================================================================

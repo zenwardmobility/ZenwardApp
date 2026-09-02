@@ -96,3 +96,21 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
 export function operationsEventLabel(eventType: string): string {
   return EVENT_TYPE_LABELS[eventType] ?? eventType;
 }
+
+/**
+ * `trip_exceptions.exception_type` is deliberately unconstrained free
+ * text (its own migration comment: "taxonomy not yet finalized") — there
+ * is no fixed vocabulary to map, unlike `trip_events.event_type`'s
+ * allow-listed values above. A generic snake_case → Title Case
+ * reformatting is always accurate for whatever value is actually stored
+ * (never guesses at meaning, never invents a label for a value that
+ * doesn't exist) — used for display only; the raw value is what's
+ * actually stored and read back.
+ */
+export function humanizeExceptionType(exceptionType: string): string {
+  return exceptionType
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}

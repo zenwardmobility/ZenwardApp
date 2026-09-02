@@ -154,26 +154,33 @@ insert into public.transportation_requests (
 -- ---------------------------------------------------------------------------
 insert into public.trips (
   id, organization_id, request_id, passenger_id, state, scheduled_pickup_at,
-  pickup_description, destination_description
+  pickup_description, destination_description, instructions, assistance_notes, destination_facility_id
 ) values
+  -- P1-E3-S6: enriched with instructions/assistance_notes/a linked
+  -- destination Facility — a real, non-"today" fixture (already assigned,
+  -- already carries an open exception and both trip_notes visibilities)
+  -- that exercises Operations Trip Detail's full field set without
+  -- inventing a new dedicated fixture.
   ('80000000-0000-0000-0000-0000000000a1', '10000000-0000-0000-0000-0000000000a1', '70000000-0000-0000-0000-0000000000a1',
    '40000000-0000-0000-0000-0000000000a1', 'scheduled', now() + interval '1 day',
-   '123 Fictional St, Atlanta, GA', 'Fictional Clinic A'),
+   '123 Fictional St, Atlanta, GA', 'Fictional Clinic A',
+   'Fictional: call passenger on arrival, use the side entrance.', 'Uses a manual wheelchair; needs ramp access.',
+   '60000000-0000-0000-0000-0000000000a1'),
   -- Second Org A trip, assigned to Driver A2 — needed to test that Driver A1
   -- cannot see another driver's trip/notes within the SAME organization.
   ('80000000-0000-0000-0000-0000000000a2', '10000000-0000-0000-0000-0000000000a1', null,
    '40000000-0000-0000-0000-0000000000a1', 'scheduled', now() + interval '2 days',
-   '123 Fictional St, Atlanta, GA', 'Fictional Clinic A'),
+   '123 Fictional St, Atlanta, GA', 'Fictional Clinic A', null, null, null),
   -- Third Org A trip, deliberately UNASSIGNED — used only for the
   -- cross-org composite-FK constraint tests (W/X), so those tests exercise
   -- the FK itself rather than incidentally tripping the one-active-
   -- assignment-per-trip constraint on an already-assigned trip.
   ('80000000-0000-0000-0000-0000000000a3', '10000000-0000-0000-0000-0000000000a1', null,
    '40000000-0000-0000-0000-0000000000a1', 'scheduled', now() + interval '3 days',
-   '123 Fictional St, Atlanta, GA', 'Fictional Clinic A'),
+   '123 Fictional St, Atlanta, GA', 'Fictional Clinic A', null, null, null),
   ('80000000-0000-0000-0000-0000000000b1', '10000000-0000-0000-0000-0000000000b1', null,
    '40000000-0000-0000-0000-0000000000b1', 'scheduled', now() + interval '1 day',
-   '456 Fictional Ave, Savannah, GA', 'Fictional Clinic B');
+   '456 Fictional Ave, Savannah, GA', 'Fictional Clinic B', null, null, null);
 
 -- ---------------------------------------------------------------------------
 -- Trip assignments (active — ended_at IS NULL)

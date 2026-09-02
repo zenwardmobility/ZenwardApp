@@ -153,6 +153,16 @@ function buildHeaderProps(pathname: string, organization: OrganizationContext, a
     };
   }
 
+  // Trip Detail (P1-E3-S6) — a bare "Trip Detail" title in the persistent
+  // header, matching the reference exactly (docs/design/stitch/references/
+  // 02-trip-detail.png): no search/settings/New-Trip cluster here, unlike
+  // Overview/Dispatch — the page's own breadcrumb, title, and action bar
+  // live in the scrollable content below. Excludes `/operations/trips/new`
+  // (its own future screen) and the bare `/operations/trips` list.
+  if (/^\/operations\/trips\/[^/]+$/.test(pathname) && !pathname.endsWith("/new")) {
+    return { title: "Trip Detail", avatarName };
+  }
+
   return { contextLabel: getContextLabel(pathname), avatarName };
 }
 

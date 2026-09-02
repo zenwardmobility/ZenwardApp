@@ -35,7 +35,16 @@ export default async function OperationsOverviewPage() {
 
   const needsAttentionColumns: DataTableColumn<TodaysOperationsTrip>[] = [
     { key: "time", header: "Time", render: (row) => formatOperationsTime(row.scheduledPickupAt, timezone) },
-    { key: "passenger", header: "Passenger", primary: true, render: (row) => row.passengerName },
+    {
+      key: "passenger",
+      header: "Passenger",
+      primary: true,
+      render: (row) => (
+        <Link href={`/operations/trips/${row.id}`} className="hover:text-brand-interactive-teal hover:underline">
+          {row.passengerName}
+        </Link>
+      ),
+    },
     {
       key: "route",
       header: "Route",
@@ -60,7 +69,16 @@ export default async function OperationsOverviewPage() {
 
   const upcomingColumns: DataTableColumn<TodaysOperationsTrip>[] = [
     { key: "time", header: "Time", render: (row) => formatOperationsTime(row.scheduledPickupAt, timezone) },
-    { key: "passenger", header: "Passenger", primary: true, render: (row) => row.passengerName },
+    {
+      key: "passenger",
+      header: "Passenger",
+      primary: true,
+      render: (row) => (
+        <Link href={`/operations/trips/${row.id}`} className="hover:text-brand-interactive-teal hover:underline">
+          {row.passengerName}
+        </Link>
+      ),
+    },
     { key: "pickup", header: "Pickup", render: (row) => row.pickupDescription },
     { key: "destination", header: "Destination", render: (row) => row.destinationDescription },
     { key: "driver", header: "Driver", render: (row) => row.driverName ?? "––" },
@@ -142,20 +160,25 @@ export default async function OperationsOverviewPage() {
               ) : (
                 <ul className="divide-y divide-border-subtle">
                   {data.activeTrips.map((trip) => (
-                    <li key={trip.id} className="flex items-center justify-between gap-3 py-zw-sm first:pt-0 last:pb-0">
-                      <div className="flex items-center gap-2">
-                        <span className="size-2 shrink-0 rounded-full bg-brand-interactive-teal" aria-hidden />
-                        <div>
-                          <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{trip.passengerName}</p>
-                          <p className={cn(typography.metadata, "text-text-muted")}>
-                            {trip.driverName ?? "Unassigned"}
-                            {trip.vehicleLabel ? ` • ${trip.vehicleLabel}` : ""}
-                          </p>
+                    <li key={trip.id} className="py-zw-sm first:pt-0 last:pb-0">
+                      <Link
+                        href={`/operations/trips/${trip.id}`}
+                        className="flex items-center justify-between gap-3 rounded-sm hover:bg-surface-hover"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="size-2 shrink-0 rounded-full bg-brand-interactive-teal" aria-hidden />
+                          <div>
+                            <p className={cn(typography.bodySmall, "font-medium text-text-primary")}>{trip.passengerName}</p>
+                            <p className={cn(typography.metadata, "text-text-muted")}>
+                              {trip.driverName ?? "Unassigned"}
+                              {trip.vehicleLabel ? ` • ${trip.vehicleLabel}` : ""}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                      <span className={cn(typography.bodySmall, "shrink-0 font-medium text-brand-interactive-teal")}>
-                        {trip.statusLabel}
-                      </span>
+                        <span className={cn(typography.bodySmall, "shrink-0 font-medium text-brand-interactive-teal")}>
+                          {trip.statusLabel}
+                        </span>
+                      </Link>
                     </li>
                   ))}
                 </ul>

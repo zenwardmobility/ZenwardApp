@@ -1793,6 +1793,78 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Engineering / Security / Product
 - **Review Trigger:** A genuine future product requirement to restore leniency for a caller's own dropped-response retry specifically (as distinct from a different Dispatcher's newer decision) would need its own new, explicitly-scoped mechanism (e.g. an idempotency key distinct from the assignment id) — not assumed or designed here.
 
+### ZD-147 — Trip Detail's "Edit Trip / More / Contact Driver" cluster becomes direct, individually-labeled buttons
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Accessibility
+- **Decision:** The reference's "More" overflow button (presumably hiding Cancel and other actions) is replaced with direct, always-visible buttons: "Edit Trip" (disabled), "Record No-Show" (when eligible), "Cancel Trip" (when eligible), "Contact Driver" (when a driver is assigned).
+- **Status:** CONFIRMED — implemented (`TripDetailActionBar`).
+- **Reason:** No dropdown-menu primitive exists in the design system yet, and building one for a 2-3-item destructive-action menu is disproportionate scope for this phase. Direct, labeled buttons are arguably MORE discoverable and accessible than a destructive action (Cancel) hidden behind an unlabeled "More" affordance — composition/hierarchy (a small secondary-action cluster beside the page title) is preserved; only the exact interaction shape differs.
+- **Affected Product Areas:** `src/components/operations/trip-detail/TripDetailActionBar.tsx`
+- **Dependencies:** None
+- **Owner:** Design / Engineering
+- **Review Trigger:** A future need for a genuine overflow menu elsewhere in Operations — build one shared primitive then, not a one-off here.
+
+### ZD-148 — No fabricated Trip reference code; the Passenger's real name identifies the Trip everywhere
+
+- **Date:** 2026-09-01
+- **Category:** Product
+- **Decision:** The reference's "ZW-240829-018"/"FAC-23981" reference codes are never fabricated. The breadcrumb ("Trips › {passenger name}") and page title use the Trip's real Passenger name instead; no raw UUID is shown as a substitute.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** ui-backend-gap-register.md already recorded this exact gap ("Human-readable Trip/Request reference codes... No such field exists; needs a decision on format and generation") as a still-open product decision, not something to invent per-screen. A raw UUID was considered and rejected — work item §45 explicitly asks for "no genuine operational need" before showing one, and none was identified (Passenger name + scheduled time is sufficient for a human to identify which Trip is open).
+- **Affected Product Areas:** `src/app/operations/trips/[tripId]/page.tsx`
+- **Dependencies:** ui-backend-gap-register.md's existing "Human-readable Trip/Request reference codes" entry
+- **Owner:** Product
+- **Review Trigger:** The referenced gap-register decision being resolved — this screen's breadcrumb/title get the real code then, not before.
+
+### ZD-149 — Assistance Requirements shows the Trip's own execution snapshot only, never the Passenger profile's field
+
+- **Date:** 2026-09-01
+- **Category:** Data integrity
+- **Decision:** `PassengerInfoPanel`'s "Assistance Requirements" field reads exclusively from `trips.assistance_notes` — never falls back to, blends with, or is supplemented by `passengers.assistance_notes` (a separate, independently-editable column).
+- **Status:** CONFIRMED — implemented.
+- **Reason:** domain-model.md §J's own hybrid snapshot strategy treats Trip-level fields as immutable execution-time copies, distinct from the live Passenger profile they were copied from at creation time. The two can genuinely diverge (a Passenger's profile note might be updated after this specific Trip was created). Silently blending both under one label would risk showing information from two different points in time as if it were one fact, which is worse than the honest "None recorded" this Trip's own snapshot shows when it's null.
+- **Affected Product Areas:** `src/lib/operations/trip-detail.ts`, `src/components/operations/trip-detail/PassengerInfoPanel.tsx`
+- **Dependencies:** domain-model.md §J
+- **Owner:** Product / Engineering
+- **Review Trigger:** A genuine product decision to surface BOTH values distinctly (e.g. "Trip note" vs. "Profile note") — not designed or assumed here.
+
+### ZD-150 — No dedicated Activity Timeline panel; the reference's own actual composition doesn't show one
+
+- **Date:** 2026-09-01
+- **Category:** Visual fidelity
+- **Decision:** `trip_events` is queried and used only to compute "Last Update" in the Current Status panel — no separate Activity Timeline/history list section was built.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** The canonical reference screenshot (02-trip-detail.png) does not show a distinct timeline panel in its own real composition (Trip Route, Passenger & Trip Information, Current Status, Trip Exceptions, Trip Notes — that's the whole page). The originating work item's own §44 explicitly instructs "the screenshot is authoritative for layout" over its own conceptual composition list, which only offered a timeline as one of several possibilities ("may include"), never a requirement. Building one anyway would have been an unrequested composition change, not a data-driven necessity.
+- **Affected Product Areas:** `src/lib/operations/trip-detail.ts`, `src/app/operations/trips/[tripId]/page.tsx`
+- **Dependencies:** None
+- **Owner:** Design / Product
+- **Review Trigger:** A future, deliberately-reviewed Stitch reference (or product decision) that actually shows a timeline section for this screen.
+
+### ZD-151 — Add Note is implemented (direct RLS-protected INSERT); Report Issue and Resolve Exception are deferred
+
+- **Date:** 2026-09-01
+- **Category:** Product / Security
+- **Decision:** "+ Add Note" is a real, working feature — a direct `trip_notes` INSERT (not an RPC), gated by the existing `trip_notes_insert_operations` RLS policy, confirmed safe by reading the actual policy before building against it. "Report Issue" (create a new `trip_exceptions` row) and resolving an existing open exception are both rendered as real, visible, disabled affordances — not built this phase.
+- **Status:** CONFIRMED — implemented and verified (Add Note real end-to-end; Report Issue/Resolve deliberately inert).
+- **Reason:** Add Note meets BOTH conditions work item §33 requires: the RLS policy genuinely and safely permits it (`has_org_role` check only, no additional narrowing needed), and the reference clearly shows "+ Add Note" as a primary supported action. Report Issue/Resolve Exception meet neither bar as cleanly this phase — building a full exception-reporting AND resolution workflow is a new write surface disproportionate to this phase's primary mandate (Trip data display + cancel/no-show), mirroring the identical reasoning already established for the Driver-side "Report Issue" deferral (ZD-125, P1-E3-S3).
+- **Affected Product Areas:** `src/app/operations/trips/[tripId]/actions.ts` (`addNoteAction`), `src/components/operations/trip-detail/AddNoteDialog.tsx`, `TripNotesPanel.tsx`, `TripExceptionsPanel.tsx`
+- **Dependencies:** ZD-125 (identical precedent)
+- **Owner:** Product / Security
+- **Review Trigger:** A future, dedicated exception-management work item — covering both creation and resolution together, with its own test coverage, not retrofitted here.
+
+### ZD-152 — Facility annotation includes city/state to avoid a visually-redundant duplicate
+
+- **Date:** 2026-09-01
+- **Category:** Visual fidelity
+- **Decision:** When a Trip has a linked pickup/destination Facility, the annotation shown is `"{name} · {city}, {state}"`, not the bare Facility name alone.
+- **Status:** CONFIRMED — implemented, found during this phase's own real screenshot review.
+- **Reason:** This project's seed fixtures' `destination_description` free-text snapshot often already equals the linked Facility's own name verbatim (e.g. both are literally "Fictional Clinic A") — a bare name-only annotation rendered directly underneath looked like an unintentional duplicate in a real captured screenshot. Adding city/state makes the annotation genuinely informative regardless of whether the snapshot text happens to match the Facility name, without altering what the snapshot address itself shows (still the Trip's own immutable text, work item §15).
+- **Affected Product Areas:** `src/lib/operations/trip-detail.ts` (`formatFacility`), `src/components/operations/trip-detail/TripRoutePanel.tsx`
+- **Dependencies:** None
+- **Owner:** Design / Engineering
+- **Review Trigger:** None anticipated.
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

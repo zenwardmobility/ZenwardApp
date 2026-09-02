@@ -114,7 +114,7 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 
 ## PRODUCT DECISIONS REQUIRED (not backend gaps per se — need product input, not engineering, before either can be built)
 
-These block full fidelity of specific UI concepts but are not "missing backend capability" in the RPC/schema sense — they need a defined business rule before any implementation, backend or frontend:
+These block full fidelity of specific UI concepts but are not "missing backend capability" in the RPC/schema sense — they need a defined business rule before any implementation, backend or frontend. **P1-E3-S6 (Operations Trip Detail) reconfirmed the Companion, reference-code, and Trip Type rows below as still open** — none was resolved or implemented, each was simply omitted from the real screen (ZD-148, ZD-149) rather than left unaddressed.
 
 | Concept | Screens | What's missing |
 |---|---|---|

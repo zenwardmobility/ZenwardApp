@@ -1,7 +1,7 @@
 # Zenward Platform — Component Inventory
 
-**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today, P1-E3-S3 — Driver Trips & Active Trip Experience, P1-E3-S4 — Operations Application Shell & Today's Operations, and P1-E3-S5 — Dispatch Board (components below actually built/refined)
-**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History; P1-E3-S4 implemented the real Today's Operations screen and refined the Operations shell; P1-E3-S5 implemented the real Dispatch Board — see "Driver components — P1-E3-S2", "Driver components — P1-E3-S3", "Operations components — P1-E3-S4", and "Dispatch components — P1-E3-S5" below.
+**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today, P1-E3-S3 — Driver Trips & Active Trip Experience, P1-E3-S4 — Operations Application Shell & Today's Operations, P1-E3-S5 — Dispatch Board, and P1-E3-S6 — Operations Trip Detail (components below actually built/refined)
+**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History; P1-E3-S4 implemented the real Today's Operations screen and refined the Operations shell; P1-E3-S5 implemented the real Dispatch Board; P1-E3-S6 implemented the real Operations Trip Detail screen — see "Driver components — P1-E3-S2", "Driver components — P1-E3-S3", "Operations components — P1-E3-S4", "Dispatch components — P1-E3-S5", and "Trip Detail components — P1-E3-S6" below.
 **Last updated:** 2026-09-01
 
 Reconciles the Stitch references (docs/design/stitch/references/) against the component library that **already exists** in `src/components/` (built during P0-E2-S3/S3A) rather than proposing an inventory from scratch. Confirmed by direct inspection: the existing `TRIP_STATUS_MAP`/`DRIVER_STATUS_MAP` in `TripStatus.tsx`/`DriverStatus.tsx` already anticipate the exact labels seen in these references (`Requested`, `Pending Confirmation`, `Needs Assignment`, `Available`, `On Trip`, `Break`, `Unavailable`) — the primitive layer is well-aligned; this phase's job is identifying the screen/feature-level composition still needed on top of it.
@@ -37,10 +37,10 @@ Reconciles the Stitch references (docs/design/stitch/references/) against the co
 | ~~`DispatchAssignmentGrid`~~ | **Built P1-E3-S5** as `AssignmentGrid` — see "Dispatch components" below | 03 | Desktop/tablet only — no mobile equivalent is implied or required | Built without a new generic primitive; composes `Panel`/`EmptyState` |
 | ~~`DispatchQueueCard`~~ | **Built P1-E3-S5** inline within `NeedsAssignmentQueue` (no separate card component — one usage, not worth abstracting yet) | 03 | Desktop | Composes `Panel`, `TripStatus`, `Button` |
 | ~~`DriverCapacityCard`~~ | **Built P1-E3-S5** inline within `DriverCapacityPanel` | 03 | Desktop | Composes `Avatar`, `StatusBadge` (not `DriverStatus` — see Dispatch components note on why) |
-| `TripRouteTimeline` | Two-stop pickup/destination with connecting line, inline note, per-stop action buttons | 02 (Operations variant, richer than `DriverRoute`) | Desktop | Distinct from `DriverRoute` — Operations variant carries more per-stop detail (call-passenger note, appointment badges) |
-| `TripCurrentStatusCard` | Right-rail status summary (state, driver link, last update, next action) | 02 | Desktop | Composes `StatusBadge`, `DefinitionList` |
-| `TripNoteList` | Timestamped note list + add-note affordance | 02 | Desktop (Driver's note surface is simpler — see `DriverInstruction`, already covers the read-only display case) | New list component; write action ("Add Note") is a direct-table INSERT per the data-action map, not an RPC — no special mutation-layer dependency |
-| `ExceptionBadge` / exception panel | "No open exceptions" / Report Issue | 02, 04 | Both | `EmptyState` already covers the empty case; the populated-list case is new |
+| ~~`TripRouteTimeline`~~ | **Built P1-E3-S6** as `TripRoutePanel` | 02 (Operations variant, richer than `DriverRoute`) | Desktop | Built without a new generic primitive — composes `Panel`; dot-line-dot metaphor matches `DriverRoute`'s own established pattern |
+| ~~`TripCurrentStatusCard`~~ | **Built P1-E3-S6** as `CurrentStatusPanel` | 02 | Desktop | Composes `Panel`, `DefinitionList`, `LinkButton` (the assignment-management entry point, work item §18) |
+| ~~`TripNoteList`~~ | **Built P1-E3-S6** as `TripNotesPanel` + `AddNoteDialog` | 02 | Desktop (Driver's note surface is simpler — see `DriverInstruction`, already covers the read-only display case) | Write action ("Add Note") is a direct-table INSERT as anticipated, via a real Server Action — no RPC |
+| ~~`ExceptionBadge`~~ / exception panel | **Built P1-E3-S6** as `TripExceptionsPanel` | 02, 04 | Both | `EmptyState` covers the empty case; the populated-list case shows real `trip_exceptions` rows. "Report Issue" rendered disabled — deferred (ZD-151) |
 | `RequestSourceSelector` | Segmented radio-card group (Passenger/Family-Caregiver/Healthcare Facility/Other) | 05 | Desktop | New — no existing radio-card component |
 | `PassengerPicker` | Search/typeahead + selected-passenger chip + "Add New Passenger" | 05 | Desktop | Composes `SearchInput` |
 | `ChangeNoticeBadge` | "Pickup updated from X" advisory | 06, 07 | Mobile | New, small — **blocked on the underlying change-tracking gap** (see gap register); component shape can be designed, but has no real data source yet |
@@ -101,6 +101,22 @@ Full field-level rationale: [todays-operations-data-map.md](../product/todays-op
 | `TripStatus`, `Panel`, `EmptyState`, `Avatar`, `Select`, `Textarea`, `Button` | Reused unchanged | No new status-badge or form-field primitive was needed — every label `operationsTripStatusLabel` produces was already anticipated by `TRIP_STATUS_MAP` before this phase. |
 
 Full field-level rationale: [dispatch-board-data-map.md](../product/dispatch-board-data-map.md).
+
+## Trip Detail components — P1-E3-S6
+
+| Component | Status | Change |
+|---|---|---|
+| `TripRoutePanel` | **New** | Dot-line-dot metaphor (matches `DriverRoute`), richer per-stop detail: time badge, the Trip's own address snapshot, optional Facility annotation, and `trip.instructions` as an inline callout under Pickup. |
+| `PassengerInfoPanel` | **New** | Real fields only — Passenger name/phone, Requester (when linked), Assistance Requirements (Trip-level snapshot only, ZD-149). Trip Type/Reference/Companion all omitted (ZD-148, fabricated concepts). |
+| `TripInfoStrip` | **New** | The 5-column at-a-glance strip — a bespoke layout, not built on `DefinitionList` (which only supports 1/2 columns) for a genuinely one-off use. |
+| `CurrentStatusPanel` | **New** | Right-rail status summary + the assignment-management entry point (a generic link to `/operations/dispatch`, labeled "Assign Driver"/"Manage Assignment" — work item §18, no second assignment mutation implementation). |
+| `TripExceptionsPanel` | **New** | Real open `trip_exceptions` rows; "Report Issue" rendered disabled (ZD-151, mirrors the Driver-side ZD-125 deferral). |
+| `TripNotesPanel` + `AddNoteDialog` | **New** | Real `trip_notes` display (both visibilities) + a real, working "Add Note" — a direct RLS-protected INSERT via a Server Action, not an RPC. Author identity deliberately not resolved (matches Today's Operations' Activity Log precedent). |
+| `CancelTripDialog`, `NoShowDialog` | **New** | Built on the shared `Dialog` primitive (P1-E3-S5), mirroring `AssignmentDialog`'s established Server-Action pattern exactly — real `cancel_trip`/`record_no_show` RPCs, explicit reason required, deliberate confirm click. |
+| `TripDetailActionBar` | **New** | Client orchestrator for which dialog is open + the action button cluster — direct labeled buttons instead of a "More" overflow menu (ZD-147, no dropdown-menu primitive exists yet). |
+| `TripStatus`, `Panel`, `DefinitionList`, `EmptyState`, `StatusBadge`, `Dialog`, `Select`, `Textarea`, `Button` | Reused unchanged | No new status-badge, form-field, or dialog primitive was needed. |
+
+Full field-level rationale: [operations-trip-detail-data-map.md](../product/operations-trip-detail-data-map.md).
 
 ## Explicitly not building generically
 

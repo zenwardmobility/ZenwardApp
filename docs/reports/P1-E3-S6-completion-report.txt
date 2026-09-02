@@ -1,0 +1,1026 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S6 — Operations Trip Detail
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 46c2c81 "Implement and harden Dispatch Board"
+Date/time:            2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------
+`git status --short` was clean at the start of this phase. `git log
+--oneline -5` confirmed P1-E3-S5/S5A/S5B genuinely committed together as
+`46c2c81 "Implement and harden Dispatch Board"`. No unexplained changes
+existed. Proceeded per work item §1.
+
+--------------------------------------------------------------------
+2. STITCH REFERENCE INSPECTED
+--------------------------------------------------------------------
+Primary: docs/design/stitch/references/02-trip-detail.png, read in full
+and mapped composition-by-composition: header ("Trip Detail" + bell/
+help/settings/avatar), breadcrumb ("Trips › ZW-240829-018"), title row
+(Passenger name + status badge + Edit Trip/More/Contact Driver), a
+5-column info strip (Pickup/Appointment/Driver/Vehicle/Trip Status), two
+left-column panels (Trip Route, Passenger & Trip Information), and three
+right-column panels (Current Status, Trip Exceptions, Trip Notes). No
+separate Activity Timeline panel exists in the reference's own actual
+composition (see §16/§31). All required docs read before coding
+(domain-model.md, lifecycle-model.md, authorization-model.md,
+application-route-map.md, application-implementation-plan.md,
+ui-data-action-map.md, ui-backend-gap-register.md, auth-session-
+routing.md, operational-timezone.md, todays-operations-data-map.md,
+dispatch-board-data-map.md, decision-register.md, schema.md, read-api.md,
+mutation-api.md, rls-model.md, mutation-authorization.md, application-
+auth-boundary.md, stitch-reference-index.md, component-inventory.md, and
+the P1-E3-S4/S5/S5A/S5B completion reports). `cancel_trip`/
+`record_no_show`'s ACTUAL signatures and full SQL bodies were read
+directly from `database.types.ts` and
+`supabase/migrations/20260831100200_controlled_trip_mutations.sql` —
+not inferred. `trip_notes`/`trip_exceptions` schema AND their actual RLS
+policies were read directly from their own migrations before deciding
+what to build (see §17/§18).
+
+--------------------------------------------------------------------
+3. ORIGINAL TRIP DETAIL STUB
+--------------------------------------------------------------------
+`/operations/trips/[tripId]` was `OperationsRouteStub` rendering the raw
+route param as a heading — no data fetching, no real composition.
+
+--------------------------------------------------------------------
+4. FINAL COMPOSITION
+--------------------------------------------------------------------
+Matches the reference's actual structure: persistent "Trip Detail"
+header (no search/settings/New-Trip cluster here, unlike Overview/
+Dispatch — the reference itself shows a simpler header for this screen);
+real breadcrumb ("Trips › {Passenger name}"); title row (Passenger name +
+`TripStatus` badge + a direct action-button cluster — Edit Trip/Record
+No-Show/Cancel Trip/Contact Driver, each conditionally shown); a terminal-
+state banner when applicable; the 5-column info strip; Trip Route panel
+(dot-line-dot, time badges, `trip.instructions` callout); Passenger &
+Trip Information panel (real fields only); Current Status panel
+(including the assignment-management entry point); Trip Exceptions panel
+(real open exceptions, "Report Issue" disabled); Trip Notes panel (real
+notes, working "+ Add Note").
+
+--------------------------------------------------------------------
+5. SERVER DATA ARCHITECTURE
+--------------------------------------------------------------------
+`src/lib/operations/trip-detail.ts` — `getTripDetail()`, a focused
+single-Trip lookup (work item §11): organization-scoped, explicit
+columns, no service role, no broad SECURITY DEFINER read RPC (existing
+Operations RLS policies are sufficient and were used directly). One
+core query (embedding Passenger, Requester, both Facility references,
+and current+historical `trip_assignments` → Driver/Vehicle) plus three
+small parallel queries (`trip_events`, `trip_notes`, `trip_exceptions`)
+via `Promise.all`.
+
+--------------------------------------------------------------------
+6. TRIP QUERY
+--------------------------------------------------------------------
+`trips` filtered by `id` AND `organization_id` (both explicit, never
+relying on RLS alone), `.maybeSingle()`. Explicit columns: `id,
+organization_id, state, scheduled_pickup_at, appointment_at,
+pickup_description, destination_description, instructions,
+assistance_notes, cancelled_at, cancellation_reason, no_show_at,
+completed_at, created_at, updated_at` plus the embedded relationships
+below. The route parameter is validated against a UUID regex BEFORE any
+query runs (work item §8) — a malformed value never reaches Postgres.
+
+--------------------------------------------------------------------
+7. PASSENGER QUERY/FIELDS
+--------------------------------------------------------------------
+Embedded via `trips_passenger_id_organization_id_fkey`: `display_name`,
+`phone` only (work item §13) — no diagnosis, insurance, DOB, or other
+protected fields; none exist on `passengers` to begin with, confirmed by
+reading the actual schema, not assumed absent.
+
+--------------------------------------------------------------------
+8. REQUESTER HANDLING
+--------------------------------------------------------------------
+Embedded via `trips_request_id_organization_id_fkey` →
+`transportation_requests` (nullable — internally-created Trips have
+none): `requester_name`, `requester_relationship`. Rendered as
+"Requested By" — never attributed to the Passenger record (work item
+§14). Row omitted entirely when `request_id` is null, not shown blank.
+
+--------------------------------------------------------------------
+9. FACILITY/ADDRESS-SNAPSHOT HANDLING
+--------------------------------------------------------------------
+`pickup_description`/`destination_description` (the Trip's own
+immutable execution snapshot) are always what's shown as the address —
+never replaced by a Facility record (work item §15). Optional linked
+Facilities (`pickup_facility_id`/`destination_facility_id`, embedded via
+their own composite FKs with explicit aliases since both reference the
+same `facilities` table) are shown as a small annotation only:
+`"{name} · {city}, {state}"` — the city/state addition (ZD-152) was
+found necessary during this phase's own real screenshot review, since
+this project's fixture `destination_description` values often already
+equal the linked Facility's bare name, which looked like an
+unintentional duplicate without it.
+
+--------------------------------------------------------------------
+10. CURRENT ASSIGNMENT DERIVATION
+--------------------------------------------------------------------
+The embedded `trip_assignments` row where `ended_at IS NULL` — the sole
+source of "current Driver/Vehicle" (work item §16). Never derived from
+any `trips.*` column (none exist) and never from `AuthUser`.
+
+--------------------------------------------------------------------
+11. ASSIGNMENT HISTORY DECISION
+--------------------------------------------------------------------
+Not built as a separate history/timeline list (work item §17's own
+"if not useful to reference/scope: document and defer"). The reference's
+actual screenshot does not show one; "Last Update" (from the most recent
+`trip_events` row) and the Trip Notes panel together cover the
+"what happened" question at the fidelity the reference itself
+demonstrates. Ended `trip_assignments` rows are queried implicitly (the
+full array is fetched to find the active one) but not surfaced as their
+own list.
+
+--------------------------------------------------------------------
+12. ASSIGNMENT MANAGEMENT NAVIGATION
+--------------------------------------------------------------------
+`CurrentStatusPanel` links to the canonical `/operations/dispatch`
+route — generic, not deep-linked (the Dispatch Board has no per-Trip
+deep-link parameter yet, an already-documented limitation) — labeled
+"Assign Driver" when unassigned, "Manage Assignment" when assigned (work
+item §18). No second `assign_trip`/`reassign_trip` implementation exists
+here; the Dispatch Board itself was not modified.
+
+--------------------------------------------------------------------
+13. TRIP STATE PRESENTATION
+--------------------------------------------------------------------
+`operationsTripStatusLabel()` — the same function Today's Operations and
+Dispatch already use, applied unchanged here. No new persisted state was
+introduced or implied anywhere (work item §19).
+
+--------------------------------------------------------------------
+14. ORGANIZATION TIMEZONE
+--------------------------------------------------------------------
+Every displayed timestamp (pickup, appointment, Last Update, terminal-
+state timestamps, exception/note timestamps) is formatted via
+`formatOperationsTime`/`formatOperationsLongDate`, both requiring the
+explicit `organization.organizationTimezone` parameter resolved by
+`requireOperationsAccess`. No browser/server timezone fallback exists
+anywhere on this screen — verified by reading every call site, not
+assumed.
+
+--------------------------------------------------------------------
+15. INSTRUCTIONS/ASSISTANCE
+--------------------------------------------------------------------
+`trip.instructions` → an inline callout under Pickup in Trip Route
+(matching the reference's own "Call passenger on arrival" placement
+exactly). `trip.assistance_notes` → "Assistance Requirements" in
+Passenger & Trip Information — deliberately the Trip-level snapshot
+only, never blended with `passengers.assistance_notes` (ZD-149, a
+separate, potentially-divergent profile field). Both omitted entirely
+(no placeholder box) when null.
+
+--------------------------------------------------------------------
+16. TRIPEVENT TIMELINE
+--------------------------------------------------------------------
+Queried (all events, `occurred_at desc`) and used only to compute
+"Last Update" in Current Status — no dedicated timeline panel was built
+(ZD-150), because the reference's own actual screenshot does not show
+one, and work item §44 explicitly instructs the screenshot to be
+authoritative over its own conceptual composition list.
+
+--------------------------------------------------------------------
+17. TRIPNOTE HANDLING
+--------------------------------------------------------------------
+Both `operations_only` and `driver_visible` notes are shown (RLS already
+scopes Operations to see both — confirmed by reading
+`trip_notes_select_operations`, which has no visibility filter). "+ Add
+Note" is real and working: a direct `trip_notes` INSERT via a Server
+Action, gated by the actual `trip_notes_insert_operations` RLS policy
+(confirmed safe — `has_org_role` only, no additional narrowing) —
+verified by inspection before building against it (work item §33), not
+assumed safe because the table exists. Author identity is deliberately
+not resolved (see §31/data map for the reasoning, matching Today's
+Operations' established precedent).
+
+--------------------------------------------------------------------
+18. TRIPEXCEPTION HANDLING
+--------------------------------------------------------------------
+Real open (`status='open'`) `trip_exceptions` rows are shown, with a
+generic snake_case→Title Case reformatting of the free-text
+`exception_type` (no fixed vocabulary exists to map against — confirmed
+by reading the actual CHECK/comment, which explicitly says "taxonomy not
+yet finalized"). "Report Issue" (create) and resolving an existing
+exception are both deliberately deferred — rendered/left as real,
+disabled/inert affordances rather than built, mirroring the identical
+reasoning already established for the Driver-side "Report Issue"
+deferral (ZD-125, ZD-151).
+
+--------------------------------------------------------------------
+19. CONTACT ACTIONS
+--------------------------------------------------------------------
+Passenger phone → `tel:` link (Passenger & Trip Information). Driver
+phone → `tel:` link via the "Contact Driver" button (only rendered when
+a Driver is actually assigned). No WhatsApp/SMS/email, no contact data
+sent to analytics (work item §37) — neither exists anywhere in this
+phase's code.
+
+--------------------------------------------------------------------
+20. DIRECTIONS DECISION
+--------------------------------------------------------------------
+Not built this phase — the reference's own visible composition doesn't
+show a directions/navigate affordance on Trip Detail (unlike the Driver
+Active Trip screen, which already has one via `directionsUrl()`,
+ZD-126). Not adding an unrequested control matches work item §75's "no
+fake content solely to fill the reference" principle applied in reverse
+(no unrequested control either).
+
+--------------------------------------------------------------------
+21. CANCELLATION ELIGIBILITY
+--------------------------------------------------------------------
+`trip.eligibleForCancel = NON_TERMINAL_STATES.has(state)` — any of the 6
+non-terminal states. Matches `cancel_trip`'s own actual SQL exactly
+(idempotent no-op if already `cancelled`; `ZW004` from `completed`/
+`no_show`) — read directly, not inferred.
+
+--------------------------------------------------------------------
+22. CANCELLATION UI
+--------------------------------------------------------------------
+`CancelTripDialog` — built on the shared `Dialog` primitive (P1-E3-S5),
+requires a real reason (native `required` textarea validation, plus
+server-side non-empty check), an explicit "Cancel Trip" destructive-
+styled submit button and a "Keep Trip" escape — never a casual one-click
+button (work item §22).
+
+--------------------------------------------------------------------
+23. CANCEL_TRIP INTEGRATION
+--------------------------------------------------------------------
+`cancelTripAction` (Server Action) calls the real `cancel_trip` RPC only
+— no direct `trips.state` write anywhere. Re-derives
+`requireOperationsAccess()` fresh on every call (never trusted from page
+render).
+
+--------------------------------------------------------------------
+24. NO-SHOW ELIGIBILITY
+--------------------------------------------------------------------
+`trip.eligibleForNoShow = NO_SHOW_ELIGIBLE_STATES.has(state)` —
+`en_route_to_pickup`/`arrived_at_pickup` only, matching
+`record_no_show`'s own actual SQL exactly. Never derived from elapsed
+time, driver location, or any client-side heuristic (work item §23/§24)
+— the dialog only ever appears when the page's own already-loaded state
+made it eligible, and the RPC independently re-validates regardless.
+
+--------------------------------------------------------------------
+25. NO-SHOW UI
+--------------------------------------------------------------------
+`NoShowDialog` — identical pattern to Cancel: required reason, explicit
+destructive confirm, no automatic classification of any kind.
+
+--------------------------------------------------------------------
+26. RECORD_NO_SHOW INTEGRATION
+--------------------------------------------------------------------
+`recordNoShowAction` calls the real `record_no_show` RPC only, same
+re-derivation discipline as Cancel.
+
+--------------------------------------------------------------------
+27. MUTATION ERROR MAPPING
+--------------------------------------------------------------------
+`src/lib/operations/trip-detail-errors.ts` — 5 narrow categories
+(UNAUTHORIZED/NOT_FOUND/ILLEGAL_STATE/INVALID_INPUT/UNKNOWN) mapped from
+the real ZW-code contract. No ZW code, SQLSTATE, or PostgREST detail
+ever reaches the rendered UI — verified both by reading the component
+(only the mapped message string is ever rendered) and by a real invalid-
+state test observing the actual error object server-side while
+confirming the UI-facing message stays generic.
+
+--------------------------------------------------------------------
+28. MUTATION REFRESH BEHAVIOR
+--------------------------------------------------------------------
+Every action calls `revalidatePath` for `/operations/trips/[tripId]`,
+`/operations/dispatch`, and `/operations` (work item §41's own explicit
+minimum list) — a cancellation/no-show changes Today's Operations'
+summary counts and removes the Trip from Dispatch's active board, so
+both need revalidating alongside the detail page itself. `router.
+refresh()` fires on every non-idle action-state change (success or
+error), matching the established `AssignmentDialog`/`DriverLifecycle
+Action` pattern.
+
+--------------------------------------------------------------------
+29. STALE-STATE HANDLING
+--------------------------------------------------------------------
+Not re-derived as a new live-application test this phase — `cancel_
+trip`/`record_no_show` were not modified, and their existing state-
+precondition behavior (re-validated live, under a row lock, on every
+call) is exactly what the "Dispatcher opens stale Trip Detail, Driver
+progresses it, Dispatcher's now-stale action attempt is rejected"
+scenario needs; already covered in substance by the invalid-state tests
+below (§48 CANCEL-INVALID, §50 NOSHOW-INVALID), which exercise the same
+"backend authority wins over a stale/incompatible client assumption"
+property directly.
+
+--------------------------------------------------------------------
+30. TERMINAL-STATE HANDLING
+--------------------------------------------------------------------
+The page renders a real terminal-state banner (Completed/Cancelled/
+No-show, with the relevant timestamp and, for Cancelled, the real
+reason) and never redirects away — Operations retains legitimate
+organization-level access to a terminal Trip (work item §25), verified
+directly: after both the Cancel and No-Show functional tests, the same
+Trip Detail page (not a different "broken" view) correctly shows the
+new terminal state.
+
+--------------------------------------------------------------------
+31. UNSUPPORTED REFERENCE FIELDS
+--------------------------------------------------------------------
+Trip Type ("One way"), Reference code ("ZW-240829-018"/"FAC-23981"),
+Companion ("None recorded") — all omitted entirely, never fabricated
+(ZD-148/ZD-149). Each is an already-recorded "PRODUCT DECISIONS
+REQUIRED" gap-register entry, reconfirmed still open by this phase, not
+newly discovered or resolved.
+
+--------------------------------------------------------------------
+32. TRIP REFERENCE-CODE DECISION
+--------------------------------------------------------------------
+No reference code is fabricated or substituted with a raw UUID (work
+item §45 — no genuine operational need identified). The breadcrumb and
+title use the real Passenger name instead (ZD-148).
+
+--------------------------------------------------------------------
+33. COMPANION DECISION
+--------------------------------------------------------------------
+Omitted entirely — no canonical schema field exists (work item §46,
+unchanged from the prior phase's own recorded gap).
+
+--------------------------------------------------------------------
+34. RUNNING LATE DECISION
+--------------------------------------------------------------------
+No lateness threshold is derived anywhere on this screen from
+`scheduled_pickup_at`/`now()` client-side math (work item §48) — the
+"Pickup" info-strip cell and the Route panel show only the real
+scheduled time, no red-flag styling of any kind.
+
+--------------------------------------------------------------------
+35. DRIVER AVAILABILITY DECISION
+--------------------------------------------------------------------
+No Available/On Shift/Break/Offline label appears anywhere on this
+screen (work item §49) — Driver identity is shown plainly (name, and
+"On Trip"-style bare status only via the existing `TripStatus`
+component's own labels, never a fabricated availability taxonomy).
+
+--------------------------------------------------------------------
+36. NO-LOCATION DECISION
+--------------------------------------------------------------------
+No latitude/longitude, geolocation API, GPS polling, map marker, or ETA
+engine anywhere in this phase's code (work item §39). Confirmed by grep
+— zero matches for `geolocation|latitude|longitude` in this phase's new
+files.
+
+--------------------------------------------------------------------
+37. NO-REALTIME DECISION
+--------------------------------------------------------------------
+No Supabase Realtime subscription anywhere (work item §40). The page is
+authoritative on navigation and on every mutation's own `revalidatePath`/
+`router.refresh()` only — confirmed by grep, zero matches for
+`realtime|channel(` in this phase's new files.
+
+--------------------------------------------------------------------
+38. EXACT SELECTED COLUMNS
+--------------------------------------------------------------------
+No `select("*")` anywhere in `trip-detail.ts` — every query (the core
+Trip row, `trip_events`, `trip_notes`, `trip_exceptions`) lists its exact
+columns explicitly (see the `TRIP_COLUMNS` constant and each `.select()`
+call).
+
+--------------------------------------------------------------------
+39. QUERY EFFICIENCY REVIEW
+--------------------------------------------------------------------
+One core query (embedding Passenger/Requester/both Facilities/current-
+and-historical assignments→Driver/Vehicle in a single explicit-column
+select) plus 3 small queries run in parallel via `Promise.all` — 4 total
+round trips regardless of how many events/notes/exceptions exist. No
+N+1 anywhere — Driver/Vehicle names come from the SAME embedded
+relationship as the Trip row, never a second per-row fetch.
+
+--------------------------------------------------------------------
+40. SERVICE-ROLE AUDIT
+--------------------------------------------------------------------
+`grep -rn "service_role\|SUPABASE_SERVICE" src/lib/operations/trip-
+detail.ts src/app/operations/trips/\[tripId\]/actions.ts` — zero
+matches. `createServerSupabaseClient()` (publishable key) is the only
+client used anywhere in this phase's code.
+
+--------------------------------------------------------------------
+41. DIRECT TRIP-UPDATE AUDIT
+--------------------------------------------------------------------
+`grep -rn "\.from(\"trips\")\|\.update(" src/app/operations/trips/
+\[tripId\]/actions.ts src/lib/operations/trip-detail.ts` shows the only
+write in this phase's entire code is the `trip_notes` INSERT
+(`addNoteAction`) — no `.update()` call, no `.from("trips")` write of
+any kind, anywhere. `cancel_trip`/`record_no_show` (the existing
+controlled RPCs) are the sole path for any Trip lifecycle change.
+
+DIRECT TRIP LIFECYCLE UPDATE: NONE.
+
+--------------------------------------------------------------------
+42. BASIC OWN-ORG DETAIL TEST
+--------------------------------------------------------------------
+Through the real running application: Org A dispatcher opens
+`/operations/trips/80000000-...-a1` (a real, rich fixture — assigned,
+linked request, an open exception, both note visibilities, instructions
+and assistance notes populated). 11/11 sub-assertions PASS: correct
+route, correct Passenger, correct route/addresses, correct current
+assignment (Driver + Vehicle), correct lifecycle state label, correct
+instructions callout, correct assistance requirements, correct requester
+(never attributed to Passenger), real open exception shown (humanized
+type), real trip notes shown, and no fabricated reference code anywhere
+on the page.
+
+--------------------------------------------------------------------
+43. FOREIGN TRIP TEST
+--------------------------------------------------------------------
+Org A admin requests an Org B Trip id directly. PASS (3/3): stays on the
+same route (no redirect that would itself leak "this id exists
+somewhere"), shows the generic "Trip unavailable" state, and never
+leaks the Org B passenger's name anywhere on the page. A malformed
+(non-UUID) id was also tested separately: PASS — identical generic
+"Trip unavailable" state, confirmed the UUID-format guard rejects it
+before any query runs.
+
+--------------------------------------------------------------------
+44. DRIVER DENIAL
+--------------------------------------------------------------------
+A `driver`-role Membership requesting `/operations/trips/[tripId]` is
+redirected to `/driver` — the existing, unmodified
+`requireOperationsAccess` routing behavior. PASS.
+
+--------------------------------------------------------------------
+45. INACTIVE MEMBERSHIP TEST
+--------------------------------------------------------------------
+An inactive Dispatcher Membership requesting Trip Detail is redirected
+to `/access-unavailable`. PASS.
+
+--------------------------------------------------------------------
+46. ROLE-CHANGE TEST
+--------------------------------------------------------------------
+Not re-derived as a separate live mid-session test this phase (would
+require mutating a Membership's role mid-session, already covered
+structurally by every mutation action re-deriving `requireOperationsAccess`
+fresh on every single call — there is no session-cached or JWT-claim-
+derived role anywhere in `cancelTripAction`/`recordNoShowAction`/
+`addNoteAction`, matching the same discipline already proven live in
+P1-E3-S5/S5A/S5B).
+
+--------------------------------------------------------------------
+47. MULTI-ORG TEST
+--------------------------------------------------------------------
+A user with `organization_admin` in Org A and `driver` in Org B, signed
+in with no organization-context cookie, is required to select an
+organization (`/select-organization`) before reaching Trip Detail at
+all — never silently granted access to an Org A Trip based on their
+stronger role there while some other context might apply. PASS.
+
+--------------------------------------------------------------------
+48. CANCEL FUNCTIONAL TEST
+--------------------------------------------------------------------
+Through the real Trip Detail UI: opened the real "Cancel Trip" dialog on
+a scheduled/assigned Trip, supplied a required reason, confirmed. Dialog
+closed (success); page refreshed to show the real "Cancelled" terminal
+banner. Independently verified via direct SQL: `trips.state='cancelled'`,
+active `trip_assignments` row closed (`ended_at` set). 5/5 sub-
+assertions PASS.
+
+--------------------------------------------------------------------
+49. CANCEL INVALID-STATE TEST
+--------------------------------------------------------------------
+Attempted `cancel_trip` on an already-`completed` Trip (a genuinely
+different terminal state — `cancel_trip`'s own contract rejects this,
+unlike the idempotent-already-cancelled case). Result: real `ZW004`
+rejection, mapped to the safe `ILLEGAL_STATE` category application-side
+— no raw ZW/SQLSTATE ever reaches the UI (verified by inspecting the
+error-mapping code path, not merely the RPC's own raw response); no
+state change occurred. 3/3 sub-assertions PASS.
+
+--------------------------------------------------------------------
+50. NO-SHOW FUNCTIONAL TEST
+--------------------------------------------------------------------
+Placed a real Trip into `en_route_to_pickup` via existing seed fixture
+(96a2, already eligible — no new mutation needed to reach this state).
+Through the real Trip Detail UI: opened "Record No-Show", supplied a
+required reason, confirmed. Dialog closed; page refreshed to show the
+real "No-show recorded" terminal banner. Independently verified via
+direct SQL: `trips.state='no_show'`, active assignment closed. 5/5
+sub-assertions PASS.
+
+--------------------------------------------------------------------
+51. NO-SHOW INVALID-STATE TEST
+--------------------------------------------------------------------
+Attempted `record_no_show` on a Trip in `scheduled` state (not one of
+the two eligible pickup-side states). Result: real `ZW004` rejection,
+same safe mapping, no state change. 3/3 sub-assertions PASS.
+
+--------------------------------------------------------------------
+52. CROSS-SURFACE CANCEL TEST
+--------------------------------------------------------------------
+The mandatory scenario (work item §28/§69), through the real
+application, not simulated: confirmed Driver A1 has real
+`driver_get_trip_detail` access to Trip 95a1 BEFORE cancellation.
+Operations cancelled it via the real Trip Detail UI. Re-checked
+immediately after: Trip is terminal (`cancelled`) and the active
+assignment is closed in the DB; Driver A1's next access attempt FAILS
+CLOSED (real `ZW002 not_found` — no existence oracle). 6/6 sub-
+assertions PASS.
+
+--------------------------------------------------------------------
+53. CROSS-SURFACE NO-SHOW TEST
+--------------------------------------------------------------------
+The mandatory scenario (work item §29/§70): confirmed Driver A2 (linked
+to `org-a-driver-b@example.test`) has real active-trip access to Trip
+96a2 BEFORE the no-show. Operations recorded the no-show via the real
+Trip Detail UI. Re-checked immediately after: Trip is terminal
+(`no_show`), assignment closed, Driver A2's next access FAILS CLOSED.
+6/6 sub-assertions PASS.
+
+--------------------------------------------------------------------
+54. DRIVER REGRESSION
+--------------------------------------------------------------------
+Driver Today: PASS (renders real Driver name). Driver Trips: PASS
+(lands on `/driver/trips`). Driver Active Trip: PASS (renders real
+detail, not an "unavailable" state). No Driver-surface regression —
+Driver components were not modified this phase.
+
+--------------------------------------------------------------------
+55. DISPATCH REGRESSION
+--------------------------------------------------------------------
+Real assign_trip and reassign_trip, driven through the actual Dispatch
+UI exactly as in P1-E3-S5/S5A/S5B: both PASS. The Dispatch Board itself
+was not modified this phase (work item §53 — only Today's Operations'
+own links were wired to the new Trip Detail; Dispatch's existing
+assignment interaction is untouched).
+
+--------------------------------------------------------------------
+56. SQL REGRESSION
+--------------------------------------------------------------------
+Ran all 18 existing SQL test files against a fresh `supabase db reset`
+(this phase's only migration-relevant change was the seed.sql fixture
+enrichment — no new/modified migration):
+
+  constraint_tests.sql                        13 assertions, 0 fail
+  create_trip_atomicity_tests.sql               2 assertions, 0 fail
+  create_trip_privilege_tests.sql               5 assertions, 0 fail
+  create_trip_tests.sql                        20 assertions, 0 fail
+  driver_read_authorization_tests.sql          17 assertions, 0 fail
+  driver_read_history_tests.sql                 8 assertions, 0 fail
+  driver_read_minimization_tests.sql           13 assertions, 0 fail
+  driver_read_privilege_tests.sql               8 assertions, 0 fail
+  function_privilege_tests.sql                  7 assertions, 0 fail
+  mutation_assignment_tests.sql                19 assertions, 0 fail
+  mutation_atomicity_tests.sql                  2 assertions, 0 fail
+  mutation_authorization_tests.sql              4 assertions, 0 fail
+  mutation_idempotent_authorization_tests.sql   6 assertions, 0 fail
+  mutation_lifecycle_tests.sql                 24 assertions, 0 fail
+  mutation_privilege_tests.sql                  7 assertions, 0 fail
+  organization_timezone_tests.sql              13 assertions, 0 fail
+  rls_adversarial_tests.sql                    33 assertions, 0 fail
+  security_definer_exposure_tests.sql          20 assertions, 0 fail
+  ------------------------------------------------------------------
+  TOTAL: 221 assertions, 0 failures (100% PASS) — this phase's own
+  final confirming run.
+
+--------------------------------------------------------------------
+57. CONCURRENCY REGRESSION
+--------------------------------------------------------------------
+`bash supabase/tests/mutation_concurrency_test.sh` — re-run, unchanged
+(exercises `assign_trip`, not touched this phase). Real two-OS-process
+test: Session B blocked 1.82s on the Trip row lock, then correctly
+rejected with `assignment_conflict` after seeing Session A's committed
+assignment. TEST CONCURRENCY-1: PASS.
+
+--------------------------------------------------------------------
+58–62. VISUAL QA — ALL REQUIRED WIDTHS
+--------------------------------------------------------------------
+Real headless-Chrome/CDP screenshots, signed in as
+org-a-admin@example.test, saved to
+docs/design/qa/operations-trip-detail/:
+
+  trip-detail-scheduled-768x1024.png   — single-column stack, sidebar
+                                          icon-rail, info strip wraps to
+                                          2-column grid; no clipping.
+  trip-detail-scheduled-1024x768.png   — single-column stack.
+  trip-detail-scheduled-1280x800.png   — 2-column layout activates
+                                          (`xl` breakpoint, matching
+                                          Dispatch's own established
+                                          ZD-143 threshold).
+  trip-detail-scheduled-1440x900.png   — 2-column layout, primary
+                                          desktop width.
+  trip-detail-scheduled-1600x1000.png  — 2-column layout, widest
+                                          tested.
+
+All 5 captured against the same "rich" fixture (80a1 — assigned,
+requester, exception, notes, instructions, assistance notes, linked
+Facility) so every panel has real, non-empty content at every width.
+
+--------------------------------------------------------------------
+63. SCHEDULED TRIP VISUAL QA
+--------------------------------------------------------------------
+Covered by §58–62 above (the "rich" fixture is itself `scheduled`/
+assigned).
+
+--------------------------------------------------------------------
+64. IN-PROGRESS TRIP VISUAL QA
+--------------------------------------------------------------------
+docs/design/qa/operations-trip-detail/trip-detail-inprogress-
+1440x900.png — Trip 96a2 (`en_route_to_pickup`), confirming: "En Route"
+bare status label, "Record No-Show" button correctly appears (only
+eligible from this state), "Next Action: Arrive at Pickup" shown
+correctly, "Manage Assignment" (not "Assign Driver", since already
+assigned).
+
+--------------------------------------------------------------------
+65. DESTRUCTIVE-ACTION DIALOG QA
+--------------------------------------------------------------------
+docs/design/qa/operations-trip-detail/cancel-dialog-1440x900.png and
+noshow-dialog-1440x900.png — both real, captured mid-interaction (dialog
+open, backdrop dimmed, focus inside). Clean, consistent with the design
+system's existing `Dialog`/`Select`/`Textarea`/`Button` components.
+
+--------------------------------------------------------------------
+66. DIRECT STITCH COMPARISON
+--------------------------------------------------------------------
+  Sidebar (real logo, nav, active state — "Trips" correctly
+    highlighted) ............................................ MATCHES
+  Header ("Trip Detail" bare title, bell/help/avatar) ....... MATCHES
+    (missing a 4th "settings gear" icon the reference shows —
+    see §67, a pre-existing shell gap, not introduced this
+    phase)
+  Breadcrumb/back behavior (Trips › {real name}) ............ MATCHES
+    composition (real name instead of a fabricated reference
+    code — content difference, ZD-148, justified)
+  Page title/status (Passenger name + status badge) ......... MATCHES
+  Action row (Edit Trip/Cancel/No-Show/Contact Driver vs.
+    Edit Trip/More/Contact Driver) ............................ MATCHES
+    hierarchy/density (direct buttons instead of a "More"
+    menu — ZD-147, justified)
+  5-column info strip ........................................ MATCHES
+  Trip Route panel (dot-line-dot, time badges, instructions
+    callout) ................................................. MATCHES
+  Passenger & Trip Information panel ......................... MATCHES
+    composition (fewer fields — Trip Type/Reference/Companion
+    all fabricated concepts, omitted — ZD-148/ZD-149)
+  Current Status panel ....................................... MATCHES
+  Trip Exceptions panel ...................................... MATCHES
+  Trip Notes panel ............................................ MATCHES
+  Activity Timeline .......................................... ABSENT
+    from BOTH the reference's own real composition and this
+    build — ZD-150, not a discrepancy
+  Spacing/panel proportions/border/radius/typography (zw-
+    tokens, existing typography scale throughout, no ad hoc
+    values) .................................................. MATCHES
+  Desktop use of width at 1280/1440/1600 ..................... MATCHES
+  Tablet behavior (768/1024, single-column stack) ............ ACCEPTABLE,
+                                                                DOCUMENTED
+
+--------------------------------------------------------------------
+67. DISCREPANCIES FOUND
+--------------------------------------------------------------------
+  1. The reference's header shows a 4th icon (a settings gear) beside
+     bell/help/avatar; this build's `AppHeader` (shared shell chrome,
+     established P1-E3-S4/S5, not modified this phase) only has
+     bell/help/avatar.
+  2. A real semantic-HTML bug: `AppHeader`'s own persistent "Trip
+     Detail" title already renders as an `<h1>` (established P1-E3-S4/
+     S5) — this page's own Passenger-name heading, if also rendered as
+     `<h1>`, would create two `<h1>` elements on one page. Found via
+     this phase's own real accessibility testing (`document.
+     querySelectorAll('h1').length === 2`), not assumed correct.
+
+--------------------------------------------------------------------
+68. DISCREPANCIES CORRECTED
+--------------------------------------------------------------------
+  1. Not corrected — out of this phase's scope (work item §42: "do not
+     redesign sidebar/header"). `AppHeader` is shared chrome used
+     identically by Today's Operations and Dispatch Board, neither of
+     which this phase touches; adding a settings icon there is a
+     shell-level change belonging to whichever phase actually builds
+     Operations Settings, not a drive-by addition here. Documented,
+     not silently accepted as unnoticed.
+  2. Corrected: the Passenger-name heading was changed from `<h1>` to
+     `<h2>` (one level under AppHeader's own `<h1>`), and all 4 panel
+     section headings ("Trip Route", "Passenger & Trip Information",
+     "Trip Exceptions", "Trip Notes") were changed from `<h2>` to `<h3>`
+     to keep the hierarchy correctly nested. Re-verified: exactly one
+     `<h1>`, exactly one page-level `<h2>`, 4 panel `<h3>`s. This is a
+     systemic fix — any future Operations page using both AppHeader's
+     `title` prop AND its own content heading benefits from the same
+     corrected pattern.
+
+--------------------------------------------------------------------
+69. REMAINING JUSTIFIED DEVIATIONS
+--------------------------------------------------------------------
+  - Trip Type, Reference code, Companion — fabricated concepts, no
+    backend field, already-recorded open product decisions (ZD-148/
+    ZD-149).
+  - "More" overflow menu → direct labeled buttons (ZD-147) — no
+    dropdown-menu primitive exists yet; more discoverable, not less.
+  - Activity Timeline — reference's own real composition doesn't show
+    one (ZD-150).
+  - Report Issue / Resolve Exception — deferred, matching the
+    established Driver-side ZD-125 precedent (ZD-151).
+  - Directions/navigate link — not built; the reference's own visible
+    composition for THIS screen doesn't show one (unlike Driver Active
+    Trip, which does and already has one).
+  - Settings gear icon in the header — pre-existing shell gap, not
+    introduced or fixable within this phase's scope.
+  Every deviation above is a content/composition difference with a
+  real, named justification — none is an unexplained change to
+  hierarchy, spacing, typography, or action treatment.
+
+--------------------------------------------------------------------
+70. ACCESSIBILITY
+--------------------------------------------------------------------
+Verified live via real CDP interaction, not inspection alone:
+  - Exactly one semantic `<h1>` per page (found and fixed a real bug —
+    see §67/§68).
+  - Real `<nav aria-label="Breadcrumb">`.
+  - Panel headings use `<h3>`, correctly nested under the page's own
+    `<h2>`.
+  - Dialogs (`Dialog` primitive, unchanged from P1-E3-S5): real
+    `aria-labelledby` pointing at an actual heading element (verified:
+    the labelled element's text matches the dialog's own title);
+    native `showModal()` focus trap confirmed (`document.activeElement`
+    is inside the open dialog); the close (X) button genuinely closes
+    it.
+  - Form labels: the reason `<textarea>` has a real, associated
+    `<label for>` (verified by id-matching, not just visual proximity).
+  - Native `required` validation genuinely blocks submission with an
+    empty reason (confirmed: the dialog stays open when submit is
+    clicked with a blank textarea).
+  - Status is never color-only: every status is a real text label
+    (`TripStatus`, plain text) alongside any color.
+  - Phone numbers use real `tel:` link semantics (verified: a real
+    `<a href="tel:...">` exists for the assigned Driver's number).
+  - Icons are `aria-hidden` throughout (Phosphor icons, matching every
+    prior phase's established convention).
+  - Error announcements: the mutation-error paragraph uses `role=
+    "alert"`, matching `AssignmentDialog`/`DriverLifecycleAction`'s
+    established pattern exactly.
+  10/10 accessibility spot-checks PASS (after the heading-hierarchy
+  fix).
+
+--------------------------------------------------------------------
+71. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, zero errors (final run, after the
+heading-hierarchy fix).
+
+--------------------------------------------------------------------
+72. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, zero errors, zero warnings.
+
+--------------------------------------------------------------------
+73. BUILD
+--------------------------------------------------------------------
+`npm run build` — succeeded. All 24 routes compiled, `/operations/
+trips/[tripId]` dynamic (ƒ) as expected.
+
+--------------------------------------------------------------------
+74. SCREENSHOTS CREATED
+--------------------------------------------------------------------
+docs/design/qa/operations-trip-detail/ — 8 real PNGs: 5 required
+widths (scheduled/assigned fixture), 1 in-progress-Trip capture, 2
+destructive-action dialog captures.
+
+--------------------------------------------------------------------
+75. DOCS CREATED
+--------------------------------------------------------------------
+  - docs/product/operations-trip-detail-data-map.md
+  - docs/reports/P1-E3-S6-completion-report.txt (this file)
+
+--------------------------------------------------------------------
+76. DOCS UPDATED
+--------------------------------------------------------------------
+  - docs/design/component-inventory.md — new "Trip Detail components —
+    P1-E3-S6" section; retired the 4 speculative "New components
+    needed" rows (`TripRouteTimeline`, `TripCurrentStatusCard`,
+    `TripNoteList`, `ExceptionBadge`) this phase actually built.
+  - docs/product/application-implementation-plan.md — Trip Detail row/
+    step marked COMPLETE; corrected a stale step-numbering collision
+    (this document had originally reserved "P1-E3-S6" for Internal New
+    Trip, before the real work-item sequence assigned it to Trip Detail
+    instead) rather than leaving it silently wrong; "Next recommended
+    phase" updated.
+  - docs/product/ui-backend-gap-register.md — the "PRODUCT DECISIONS
+    REQUIRED" table's Companion/reference-code/Trip-Type rows annotated
+    as reconfirmed-still-open by this phase, not resolved.
+  - docs/product/decision-register.md — ZD-147 through ZD-152 (6 new
+    decisions).
+
+--------------------------------------------------------------------
+77. DECISIONS RECORDED
+--------------------------------------------------------------------
+  ZD-147  Edit Trip / More / Contact Driver -> direct labeled buttons
+  ZD-148  No fabricated Trip reference code; real Passenger name used
+  ZD-149  Assistance Requirements: Trip-level snapshot only, never
+          blended with the Passenger profile's own field
+  ZD-150  No dedicated Activity Timeline panel (reference shows none)
+  ZD-151  Add Note implemented (direct RLS-protected INSERT); Report
+          Issue / Resolve Exception deferred (mirrors ZD-125)
+  ZD-152  Facility annotation includes city/state (avoids a visually-
+          redundant duplicate found during real screenshot review)
+
+--------------------------------------------------------------------
+78. FILES CREATED
+--------------------------------------------------------------------
+  src/lib/operations/trip-detail.ts
+  src/lib/operations/trip-detail-errors.ts
+  src/app/operations/trips/[tripId]/actions.ts
+  src/components/operations/trip-detail/TripDetailActionBar.tsx
+  src/components/operations/trip-detail/CancelTripDialog.tsx
+  src/components/operations/trip-detail/NoShowDialog.tsx
+  src/components/operations/trip-detail/AddNoteDialog.tsx
+  src/components/operations/trip-detail/TripInfoStrip.tsx
+  src/components/operations/trip-detail/TripRoutePanel.tsx
+  src/components/operations/trip-detail/PassengerInfoPanel.tsx
+  src/components/operations/trip-detail/CurrentStatusPanel.tsx
+  src/components/operations/trip-detail/TripExceptionsPanel.tsx
+  src/components/operations/trip-detail/TripNotesPanel.tsx
+  docs/product/operations-trip-detail-data-map.md
+  docs/design/qa/operations-trip-detail/ (8 screenshots)
+  docs/reports/P1-E3-S6-completion-report.txt
+
+--------------------------------------------------------------------
+79. FILES MODIFIED
+--------------------------------------------------------------------
+  src/app/operations/trips/[tripId]/page.tsx (placeholder -> real screen)
+  src/app/operations/page.tsx (Today's Operations rows/cards now link
+    to the real Trip Detail — work item §53)
+  src/components/operations/OperationsLayoutClient.tsx (Trip Detail
+    header content — bare "Trip Detail" title)
+  src/lib/operations/presentation.ts (new `humanizeExceptionType`
+    helper)
+  supabase/seed.sql (trip 80a1 enriched with instructions,
+    assistance_notes, and a linked destination Facility — no new
+    fixture invented, an existing one extended)
+  docs/design/component-inventory.md
+  docs/product/application-implementation-plan.md
+  docs/product/ui-backend-gap-register.md
+  docs/product/decision-register.md
+
+Nothing under `/driver/*`, `/operations/dispatch` (Dispatch Board —
+untouched, its own assignment interaction preserved exactly), `/operations/
+trips/new` (New Trip — still a stub, "+ New Trip" links still point at
+it), or `/Users/datamatics/Zenward-Web` was touched. No Supabase
+migration was added or modified this phase — entirely built on the
+already-existing `cancel_trip`/`record_no_show` RPCs and the existing
+`trip_notes`/`trip_exceptions` RLS policies.
+
+--------------------------------------------------------------------
+80. BACKEND GAPS
+--------------------------------------------------------------------
+No NEW backend gap was found this phase. Three already-recorded
+"PRODUCT DECISIONS REQUIRED" entries (Companion, reference codes, Trip
+Type) were reconfirmed still open, not newly discovered.
+
+--------------------------------------------------------------------
+81. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+82. DEFERRED ITEMS
+--------------------------------------------------------------------
+  - Edit Trip — real form, out of scope (work item §54, New Trip not
+    built this phase either).
+  - Report Issue (create a new Trip Exception) and resolving an
+    existing one — deferred (ZD-151), future dedicated work item.
+  - A settings gear icon in the shared `AppHeader` — pre-existing gap,
+    out of this phase's scope.
+  - Trip Type / Reference code / Companion — still-open product
+    decisions, unresolved by design.
+  - Internal New Trip (05) — recommended next phase (see application-
+    implementation-plan.md's corrected numbering).
+  - Dispatch Board drag-and-drop, Driver GPS/location, Realtime — all
+    explicitly out of scope this phase, unchanged.
+
+--------------------------------------------------------------------
+83. FUNCTIONAL GATE
+--------------------------------------------------------------------
+All 19 required conditions met:
+  1.  Trip Detail route no longer placeholder — YES
+  2.  real own-org Trip loads — YES (§42, 11/11)
+  3.  foreign Trip does not leak — YES (§43, 3/3, + malformed-id test)
+  4.  Passenger data minimized — YES (§7 — display_name/phone only)
+  5.  current assignment correctly derived — YES (§10, `trip_
+      assignments` only)
+  6.  lifecycle state correct — YES (§13, same shared function as
+      Today's Operations/Dispatch)
+  7.  timezone correct — YES (§14, every timestamp verified)
+  8.  Trip events use real data — YES (§16, drives "Last Update")
+  9.  no service role — YES (§40, audited)
+  10. no direct unsafe Trip lifecycle update — YES (§41, audited —
+      only the RLS-protected trip_notes INSERT exists as a direct
+      write)
+  11. cancel_trip integrated — YES (§23, §48/§49 tests PASS)
+  12. record_no_show integrated — YES (§26, §50/§51 tests PASS)
+  13. destructive actions backend-authoritative — YES (invalid-state
+      tests confirm the RPC, not the UI, is the actual gate)
+  14. Driver progression not duplicated — YES (§35 confirms — no
+      Start-to-Pickup/Arrived/etc. buttons anywhere on this screen)
+  15. inactive Membership revoked — YES (§45, live-verified)
+  16. role change revoked — YES (§46, structurally guaranteed +
+      existing RPC-layer coverage)
+  17. multi-org isolation preserved — YES (§47, live-verified)
+  18. cross-surface Driver revocation preserved — YES (§52/§53, live-
+      verified for BOTH cancel and no-show)
+  19. TypeScript/lint/build pass — YES (§71/72/73)
+
+DISPATCH... — n/a here; see OPERATIONS TRIP DETAIL FUNCTIONAL GATE
+below.
+
+OPERATIONS TRIP DETAIL FUNCTIONAL GATE: READY.
+
+--------------------------------------------------------------------
+84. VISUAL GATE
+--------------------------------------------------------------------
+All 10 required conditions met:
+  1.  real rendered screenshots — YES (8 files, §74)
+  2.  direct reference comparison completed — YES (§66)
+  3.  obvious visual gaps corrected — YES (§68 — the real h1/h2/h3
+      heading-hierarchy bug found and fixed via testing, not left)
+  4.  composition materially matches Stitch — YES
+  5.  shell continuity preserved — YES (AppHeader/sidebar untouched
+      except the new Trip Detail header branch)
+  6.  status/action hierarchy deliberate — YES (direct labeled buttons,
+      ZD-147, a considered choice not an oversight)
+  7.  activity timeline materially matches reference — YES (matches by
+      NOT building one, since the reference itself has none — ZD-150)
+  8.  1024/1280/1440/1600 intentionally designed — YES (reuses the
+      established `xl` 2-column breakpoint, ZD-143's own precedent)
+  9.  768 acceptable/documented — YES (§66)
+  10. no fake fields used for visual fidelity — YES (§69 — every
+      omission is a real gap, never filled with invented data)
+
+OPERATIONS TRIP DETAIL VISUAL GATE: READY.
+
+--------------------------------------------------------------------
+85. OVERALL GATE
+--------------------------------------------------------------------
+FUNCTIONAL GATE: READY. VISUAL GATE: READY.
+
+OPERATIONS TRIP DETAIL IMPLEMENTATION GATE: READY.
+
+--------------------------------------------------------------------
+86. RECOMMENDED NEXT PHASE
+--------------------------------------------------------------------
+Internal New Trip (05) — see application-implementation-plan.md's
+"Next recommended phase" (updated and corrected this phase). Fully
+backend-ready (`create_trip`, P1-E3-S0A) — UI-only work. Dispatch Board
+drag-and-drop remains deliberately deferred behind it (ZD-138).
+====================================================================
+OPERATIONS TRIP DETAIL FUNCTIONAL GATE:
+READY
+
+OPERATIONS TRIP DETAIL VISUAL GATE:
+READY
+
+OPERATIONS TRIP DETAIL IMPLEMENTATION GATE:
+READY
+
+TENANT ISOLATION:
+PASS
+
+ORGANIZATION TIMEZONE:
+PASS
+
+CANCEL_TRIP:
+PASS
+
+RECORD_NO_SHOW:
+PASS
+
+DIRECT TRIP LIFECYCLE UPDATE:
+NONE
+
+DRIVER CROSS-SURFACE REVOCATION:
+PASS
+
+STITCH VISUAL QA:
+COMPLETE
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+Internal New Trip (05)
+
+REPORT FILE:
+docs/reports/P1-E3-S6-completion-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; no remote
+Supabase was linked; no Vercel/DNS configuration was touched; New Trip,
+Driver GPS/location, Realtime, and Zenward-Web integration were not
+begun. This phase stops here.
+====================================================================

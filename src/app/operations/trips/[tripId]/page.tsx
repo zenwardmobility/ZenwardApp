@@ -1,18 +1,170 @@
-import { OperationsRouteStub } from "@/components/scaffold/OperationsRouteStub";
+import Link from "next/link";
+import { WarningCircle, CheckCircle, XCircle } from "@phosphor-icons/react/dist/ssr";
+import { requireOperationsAccess } from "@/lib/auth/authorization";
+import { getCurrentPathname } from "@/lib/auth/current-path";
+import { getTripDetail } from "@/lib/operations/trip-detail";
+import { formatOperationsTime, formatOperationsLongDate } from "@/lib/operations/presentation";
+import { TripStatus } from "@/components/ui/TripStatus";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { TripDetailActionBar } from "@/components/operations/trip-detail/TripDetailActionBar";
+import { TripInfoStrip } from "@/components/operations/trip-detail/TripInfoStrip";
+import { TripRoutePanel } from "@/components/operations/trip-detail/TripRoutePanel";
+import { PassengerInfoPanel } from "@/components/operations/trip-detail/PassengerInfoPanel";
+import { CurrentStatusPanel } from "@/components/operations/trip-detail/CurrentStatusPanel";
+import { TripExceptionsPanel } from "@/components/operations/trip-detail/TripExceptionsPanel";
+import { TripNotesPanel } from "@/components/operations/trip-detail/TripNotesPanel";
+import { typography } from "@/design/typography";
+import { cn } from "@/lib/cn";
 
-export default async function TripDetailPage({
-  params,
-}: {
-  params: Promise<{ tripId: string }>;
-}) {
+/**
+ * Operations Trip Detail (P1-E3-S6) —
+ * docs/design/stitch/references/02-trip-detail.png, treated as the
+ * canonical visual specification. See docs/product/
+ * operations-trip-detail-data-map.md for the full field-level rationale
+ * behind every value and every omission (Trip Type, Reference code,
+ * Companion — all fabricated concepts with no backend field; a separate
+ * Activity Timeline panel — the reference's own actual composition does
+ * not show one).
+ */
+export default async function TripDetailPage({ params }: { params: Promise<{ tripId: string }> }) {
   const { tripId } = await params;
+  const pathname = await getCurrentPathname(`/operations/trips/${tripId}`);
+  const organization = await requireOperationsAccess(pathname);
+  const timezone = organization.organizationTimezone;
+
+  const result = await getTripDetail(tripId, organization.organizationId);
+
+  if (result.status === "unavailable") {
+    return (
+      <EmptyState
+        icon={<WarningCircle className="size-8" aria-hidden />}
+        title="Trip unavailable"
+        description="This trip doesn't exist, or you don't have access to it."
+        action={
+          <Link href="/operations/trips" className={cn(typography.button, "text-brand-interactive-teal")}>
+            Back to Trips
+          </Link>
+        }
+      />
+    );
+  }
+
+  if (result.status === "error") {
+    return (
+      <EmptyState
+        icon={<WarningCircle className="size-8" aria-hidden />}
+        title="Couldn't load this trip"
+        description="Something went wrong. Try refreshing the page in a moment."
+      />
+    );
+  }
+
+  const { trip, notes, openExceptions, events } = result;
+  const lastUpdateAt = events[0]?.occurredAt ?? trip.updatedAt;
 
   return (
-    <OperationsRouteStub
-      title={`Trip ${tripId}`}
-      description="Structural placeholder — the canonical Trip Detail screen is built in a later phase. No data fetching is wired up; this is the route's identifier as received."
-      breadcrumb={[{ label: "Trips", href: "/operations/trips" }, { label: tripId }]}
-      sampleId={tripId}
-    />
+    <div className="flex flex-col gap-zw-lg">
+      <nav aria-label="Breadcrumb" className={cn(typography.bodySmall, "text-text-muted")}>
+        <Link href="/operations/trips" className="hover:text-text-secondary hover:underline">
+          Trips
+        </Link>
+        <span className="mx-2" aria-hidden>
+          ›
+        </span>
+        <span className="text-text-secondary">{trip.passengerName}</span>
+      </nav>
+
+      <div className="flex flex-wrap items-start justify-between gap-zw-md">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* AppHeader's persistent "Trip Detail" chrome title is this page's real <h1> (src/components/operations/AppHeader.tsx) — the Passenger name is this page's own main heading, one level down, not a second <h1> (found via real accessibility testing, not assumed). */}
+            <h2 className={cn(typography.pageTitleOperational, "text-text-primary")}>{trip.passengerName}</h2>
+            <TripStatus status={trip.statusLabel} />
+          </div>
+          {trip.scheduledPickupAt && (
+            <p className={cn(typography.body, "mt-1 text-text-secondary")}>
+              {formatOperationsLongDate(new Date(trip.scheduledPickupAt), timezone)}
+            </p>
+          )}
+        </div>
+        <TripDetailActionBar
+          tripId={trip.id}
+          passengerName={trip.passengerName}
+          driverPhone={trip.driverPhone}
+          eligibleForCancel={trip.eligibleForCancel}
+          eligibleForNoShow={trip.eligibleForNoShow}
+        />
+      </div>
+
+      {trip.isTerminal && (
+        <div
+          className={cn(
+            "flex items-start gap-3 rounded-md border px-zw-lg py-zw-md",
+            trip.state === "completed" ? "border-success-border bg-success-bg" : "border-critical-border bg-critical-bg",
+          )}
+        >
+          {trip.state === "completed" ? (
+            <CheckCircle className="mt-0.5 size-5 shrink-0 text-success-strong" weight="fill" aria-hidden />
+          ) : (
+            <XCircle className="mt-0.5 size-5 shrink-0 text-critical-strong" weight="fill" aria-hidden />
+          )}
+          <div>
+            <p className={cn(typography.subsectionHeading, "text-text-primary")}>
+              {trip.state === "completed" && `Completed ${formatOperationsTime(trip.completedAt, timezone)}`}
+              {trip.state === "cancelled" && `Cancelled ${formatOperationsTime(trip.cancelledAt, timezone)}`}
+              {trip.state === "no_show" && `No-show recorded ${formatOperationsTime(trip.noShowAt, timezone)}`}
+            </p>
+            {trip.state === "cancelled" && trip.cancellationReason && (
+              <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>Reason: {trip.cancellationReason}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      <TripInfoStrip
+        scheduledPickupAt={trip.scheduledPickupAt}
+        appointmentAt={trip.appointmentAt}
+        driverName={trip.driverName}
+        vehicleLabel={trip.vehicleLabel}
+        statusLabel={trip.statusLabel}
+        timezone={timezone}
+      />
+
+      <div className="grid grid-cols-1 gap-zw-lg xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="flex flex-col gap-zw-lg">
+          <TripRoutePanel
+            scheduledPickupAt={trip.scheduledPickupAt}
+            appointmentAt={trip.appointmentAt}
+            pickupDescription={trip.pickupDescription}
+            destinationDescription={trip.destinationDescription}
+            pickupFacilityName={trip.pickupFacilityName}
+            destinationFacilityName={trip.destinationFacilityName}
+            instructions={trip.instructions}
+            timezone={timezone}
+          />
+          <PassengerInfoPanel
+            passengerName={trip.passengerName}
+            passengerPhone={trip.passengerPhone}
+            requesterName={trip.requesterName}
+            requesterRelationship={trip.requesterRelationship}
+            assistanceNotes={trip.assistanceNotes}
+          />
+        </div>
+
+        <div className="flex flex-col gap-zw-lg">
+          <CurrentStatusPanel
+            statusLabel={trip.statusLabel}
+            driverName={trip.driverName}
+            lastUpdateAt={lastUpdateAt}
+            driverNextActionLabel={trip.isTerminal ? null : trip.driverNextActionLabel}
+            timezone={timezone}
+            eligibleForAssignmentAction={!trip.isTerminal}
+            hasActiveAssignment={trip.activeAssignmentId !== null}
+          />
+          <TripExceptionsPanel openExceptions={openExceptions} timezone={timezone} />
+          <TripNotesPanel tripId={trip.id} notes={notes} timezone={timezone} />
+        </div>
+      </div>
+    </div>
   );
 }
