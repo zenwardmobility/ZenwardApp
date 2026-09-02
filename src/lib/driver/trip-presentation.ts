@@ -11,6 +11,26 @@
  * lifecycle-model.md §C.
  */
 
+/**
+ * The eligible Driver-location-tracking window (P1-E3-S7A, work item §5)
+ * — the same 5 states already established as `ACTIVE_STATES` in
+ * `src/lib/operations/presentation.ts`/`dispatch-board.ts` and hardcoded
+ * server-side inside `driver_record_location` itself
+ * (20260902140000_driver_location_tracking.sql). Deliberately duplicated
+ * here rather than imported from the Operations module (this file's own
+ * established boundary-keeping convention, see this file's header
+ * comment) — the RPC itself remains the actual authority regardless of
+ * what this constant says; it only gates whether the Driver page mounts
+ * `DriverLocationTracker` at all.
+ */
+export const ELIGIBLE_LOCATION_TRACKING_STATES = new Set([
+  "en_route_to_pickup",
+  "arrived_at_pickup",
+  "passenger_onboard",
+  "en_route_to_destination",
+  "arrived_at_destination",
+]);
+
 const DRIVER_STATE_LABELS: Record<string, string> = {
   scheduled: "Assigned",
   en_route_to_pickup: "Heading to Pickup",

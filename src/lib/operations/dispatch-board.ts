@@ -2,6 +2,7 @@ import "server-only";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { organizationDayBoundsUtc } from "./day-bounds";
 import { operationsTripStatusLabel } from "./presentation";
+import { getLatestLocationsByTrip, type DispatchTripLocation } from "./live-location";
 
 /**
  * Server-side data access boundary for the Dispatch Board (P1-E3-S5, work
@@ -99,13 +100,24 @@ export interface DispatchTrip {
   driverName: string | null;
   vehicleId: string | null;
   vehicleLabel: string | null;
+  /** P1-E3-S7A — the Driver's latest known position, ONLY when it belongs to the CURRENT active assignment (never a stale former Driver's last-known position after reassignment, work item §51). Null whenever no location has been recorded yet, or the only recorded location belongs to a superseded assignment. */
+  driverLocation: DispatchTripLocation | null;
 }
 
-function mapTripRow(row: TripRow): DispatchTrip {
+function mapTripRow(row: TripRow, locationsByTrip: Map<string, DispatchTripLocation>): DispatchTrip {
   const activeAssignment = (row.trip_assignments ?? []).find((assignment) => assignment.ended_at === null) ?? null;
   const driver = unwrapOne(activeAssignment?.drivers);
   const vehicle = unwrapOne(activeAssignment?.vehicles);
   const passenger = unwrapOne(row.passengers);
+
+  // Assignment-scoped latest location (work item §51): the latest row
+  // recorded for this Trip is only ever shown when it actually belongs to
+  // the CURRENT active assignment — a location row left over from a
+  // former Driver, pre-reassignment, is discarded here rather than
+  // displayed as if it were current.
+  const latestLocation = locationsByTrip.get(row.id) ?? null;
+  const driverLocation =
+    latestLocation && activeAssignment && latestLocation.assignmentId === activeAssignment.id ? latestLocation : null;
 
   return {
     id: row.id,
@@ -122,6 +134,7 @@ function mapTripRow(row: TripRow): DispatchTrip {
     driverName: driver?.display_name ?? null,
     vehicleId: vehicle?.id ?? null,
     vehicleLabel: vehicle?.label ?? null,
+    driverLocation,
   };
 }
 
@@ -201,7 +214,18 @@ export async function getDispatchBoardData(organizationId: string, timezone: str
     throw new Error(`Failed to load dispatch vehicle options: ${vehiclesResult.error.message}`);
   }
 
-  const trips = (tripsResult.data ?? []).map(mapTripRow);
+  // Only Trips currently in the eligible tracking window (ACTIVE_STATES —
+  // en_route_to_pickup through arrived_at_destination) could plausibly
+  // have a location row at all (driver_record_location itself rejects
+  // every other state) — a small, deliberate filter before the location
+  // query, not a security boundary (the query is already organization-
+  // scoped and RLS-backed regardless).
+  const activeStateTripIds = (tripsResult.data ?? [])
+    .filter((row) => ACTIVE_STATES.has(row.state))
+    .map((row) => row.id);
+  const locationsByTrip = await getLatestLocationsByTrip(organizationId, activeStateTripIds);
+
+  const trips = (tripsResult.data ?? []).map((row) => mapTripRow(row, locationsByTrip));
   const unassignedTrips = trips.filter((trip) => trip.state === "scheduled" && trip.driverId === null);
   const assignedTrips = trips.filter((trip) => trip.driverId !== null);
 

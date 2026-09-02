@@ -5,6 +5,7 @@ import { getDispatchBoardData } from "@/lib/operations/dispatch-board";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { DispatchBoardClient } from "@/components/operations/dispatch/DispatchBoardClient";
+import { DispatchLiveRefresh } from "@/components/operations/dispatch/DispatchLiveRefresh";
 
 /**
  * Dispatch Board (P1-E3-S5) —
@@ -35,6 +36,7 @@ export default async function DispatchBoardPage() {
 
   return (
     <div className="flex flex-col gap-zw-lg">
+      <DispatchLiveRefresh />
       <SummaryStrip
         inline
         items={[

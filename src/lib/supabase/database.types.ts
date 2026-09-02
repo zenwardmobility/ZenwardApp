@@ -81,6 +81,74 @@ export type Database = {
           },
         ]
       }
+      driver_location_updates: {
+        Row: {
+          accuracy_meters: number | null
+          assignment_id: string
+          created_at: string
+          driver_id: string
+          id: string
+          latitude: number
+          longitude: number
+          organization_id: string
+          recorded_at: string
+          trip_id: string
+        }
+        Insert: {
+          accuracy_meters?: number | null
+          assignment_id: string
+          created_at?: string
+          driver_id: string
+          id?: string
+          latitude: number
+          longitude: number
+          organization_id: string
+          recorded_at?: string
+          trip_id: string
+        }
+        Update: {
+          accuracy_meters?: number | null
+          assignment_id?: string
+          created_at?: string
+          driver_id?: string
+          id?: string
+          latitude?: number
+          longitude?: number
+          organization_id?: string
+          recorded_at?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "driver_location_updates_assignment_id_organization_id_fkey"
+            columns: ["assignment_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "trip_assignments"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "driver_location_updates_driver_id_organization_id_fkey"
+            columns: ["driver_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "drivers"
+            referencedColumns: ["id", "organization_id"]
+          },
+          {
+            foreignKeyName: "driver_location_updates_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "driver_location_updates_trip_id_organization_id_fkey"
+            columns: ["trip_id", "organization_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id", "organization_id"]
+          },
+        ]
+      }
       drivers: {
         Row: {
           created_at: string
@@ -933,6 +1001,21 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      driver_record_location: {
+        Args: {
+          p_accuracy_meters?: number
+          p_latitude: number
+          p_longitude: number
+          p_trip_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["driver_location_result"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_location_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       driver_start_to_destination: {
         Args: { p_expected_current_state: string; p_trip_id: string }
         Returns: Database["public"]["CompositeTypes"]["trip_transition_result"]
@@ -1006,6 +1089,12 @@ export type Database = {
         passenger_display_name: string | null
         vehicle_label: string | null
         vehicle_status: string | null
+      }
+      driver_location_result: {
+        location_id: string | null
+        trip_id: string | null
+        assignment_id: string | null
+        recorded_at: string | null
       }
       driver_profile_result: {
         driver_id: string | null

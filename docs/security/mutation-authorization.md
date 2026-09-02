@@ -70,6 +70,12 @@ The fix follows the identical pattern as every function above it, with one impor
 
 Every referenced entity supplied by the caller — Passenger, Facility, TransportationRequest — is independently validated for tenant consistency (same `organization_id` as the validated context) before the Trip is ever inserted, using the same `ZW006 invalid_input`, no-existence-oracle categorization already established for `assign_trip`'s Driver/Vehicle checks (ZD-085). `state` itself is not merely validated — it is not a parameter at all, so there is no input to reject; the initial value is a Postgres literal inside the function body, structurally unreachable by any caller regardless of what they send.
 
+## Driver location write authorization (P1-E3-S7A)
+
+`driver_record_location` reuses the existing Driver-mutation authorization primitives exactly, adding one new dimension: **Trip lifecycle-state eligibility**, not present in any prior mutation family. `_lock_driver_active_assignment()` (built in P1-E2-S2, anticipated in `is_driver_assigned_to_trip`'s own original comment as "a future requirement of this exact phase") already provides the strict active-assignment check every write here needs — reused verbatim, not reimplemented. The state-eligibility check (5 states: `en_route_to_pickup` through `arrived_at_destination`) reuses the existing `ZW004 illegal_transition` category — semantically "this action is not valid given the Trip's current lifecycle state," the same category `cancel_trip`/`record_no_show` already use for their own state-eligibility checks, even though a location update is not itself a state transition.
+
+This RPC is the first in this document's own history that intentionally does NOT write `trip_events`/`audit_events` — a location update is a routine, high-frequency operational signal, not a lifecycle transition or a material administrative action (ZD-087's own test), so it is deliberately excluded from that matrix rather than silently omitted.
+
 ## What this phase deliberately does not change
 
 - No RLS policy was broadened, and no `USING (true)` policy exists anywhere (work item §41) — every existing policy is untouched except the two `trip_assignments` policies retired in ZD-092 and the `trips` INSERT policy retired in ZD-101, all of which removed privilege, never added it.

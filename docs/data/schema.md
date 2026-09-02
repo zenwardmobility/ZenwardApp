@@ -48,6 +48,7 @@ Each table's own migration file carries the full column-by-column rationale as S
 | `trip_notes` | TENANT-OWNED | `organization_id` (direct) | `trip_id` (composite FK) |
 | `trip_exceptions` | TENANT-OWNED | `organization_id` (direct) | `trip_id` (composite FK) |
 | `audit_events` | SYSTEM-OWNED | `organization_id` (direct) | polymorphic `(entity_type, entity_id)` — not FK-able by construction |
+| `driver_location_updates` (P1-E3-S7A) | TENANT-OWNED, HIGH RLS RISK | `organization_id` (direct) | `driver_id`, `trip_id`, `assignment_id` — all composite FKs. Append-only history, no separate "latest" table — see [driver-location-architecture.md](../product/driver-location-architecture.md) §5 |
 
 **Not created**, per explicit instruction: a standalone `Requester` table (snapshot fields on `transportation_requests` instead), a generic `Location` table (Trip carries immutable address snapshots instead — see below), an `operations_staff` entity/role, a `platform_admin` Membership role value, and any billing/claims/ratings/route-optimization/clinical-record tables.
 
@@ -96,6 +97,7 @@ Beyond the uniqueness/FK-support indexes already implied above:
 | `trip_notes` | `(trip_id)`, `(trip_id, visibility)` | Per-trip notes; visibility-filtered read for driver policies |
 | `trip_exceptions` | `(trip_id)`, `(organization_id, status)` | Per-trip exceptions; the "open exceptions" queue |
 | `audit_events` | `(organization_id, occurred_at)`, `(entity_type, entity_id)` | Org-scoped audit timeline; "history of this specific row" |
+| `driver_location_updates` | `(trip_id, recorded_at DESC)`, `(organization_id, recorded_at DESC)`, `(assignment_id)` | "Latest location per Trip" derivation (`DISTINCT ON`-style query); org-scoped Dispatch reads |
 
 ## Generated types
 

@@ -1949,6 +1949,114 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Design / Product
 - **Review Trigger:** None anticipated.
 
+### ZD-160 — SQL baseline "33" was a P1-E3-S4 reporting error, not a real assertion removal
+
+- **Date:** 2026-09-02
+- **Category:** Process / Documentation integrity
+- **Decision:** `rls_adversarial_tests.sql` has always contained exactly 32 distinct test scenarios (unchanged since P1-E2-S3, confirmed via `git show` against every historical commit that touched it) — the "33 assertions" figure reported by P1-E3-S4 through P1-E3-S6 was a manual miscount (most plausibly, the file's own trailing summary `NOTICE` line was counted alongside the 32 real per-test result lines), mechanically copied forward, unverified, for 4 consecutive phases. P1-E3-S2's own report, and every P1-E2 report, independently and correctly said 32/32 the whole time.
+- **Status:** CONFIRMED — deterministically re-verified via a fresh `supabase db reset` + raw-output grep count, not inferred from terminal formatting.
+- **Reason:** Matches P1-E3-S7B's own explicit mandate — determine the discrepancy precisely rather than assume it's harmless, and do not repeat the copy-forward-without-re-verification mistake going forward.
+- **Affected Product Areas:** Documentation only — `docs/reports/P1-E3-S7B-sql-baseline-audit-report.txt`, this register. No SQL, RLS, or application code was touched.
+- **Dependencies:** None
+- **Owner:** Engineering / QA process
+- **Review Trigger:** Every future SQL-baseline report should re-tally from a fresh raw-output grep, never copy a prior phase's own reported table forward unverified.
+
+### ZD-161 — Driver location: one append-only history table, no separate "latest" projection
+
+- **Date:** 2026-09-02
+- **Category:** Architecture / Data integrity
+- **Decision:** `driver_location_updates` is the sole table — an append-oriented history, no separate "current location" row per Driver/Trip. "Latest location" is always derived (`ORDER BY recorded_at DESC` per Trip, backed by an index), never stored redundantly.
+- **Status:** CONFIRMED — implemented and verified (movement test: a second update becomes the new authoritative latest via a derived query, no second write path involved).
+- **Reason:** Directly extends ZD-051's own established reasoning (TripAssignment is the sole assignment source of truth — no redundant "current" pointer that can drift out of sync) to this new domain. A denormalized "latest" table would need lockstep maintenance on every insert, reintroducing exactly the synchronization risk ZD-051 rejected.
+- **Affected Product Areas:** `supabase/migrations/20260902140000_driver_location_tracking.sql`, `src/lib/operations/live-location.ts`
+- **Dependencies:** ZD-051
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated — a future performance need (very high write volume) could revisit this, but no such need exists at this product's scale.
+
+### ZD-162 — Location write path: a controlled RPC, reusing the existing active-assignment helper verbatim
+
+- **Date:** 2026-09-02
+- **Category:** Security
+- **Decision:** `driver_record_location` (SECURITY DEFINER RPC) is the sole write path — no direct INSERT grant on `driver_location_updates` to `authenticated` at all. Reuses `_lock_driver_active_assignment()` (built in P1-E2-S2, whose own original comment anticipated exactly this future requirement) rather than re-deriving an equivalent RLS `WITH CHECK` condition.
+- **Status:** CONFIRMED — implemented and verified (21 SQL assertions covering the full authorization chain, all PASS).
+- **Reason:** The write's real authorization condition (currently-ACTIVE assignment, not merely "ever assigned"; Trip lifecycle-state eligibility) is exactly the kind of multi-condition, easy-to-drift check this project's own established convention already routes through an RPC — matches every other Driver mutation, and a candidate RLS-only alternative was explicitly evaluated and rejected as harder to prove correct at a glance (work item §12).
+- **Affected Product Areas:** `supabase/migrations/20260902140000_driver_location_tracking.sql`
+- **Dependencies:** P1-E2-S2's `_lock_driver_active_assignment`/`_driver_execute_trip_transition` architecture
+- **Owner:** Security / Engineering
+- **Review Trigger:** None anticipated.
+
+### ZD-163 — Server-authoritative `recorded_at`; no client-supplied timestamp parameter at all
+
+- **Date:** 2026-09-02
+- **Category:** Security / Correctness
+- **Decision:** `driver_record_location` has no `p_recorded_at` parameter — `recorded_at` is always the server's own `now()` at insert time.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** Goes beyond "validate it's not absurdly future-dated" (work item §13's own baseline ask) — eliminates an entire class of clock-skew/spoofing concern outright. The gap between the browser's own `GeolocationPosition.timestamp` and server receipt is immaterial at this product's freshness-threshold granularity (tens of seconds to minutes).
+- **Affected Product Areas:** `supabase/migrations/20260902140000_driver_location_tracking.sql`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated.
+
+### ZD-164 — Eligible tracking window includes both "arrived" states
+
+- **Date:** 2026-09-02
+- **Category:** Product
+- **Decision:** Location tracking remains eligible through `arrived_at_pickup` and `arrived_at_destination`, not only the 3 "en route"/"onboard" states.
+- **Status:** CONFIRMED — implemented and verified (TEST LOC-A used `en_route_to_pickup`; the full 5-state set is hardcoded server-side and documented).
+- **Reason:** The Driver is still actively engaged in trip execution while arrived (waiting/loading at pickup, or at the destination before hand-off) — Dispatch benefits from confirming the Driver is genuinely there. Work item §5 explicitly asked this to be evaluated, not assumed.
+- **Affected Product Areas:** `supabase/migrations/20260902140000_driver_location_tracking.sql`, `src/lib/driver/trip-presentation.ts` (`ELIGIBLE_LOCATION_TRACKING_STATES`)
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** None anticipated.
+
+### ZD-165 — Realtime deferred; restrained 20s polling used instead
+
+- **Date:** 2026-09-02
+- **Category:** Security / Architecture
+- **Decision:** Supabase Realtime (`postgres_changes`) is NOT used for live Dispatch updates this phase. `DispatchLiveRefresh` triggers `router.refresh()` every 20 seconds instead — the Dispatch Board's own already-proven, already-RLS-scoped server re-fetch mechanism, not a new data path.
+- **Status:** CONFIRMED — implemented. Renders no visible "LIVE" badge (work item §29) — freshness is shown per-row from real timestamps only.
+- **Reason:** Work item §30-§32 explicitly permits deferring Realtime if it cannot be proven tenant-safe with real adversarial tests within the phase's own time constraints — "Security beats animation." This local Supabase CLI version's `postgres_changes` RLS-interaction behavior was not independently adversarially re-proven this phase (the work item's own explicit warning: ordinary `SELECT` being RLS-safe does not automatically imply Realtime is).
+- **Affected Product Areas:** `src/components/operations/dispatch/DispatchLiveRefresh.tsx`
+- **Dependencies:** None
+- **Owner:** Security / Engineering
+- **Review Trigger:** A future phase with time budgeted specifically to adversarially test this local Supabase version's Realtime RLS behavior — at which point Realtime may be reconsidered, not enabled reactively without that proof.
+
+### ZD-166 — Map provider: a plain external OpenStreetMap link, no SDK, no API key
+
+- **Date:** 2026-09-02
+- **Category:** Architecture / Privacy
+- **Decision:** `externalMapUrl()` links to `openstreetmap.org` with the coordinate pre-centered. No Leaflet/Mapbox/Google Maps SDK, no API key, no billing account, no third-party embed.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** The explicitly-sanctioned MVP fallback (work item §25: "If no map provider is already configured, acceptable first delivery is: live coordinate-derived Driver location status + external map link"). No map provider was previously configured in this project. An embedded Leaflet+OpenStreetMap map remains a clearly-flagged future enhancement, deliberately not built this phase given the volume of other mandatory work already required.
+- **Affected Product Areas:** `src/lib/operations/live-location-shared.ts`, `src/components/operations/dispatch/AssignmentGrid.tsx`
+- **Dependencies:** None
+- **Owner:** Product / Engineering
+- **Review Trigger:** A future phase explicitly scoped to build an embedded map.
+
+### ZD-167 — Driver has zero read access to `driver_location_updates`, including their own location
+
+- **Date:** 2026-09-02
+- **Category:** Security / Data minimization
+- **Decision:** No Driver SELECT policy exists on `driver_location_updates` at all — not even scoped to a Driver's own posted rows.
+- **Status:** CONFIRMED — verified live (TEST LOC-Q): a Driver's query succeeds but returns zero rows via RLS, matching the exact established `passengers`/ZD-080 shape.
+- **Reason:** Work item §42 is explicit: "Driver does not need the other Drivers' locations. Do not grant it" — extended here to "does not need to read this table at all," since the Driver-side tracker UI reflects local `watchPosition` state only and has no genuine product need to read back a stored value.
+- **Affected Product Areas:** `supabase/migrations/20260902140000_driver_location_tracking.sql`
+- **Dependencies:** ZD-080 (identical precedent/shape)
+- **Owner:** Security
+- **Review Trigger:** A future genuine product need for a Driver to see their own location history (none identified currently).
+
+### ZD-168 — Transient geolocation errors must not be treated as fatal (real bug found and fixed)
+
+- **Date:** 2026-09-02
+- **Category:** Correctness (real bug)
+- **Decision:** `DriverLocationTracker`'s `watchPosition` error handler only clears the watch (stops tracking entirely) for `PERMISSION_DENIED`. `POSITION_UNAVAILABLE`/`TIMEOUT` are treated as transient — the watch keeps running, and the status only degrades to "unavailable" if no position has ever successfully arrived yet (an already-"sharing" tracker stays showing "sharing" through a momentary blip).
+- **Status:** CONFIRMED — a real bug, found via this phase's own real browser testing (a CDP geolocation-override change fires a benign, empty-message transient error alongside the new position event; the original implementation's blanket `clearWatch()` on any error silently killed tracking for the rest of the Trip after the very first such blip, which would also happen with genuine real-world GPS signal loss — a tunnel, dense buildings, a cold start). Fixed and re-verified (the movement test now passes cleanly).
+- **Reason:** A real GPS can transiently lose signal without the underlying watch itself failing — treating every error as fatal would make tracking permanently stop after the first ordinary hiccup on a real device, silently defeating the feature's own purpose.
+- **Affected Product Areas:** `src/components/driver/DriverLocationTracker.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated — this is the correct, standard handling for the W3C Geolocation API's own error model.
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

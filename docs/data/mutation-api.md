@@ -155,6 +155,29 @@ As of this phase, `authenticated` has **no** direct INSERT/UPDATE grant on `trip
 
 ---
 
+## Driver location (P1-E3-S7A)
+
+### `driver_record_location(p_trip_id uuid, p_latitude double precision, p_longitude double precision, p_accuracy_meters double precision default null) returns driver_location_result`
+
+Driver-only. The sole controlled path to record a location update — no direct INSERT grant exists on `driver_location_updates` at all (matches `trip_events`' own zero-grant precedent). Authorization chain, mirroring `_driver_execute_trip_transition`'s established pattern:
+
+1. `auth.uid()` non-null → else `ZW001`.
+2. Trip exists → else `ZW002`.
+3. `is_driver_assigned_to_trip()` (ever assigned, read-scope) → else `ZW002` (no existence oracle — foreign-org and nonexistent are indistinguishable).
+4. `_lock_driver_active_assignment()` — a CURRENTLY active assignment for this Driver on this Trip → else `ZW001` (covers reassignment revocation — a former Driver's next call fails here, same-session).
+5. `trips.state` is one of the 5 eligible tracking-window states (`en_route_to_pickup` through `arrived_at_destination`) → else `ZW004` (covers both pre-dispatch `scheduled` and every terminal state).
+6. Coordinates valid (`latitude` [-90,90], `longitude` [-180,180], `accuracy_meters >= 0` if given) → else `ZW006`.
+
+`recorded_at` is always the server's own `now()` — no client-supplied timestamp parameter exists. Every write also carries `assignment_id`, tying the row to the exact assignment in force at write time (never merely "this driver, this trip") — see [driver-location-architecture.md](../product/driver-location-architecture.md) for the full rationale, including why `current_driver_id()`'s own existing inactive-Membership/inactive-Driver correction (ZD-100) is inherited here with zero new code.
+
+**Writes:** one `driver_location_updates` INSERT. No `trip_events`/`audit_events` row — a routine, high-frequency operational signal, not a lifecycle transition or an administrative action (distinct from every other mutation family in this document).
+
+### Operations read path
+
+Not an RPC — Operations reads `driver_location_updates` directly via a plain RLS SELECT policy (`driver_location_updates_select_org_operations`, `has_org_role(organization_id, ['organization_admin', 'dispatcher'])`), the same convention every other Operations-read table already uses. See [live-dispatch-location-data-map.md](../product/live-dispatch-location-data-map.md).
+
+---
+
 ## Locking, atomicity, and concurrency
 
 - **Lock order (ZD-086):** every function locks `trips` first, then the active `trip_assignments` row if relevant — never the reverse. This is what makes concurrent calls deadlock-free by construction.
@@ -175,6 +198,7 @@ As of this phase, `authenticated` has **no** direct INSERT/UPDATE grant on `trip
 | `supabase/tests/create_trip_privilege_tests.sql` | 5 | Static ACL/ownership/search_path audit; direct-INSERT-revoked; SELECT/UPDATE untouched |
 | `supabase/tests/create_trip_atomicity_tests.sql` | 2 | Forced-failure rollback (Trip + TripEvent + AuditEvent + conditional Request update) |
 | `supabase/tests/mutation_concurrency_test.sh` | 1 | Genuine two-process concurrency (timing-based proof) |
+| `supabase/tests/driver_location_tests.sql` | 20 | `driver_record_location` full authorization chain (eligible write, wrong Driver, foreign-org, inactive Membership/Driver, reassignment revocation, terminal-state revocation, pre-dispatch `scheduled` denial, coordinate/accuracy validation, anon denial), movement (second update → new authoritative latest), Operations own-org/foreign-org SELECT, Driver zero-read confirmation |
 | Real HTTP (`rpc_probe.js`/`create_trip_probe.js` pattern, see completion reports) | 18 | PostgREST/GoTrue cross-validation of one representative RPC per family, plus create_trip's full authorization matrix |
 
 All run against `supabase db reset` fresh-seeded data; see each file's header for exact run instructions.

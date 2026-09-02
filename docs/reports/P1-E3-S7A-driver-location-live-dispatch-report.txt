@@ -1,0 +1,874 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S7A — Driver Location & Live Dispatch Tracking
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 9960da3 "Implement Operations Trip Detail" (contains
+                       the real P1-E3-S7/S7B diff)
+Date/time:            2026-09-02
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK STATE
+--------------------------------------------------------------------
+`git status --short` was clean at the start of this phase. `git log
+--oneline -5` confirmed the most recent commit, `9960da3 "Implement
+Operations Trip Detail"`, genuinely contains the P1-E3-S7 (Internal New
+Trip) + P1-E3-S7B (SQL baseline audit) diff — verified via `git show
+--stat` (New Trip components, `local-time.ts`, both S7/S7B completion
+reports, decision-register updates) before proceeding, not merely
+trusted from the commit message alone (the message itself was a
+carried-over duplicate of the prior commit's own message — the diff
+content is what was actually verified). Authoritative baseline confirmed
+before any new code: 220 SQL assertions, 32 RLS adversarial scenarios,
+0 failures.
+
+--------------------------------------------------------------------
+2. ARCHITECTURE DECISION
+--------------------------------------------------------------------
+Driver location is treated as narrow, operational Trip data — collected
+only while it serves an active transportation execution (work item §3).
+Full rationale in the new docs/product/driver-location-architecture.md.
+Core decisions: one append-only history table (ZD-161), a controlled
+RPC write path reusing the existing `_lock_driver_active_assignment`
+helper (ZD-162), server-authoritative timestamps (ZD-163), a 5-state
+eligible tracking window including both "arrived" states (ZD-164),
+Realtime deferred in favor of restrained polling (ZD-165), a plain
+external-map-link MVP provider decision (ZD-166), zero Driver read
+access (ZD-167).
+
+--------------------------------------------------------------------
+3. SCHEMA
+--------------------------------------------------------------------
+`driver_location_updates` (supabase/migrations/
+20260902140000_driver_location_tracking.sql): `id`, `organization_id`
+(FK), `driver_id`/`trip_id`/`assignment_id` (composite FKs to
+`(id, organization_id)` on their respective tables), `latitude` (CHECK
+[-90,90]), `longitude` (CHECK [-180,180]), `accuracy_meters` (CHECK >=0
+or null), `recorded_at` (default now()), `created_at`. No altitude,
+heading, speed, or device identifiers (work item §10 — none has an
+actual MVP requirement). `trip_assignments` additionally gained
+`unique (id, organization_id)` (additive, purely to support the new
+composite FK — no existing behavior changed). Indexes:
+`(trip_id, recorded_at desc)`, `(organization_id, recorded_at desc)`,
+`(assignment_id)`.
+
+--------------------------------------------------------------------
+4. LATEST-VS-HISTORY DECISION
+--------------------------------------------------------------------
+One table, history only — no separate "latest location" projection
+(ZD-161). "Latest" is always derived (`ORDER BY recorded_at DESC` per
+Trip, index-backed), directly extending ZD-051's own established
+"TripAssignment is the sole source of truth, no redundant current
+pointer" reasoning to this new domain.
+
+--------------------------------------------------------------------
+5. RETENTION DECISION
+--------------------------------------------------------------------
+Documented policy: 30 days from `recorded_at`. NOT implemented as an
+automated job this phase — no scheduled-job infrastructure (pg_cron,
+edge function scheduler) exists anywhere in this project to build one
+safely against, and inventing one now would be new, unproven
+infrastructure as a side effect of this phase's own primary mandate
+(work item §11's own explicit caution). Documented as an explicit,
+open future requirement in driver-location-architecture.md §6 — not a
+silent gap.
+
+--------------------------------------------------------------------
+6. LOCATION-WRITE CONTRACT
+--------------------------------------------------------------------
+`driver_record_location(p_trip_id uuid, p_latitude double precision,
+p_longitude double precision, p_accuracy_meters double precision default
+null) returns driver_location_result (location_id, trip_id,
+assignment_id, recorded_at)`. SECURITY DEFINER. No authenticated INSERT
+grant on the table at all — this RPC is the sole write path (ZD-162).
+
+--------------------------------------------------------------------
+7. AUTHORIZATION CHAIN
+--------------------------------------------------------------------
+1. `auth.uid()` non-null → else ZW001.
+2. Trip exists → else ZW002.
+3. `is_driver_assigned_to_trip()` (ever assigned) → else ZW002 (no
+   existence oracle).
+4. `_lock_driver_active_assignment()` — CURRENTLY active assignment →
+   else ZW001 (reassignment revocation).
+5. `trips.state` in the 5 eligible states → else ZW004 (terminal-state
+   and pre-dispatch revocation).
+6. Coordinates valid → else ZW006.
+`current_driver_id()`'s own existing inactive-Membership/inactive-Driver
+correction (ZD-100, P1-E2-S3) is inherited transitively with zero new
+code — both surface as ZW002, matching `driver_get_trip_detail`'s own
+established convention for the identical situation.
+
+--------------------------------------------------------------------
+8. REASSIGNMENT REVOCATION
+--------------------------------------------------------------------
+Every write is tied to the SPECIFIC `assignment_id` in force at write
+time. `_lock_driver_active_assignment()` only ever finds a row with
+`ended_at IS NULL` — a former Driver's very next call fails ZW001,
+same-session, same active token, the instant Operations reassigns
+(work item §14/§8). Verified live through the real Dispatch UI (§34/§35
+below).
+
+--------------------------------------------------------------------
+9. TERMINAL REVOCATION
+--------------------------------------------------------------------
+Once a Trip reaches any terminal state, the active assignment (closed as
+a normal side effect of `cancel_trip`/`record_no_show`/
+`driver_complete_trip`, all unchanged this phase) no longer exists, so
+`_lock_driver_active_assignment()` returns null and the next post fails
+ZW001 — additionally, `driver_get_trip_detail` itself (unchanged,
+P1-E2-S3) independently requires a currently-active assignment, so the
+Driver Trip Detail PAGE becomes fully inaccessible ("Trip unavailable")
+before the tracker component even has a chance to render, an even
+stronger revocation guarantee than the RPC alone (work item §15/§61).
+Verified live (§36 below).
+
+--------------------------------------------------------------------
+10. COORDINATE VALIDATION
+--------------------------------------------------------------------
+`latitude` [-90,90], `longitude` [-180,180], `accuracy_meters >= 0` or
+null — both a CHECK constraint (defense in depth) and an explicit
+in-function check (raises the clean ZW006 rather than a raw
+constraint-violation message). Verified live: TEST LOC-K (latitude 95.0
+rejected), LOC-L (longitude -200.0 rejected), LOC-M (accuracy -5.0
+rejected) — all ZW006, no row created.
+
+--------------------------------------------------------------------
+11. TIMESTAMP AUTHORITY
+--------------------------------------------------------------------
+`recorded_at` is always the server's own `now()` — no `p_recorded_at`
+parameter exists at all (ZD-163, a deliberate simplification beyond the
+work item's own "validate it's not absurdly future-dated" baseline ask).
+
+--------------------------------------------------------------------
+12. DRIVER TRACKER ARCHITECTURE
+--------------------------------------------------------------------
+`src/components/driver/DriverLocationTracker.tsx` — isolated geolocation
+side effects (work item §46): permission state, `watchPosition`
+lifecycle, submission throttling, cleanup, status display, all kept out
+of the Active Trip page component itself. Status machine: not-started →
+requesting → sharing / denied / unavailable / stopped. Mounted by the
+parent page ONLY while `trip.state` is in
+`ELIGIBLE_LOCATION_TRACKING_STATES` — unmounting (Trip becomes terminal,
+or the page itself becomes inaccessible after reassignment) is itself a
+cleanup trigger, on top of the server's own independent checks.
+
+--------------------------------------------------------------------
+13. PERMISSION UX
+--------------------------------------------------------------------
+Permission requested only from an explicit "Share My Location" tap on
+the Active Trip screen itself — never at sign-in, launch, or
+automatically on mount (work item §17). Purpose stated concisely in the
+surrounding status text. No separate modal interrupts the flow.
+
+--------------------------------------------------------------------
+14. BROWSER/PWA LIMITATIONS
+--------------------------------------------------------------------
+Documented honestly in driver-location-architecture.md §17 — foreground-
+only reliability, mobile-browser throttling, no reliable
+locked-screen/background tracking, iOS-specific constraints, no claim of
+"continuous background GPS." A native migration path is documented as a
+future requirement (§22 of that document), not built.
+
+--------------------------------------------------------------------
+15. UPDATE CADENCE
+--------------------------------------------------------------------
+`watchPosition()` (not a fixed-interval `getCurrentPosition` poll) — the
+browser decides when a new reading exists; the tracker accepts every
+reading it's given.
+
+--------------------------------------------------------------------
+16. THROTTLING
+--------------------------------------------------------------------
+Actual server submission is throttled to at most once every 20 seconds
+(`SUBMIT_THROTTLE_MS`, the restrained middle of the work item's own
+10-30s suggested range) via a `lastSubmitAtRef` timestamp check inside
+the position callback — a reading that arrives before the window elapses
+is simply not submitted, never queued.
+
+--------------------------------------------------------------------
+17. WATCH CLEANUP
+--------------------------------------------------------------------
+`navigator.geolocation.clearWatch()` called on unmount (React `useEffect`
+cleanup), and a guard (`watchIdRef.current !== null`) prevents starting a
+second concurrent watch if "Share My Location" is somehow invoked twice.
+Fatal errors (`PERMISSION_DENIED`) also clear the watch explicitly.
+
+--------------------------------------------------------------------
+18. MULTIPLE-TAB BEHAVIOR
+--------------------------------------------------------------------
+NOT coordinated across tabs — documented as a deliberate, explicitly-
+permitted deferral (work item §49): each tab independently manages its
+own permission/watch/throttle state. Backend correctness is unaffected
+either way (each write is independently authorized; at most a modest
+write-volume increase in the rare two-tabs-open scenario).
+
+--------------------------------------------------------------------
+19. NETWORK FAILURE BEHAVIOR
+--------------------------------------------------------------------
+A failed submission is silently dropped (`.catch()` with no rethrow,
+`.finally()` resets the submitting guard) — no crash, no alarming error
+shown, no unbounded `localStorage` queueing. The next `watchPosition`
+reading simply tries again on its own schedule (work item §21/§22).
+
+--------------------------------------------------------------------
+20. OPERATIONS READ ARCHITECTURE
+--------------------------------------------------------------------
+`getLatestLocationsByTrip()` (src/lib/operations/live-location.ts) —
+direct RLS-scoped SELECT (`driver_location_updates_select_org_operations`,
+organization_admin/dispatcher), explicit columns, no `select("*")`, no
+service role, no generic location repository. Wired into
+`getDispatchBoardData()` as a second, focused query scoped to only the
+Trip ids already known to be in the eligible tracking window.
+
+--------------------------------------------------------------------
+21. DISPATCH INTEGRATION
+--------------------------------------------------------------------
+`AssignmentGrid`'s row label column shows a real freshness indicator +
+external map link for whichever of that Driver's Trips is currently
+tracked — assignment-scoped (`DispatchTrip.driverLocation` is only ever
+set when the latest row's `assignment_id` matches the Trip's CURRENT
+active assignment, work item §51, discarding any row left over from a
+superseded assignment). Compact label ("Just now"/"N min ago"/"Stale")
+fits the grid's existing 140px row-label column; the full wording is
+available as the element's `title` tooltip. No redesign of the existing
+board (work item §24).
+
+--------------------------------------------------------------------
+22. MAP-PROVIDER DECISION
+--------------------------------------------------------------------
+`externalMapUrl()` → a plain `openstreetmap.org` link, coordinate
+pre-centered — no SDK, no API key, no billing, no third-party embed
+(ZD-166). The explicitly-sanctioned MVP fallback (work item §25); no map
+provider was previously configured in this project.
+
+--------------------------------------------------------------------
+23. REALTIME DECISION
+--------------------------------------------------------------------
+Deferred (ZD-165). `DispatchLiveRefresh` triggers `router.refresh()`
+every 20 seconds — the board's own already-proven re-fetch mechanism,
+reused rather than a new data path. Initial page render is fully correct
+without this component (it only affects how quickly a SUBSEQUENT update
+appears without a manual reload).
+
+--------------------------------------------------------------------
+24. REALTIME SECURITY
+--------------------------------------------------------------------
+N/A — not implemented, so no Realtime-specific security surface exists
+to test. This is itself the security-conscious choice (work item §32:
+"If Realtime cannot be safely proven in this phase: do NOT weaken
+security... Security beats animation").
+
+--------------------------------------------------------------------
+25. FRESHNESS THRESHOLDS
+--------------------------------------------------------------------
+Centralized in `src/lib/operations/location-freshness.ts`: ≤45s "live"
+("Just now"/"Updated just now"), ≤5min "recent" ("N min ago"), >5min
+"stale" ("Stale"/"Location stale"), no location "none" ("No location"/
+"No recent location"). Compact vs. full-length label variants for
+different UI density contexts (work item §28's own suggested vocabulary,
+adapted for the Dispatch grid's narrow column).
+
+--------------------------------------------------------------------
+26. NO-ETA DECISION
+--------------------------------------------------------------------
+No ETA computed or displayed anywhere — no routing engine exists in this
+product (work item §36). Confirmed by code review — no distance/travel-
+time calculation exists in any file touched this phase.
+
+--------------------------------------------------------------------
+27. NO-AUTO-STATE-TRANSITION DECISION
+--------------------------------------------------------------------
+No geofence logic anywhere. Location data is read-only context for
+Dispatch; every lifecycle transition remains an explicit Driver action
+through the existing, unmodified `DriverLifecycleAction` control (work
+item §6).
+
+--------------------------------------------------------------------
+28. PASSENGER-DATA MINIMIZATION
+--------------------------------------------------------------------
+`driver_location_updates` stores no Passenger data of any kind — no
+name, phone, or address column exists on the table; `trip_id` is
+sufficient relationship context (work item §37). Verified by direct
+schema inspection.
+
+--------------------------------------------------------------------
+29. LOGGING/PRIVACY AUDIT
+--------------------------------------------------------------------
+No analytics/error-tracking/logging integration exists anywhere in this
+project to leak coordinates into (work item §38/§39) — verified by grep,
+zero matches for a logging/analytics SDK anywhere in this phase's new
+files. No client-side `console.log` of coordinates in
+`DriverLocationTracker` — failures degrade via component state only.
+
+--------------------------------------------------------------------
+30. LOGGING/PRIVACY AUDIT (SERVER)
+--------------------------------------------------------------------
+`driver_record_location`'s own error paths (`raise exception`) never
+include coordinate values in their message text — every raised message
+is a short, stable, tenant-data-free token, matching this project's
+established ZD-085 convention exactly.
+
+--------------------------------------------------------------------
+31. ELIGIBLE DRIVER WRITE TEST
+--------------------------------------------------------------------
+Through the REAL Driver Active Trip UI: real geolocation permission
+grant (CDP `Browser.grantPermissions` + `Emulation.setGeolocationOverride`
+— deterministic fake coordinates, never the real developer location,
+work item §56), tapped "Share My Location," a real
+`driver_record_location` call fired. Independently DB-verified: exact
+match on organization_id/driver_id/trip_id/assignment_id/latitude/
+longitude/accuracy_meters. 4/4 sub-assertions PASS.
+
+--------------------------------------------------------------------
+32. WRONG DRIVER TEST
+--------------------------------------------------------------------
+SQL-level (TEST LOC-C): Driver A2 (assigned to a different Trip) attempts
+to post against Driver A1's Trip — DENIED (ZW002, no relationship). PASS.
+
+--------------------------------------------------------------------
+33. INACTIVE MEMBERSHIP TEST
+--------------------------------------------------------------------
+SQL-level (TEST LOC-E): Driver A1's Membership temporarily toggled
+inactive (toggle/restore pattern, matching driver_read_authorization_
+tests.sql's own established convention) — DENIED (ZW002, live-checked,
+same session). PASS. Inactive Driver row (TEST LOC-F): same pattern —
+DENIED (ZW002). PASS.
+
+--------------------------------------------------------------------
+34. REASSIGNMENT REVOCATION TEST
+--------------------------------------------------------------------
+Through the REAL application, both SQL-level (TEST LOC-G/H) and browser-
+level (the mandatory scenario): Driver A1 shared location successfully
+on a real Trip → DB-confirmed → Operations reassigned the SAME Trip to
+Driver A2 through the real Dispatch UI (clicking the real trip block →
+Reassign dialog → real Driver selection → Confirm Reassignment) →
+DB-confirmed the Trip is now actively assigned to Driver A2 → former
+Driver A1's next page load shows "Trip unavailable" (page-level
+revocation, stronger than a mere tracker-status change) and zero new
+location rows were ever written for A1 after reassignment → new Driver
+A2 shared location immediately, tied to the NEW assignment id. 8/8
+sub-assertions PASS (browser-level scenario).
+
+--------------------------------------------------------------------
+35. NEW DRIVER POST-REASSIGNMENT TEST
+--------------------------------------------------------------------
+Covered in §34 above — Driver A2's post succeeded immediately, no
+re-authentication or delay required, correctly tied to the new
+assignment id (verified via a real DB query grouping by assignment_id).
+
+--------------------------------------------------------------------
+36. TERMINAL-STATE TEST
+--------------------------------------------------------------------
+Through the REAL Trip Detail UI: Driver A1 shared location successfully
+on a real Trip → Operations cancelled the SAME Trip through the real
+Cancel Trip dialog (real reason, real confirm) → DB-confirmed
+`state='cancelled'` → Driver A1's next page load shows "Trip unavailable"
+and zero new location rows were written after cancellation. 4/4
+sub-assertions PASS. SQL-level equivalent (TEST LOC-I, a Trip already
+`completed` with a closed assignment) also independently confirmed ZW001.
+
+--------------------------------------------------------------------
+37. TENANT ISOLATION TEST
+--------------------------------------------------------------------
+SQL-level (TEST LOC-O/P): Org A dispatcher reads real own-org location
+rows; sees ZERO Org B rows despite a real Org B row existing. Browser-
+level: Org A Dispatch Board shows "Just now"/"Stale" freshness for its
+own two Drivers, never Org B's real Driver/Passenger names; Org B
+Dispatch Board shows its own real freshness, never Org A's names. 5/5
+sub-assertions PASS (browser-level).
+
+--------------------------------------------------------------------
+38. DRIVER BROAD-READ DENIAL
+--------------------------------------------------------------------
+SQL-level (TEST LOC-Q): a Driver's own `SELECT * FROM
+driver_location_updates` succeeds (the table-level grant is broad, same
+shape as `passengers`) but returns ZERO rows via RLS, despite real rows
+existing for their own Trip — no Driver SELECT policy exists on this
+table at all. PASS.
+
+--------------------------------------------------------------------
+39. PERMISSION-DENIED TEST
+--------------------------------------------------------------------
+Through the REAL Driver Active Trip UI: geolocation permission explicitly
+DENIED via CDP (`Browser.setPermission`). Tapped "Share My Location" —
+tracker showed the honest "Location permission needed" state, never a
+fake "sharing on." The "I'VE ARRIVED" lifecycle button remained fully
+clickable and functional — a real DB-verified state transition occurred
+despite GPS denial. Zero location rows were ever written. 5/5
+sub-assertions PASS.
+
+--------------------------------------------------------------------
+40. LOCATION-UNAVAILABLE TEST
+--------------------------------------------------------------------
+Covered by §39's own "I'VE ARRIVED" assertion — core Trip execution
+(the lifecycle action) remained fully usable with location entirely
+unavailable/denied, matching the mandatory requirement exactly.
+
+--------------------------------------------------------------------
+41. MOVEMENT UPDATE TEST
+--------------------------------------------------------------------
+Through the REAL Driver UI, both SQL-level (TEST LOC-B) and browser-level:
+a second, distinct coordinate (via CDP `Emulation.setGeolocationOverride`,
+issued AFTER the 20s throttle window from the first submission had
+genuinely elapsed) produced a real second history row with the correct
+later `recorded_at`, and the derived "latest position" query correctly
+returned the NEW coordinate. 2/2 browser-level sub-assertions PASS (plus
+2/2 SQL-level).
+
+--------------------------------------------------------------------
+42. FRESHNESS TEST
+--------------------------------------------------------------------
+Both a genuinely fresh (`now()`) and an artificially-aged (`now() - 12
+minutes`) real location row were created; the real Dispatch Board
+correctly showed "Just now" for the fresh one and "Stale" for the aged
+one, on the same board, at the same time, distinguishing them correctly
+— confirming the central threshold logic is genuinely wired end-to-end,
+not merely unit-tested in isolation. PASS.
+
+--------------------------------------------------------------------
+43. REALTIME TEST
+--------------------------------------------------------------------
+N/A — Realtime deferred (ZD-165), not implemented. No test applicable.
+
+--------------------------------------------------------------------
+44. DISPATCH REGRESSION
+--------------------------------------------------------------------
+`/operations/dispatch` renders correctly; `assign_trip`/`reassign_trip`
+(via the real Reassign flow used in §34) both still work; the existing
+Needs Assignment queue, Assignment Grid, and Driver Capacity panel are
+all visually and functionally unchanged apart from the new freshness
+indicator addition. PASS.
+
+--------------------------------------------------------------------
+45. DRIVER REGRESSION
+--------------------------------------------------------------------
+Full 6-transition Driver lifecycle walk (Start to Pickup → I'VE ARRIVED
+→ Passenger Onboard → Start Trip → Arrived → Complete Trip), through the
+real Driver UI on a fresh Trip, reached `completed` correctly — the
+tracker's presence on 5 of those 6 intermediate states did not interfere
+with lifecycle progression at all. PASS.
+
+--------------------------------------------------------------------
+46. NEW TRIP REGRESSION
+--------------------------------------------------------------------
+A real Trip created end-to-end through the New Trip form (P1-E3-S7,
+unmodified this phase) succeeded and redirected to a real Trip Detail
+page. PASS.
+
+--------------------------------------------------------------------
+47. FULL SQL BASELINE BEFORE
+--------------------------------------------------------------------
+220 assertions, 32 RLS adversarial, 0 failures (P1-E3-S7B's own
+authoritative, freshly-re-verified figure — the correct baseline this
+phase started from).
+
+--------------------------------------------------------------------
+48. NEW LOCATION ASSERTIONS
+--------------------------------------------------------------------
+`supabase/tests/driver_location_tests.sql` — 20 deterministic assertions
+(LOC-A through LOC-Q, including two DB-independent-verification steps),
+0 failures, 0 unexpected errors, run against a fresh `supabase db reset`.
+
+--------------------------------------------------------------------
+49. AUTHORITATIVE NEW SQL TOTAL
+--------------------------------------------------------------------
+Fresh `supabase db reset`, all 19 test files run once, counted
+deterministically via `grep -cE "NOTICE:.*: PASS"` against raw captured
+output (not terminal-formatting inference, matching P1-E3-S7B's own
+corrected methodology exactly — no copy-forward-without-re-verification
+this time):
+
+  constraint_tests.sql                        13 assertions
+  create_trip_atomicity_tests.sql               2 assertions
+  create_trip_privilege_tests.sql               5 assertions
+  create_trip_tests.sql                        20 assertions
+  driver_location_tests.sql                    20 assertions
+  driver_read_authorization_tests.sql          17 assertions
+  driver_read_history_tests.sql                 8 assertions
+  driver_read_minimization_tests.sql           13 assertions
+  driver_read_privilege_tests.sql               8 assertions
+  function_privilege_tests.sql                  7 assertions
+  mutation_assignment_tests.sql                19 assertions
+  mutation_atomicity_tests.sql                   2 assertions
+  mutation_authorization_tests.sql              4 assertions
+  mutation_idempotent_authorization_tests.sql   6 assertions
+  mutation_lifecycle_tests.sql                 24 assertions
+  mutation_privilege_tests.sql                  7 assertions
+  organization_timezone_tests.sql              13 assertions
+  rls_adversarial_tests.sql                    32 assertions
+  security_definer_exposure_tests.sql          20 assertions
+  ------------------------------------------------------------------
+  TOTAL: 240 assertions, 0 failures, 0 unexpected errors (100% PASS).
+
+--------------------------------------------------------------------
+50. RLS ADVERSARIAL TOTAL
+--------------------------------------------------------------------
+32 (unchanged this phase — `rls_adversarial_tests.sql` itself was not
+touched; the new `driver_location_tests.sql` file's own 8 tenant/
+authorization scenarios — LOC-C/D/E/F/O/P/Q plus the reassignment/
+terminal cases — are counted separately in its own 20-assertion total
+above, not folded into this specific file's count).
+
+--------------------------------------------------------------------
+51. CONCURRENCY REGRESSION
+--------------------------------------------------------------------
+`mutation_concurrency_test.sh` re-run against a fresh reset — Session B
+blocked 1.87s on the Trip row lock, then correctly rejected with
+`assignment_conflict`. TEST CONCURRENCY-1: PASS. (Exercises `assign_trip`,
+unrelated to and untouched by this phase.)
+
+--------------------------------------------------------------------
+52. GENERATED TYPES
+--------------------------------------------------------------------
+`npx supabase gen types typescript --local` re-run as the final step;
+diffed byte-for-byte against the already-committed working copy —
+identical, confirming `src/lib/supabase/database.types.ts` was already
+current with the new `driver_location_updates` table, `driver_location_result`
+composite type, and `driver_record_location` RPC signature.
+
+--------------------------------------------------------------------
+53. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, zero errors (final run).
+
+--------------------------------------------------------------------
+54. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, zero errors, zero warnings on the real
+application source (final run, after removing the `.tmp-qa` scratch
+directory — this phase's own Chrome profile data was deliberately kept
+in the session scratchpad, not inside the repo, avoiding the exact
+lint-scanning mistake found and corrected during P1-E3-S7).
+
+--------------------------------------------------------------------
+55. BUILD
+--------------------------------------------------------------------
+`npm run build` — succeeded. All 24 routes compiled, unchanged route
+count (this phase added no new routes — only extended existing Driver
+Active Trip and Dispatch pages).
+
+--------------------------------------------------------------------
+56. DRIVER VISUAL QA
+--------------------------------------------------------------------
+Real headless-Chrome/CDP screenshots, saved to
+docs/design/qa/driver-location/:
+  tracker-not-started-390x844.png   — "Location sharing off" + "Share
+                                       My Location" button, fits one row
+                                       cleanly, one-handed usability
+                                       preserved.
+  tracker-not-started-430x932.png   — same, primary mobile width.
+  tracker-not-started-768x1024.png  — tablet width.
+  tracker-not-started-1024x768.png  — the Driver shell's own established
+                                       max-width-centered-card treatment,
+                                       unchanged.
+  tracker-sharing-430x932.png       — real "Location sharing on" (green)
+                                       state after a genuine permission
+                                       grant + first position.
+Also captured during the write test:
+  tracker-denied.png — real "Location permission needed" (amber) state
+                        with the "I'VE ARRIVED" button still fully usable
+                        beneath it.
+
+--------------------------------------------------------------------
+57. DISPATCH VISUAL QA
+--------------------------------------------------------------------
+Real screenshots, saved to docs/design/qa/live-dispatch/:
+  dispatch-freshness-1024x768.png
+  dispatch-freshness-1280x800.png
+  dispatch-freshness-1440x900.png
+  dispatch-freshness-1600x1000.png
+  dispatch-freshness-768x1024.png
+All show the real "Just now" (green, live) and "Stale" (muted gray) row
+indicators simultaneously, on the same board, matching the freshness
+test's own real data. No layout regression at any width; the board's
+own established composition (Needs Assignment queue, Assignment Grid,
+Driver Capacity rail) is fully preserved.
+
+--------------------------------------------------------------------
+58. DISCREPANCIES FOUND
+--------------------------------------------------------------------
+1. A real functional bug (ZD-168): `DriverLocationTracker`'s original
+   `watchPosition` error handler treated EVERY error as fatal
+   (`clearWatch()` + status change), including ordinary transient
+   `POSITION_UNAVAILABLE`/`TIMEOUT` blips — found via a CDP geolocation-
+   override change producing a benign transient error alongside the
+   real position update, which silently killed tracking for the rest
+   of the Trip after the very first blip.
+2. A visual density issue: the full-length freshness label ("Updated
+   just now"/"Location stale") truncated awkwardly in the Dispatch
+   grid's narrow 140px row-label column, which already holds the
+   Driver's name and vehicle above it.
+
+--------------------------------------------------------------------
+59. DISCREPANCIES CORRECTED
+--------------------------------------------------------------------
+1. Fixed: only `PERMISSION_DENIED` now clears the watch; transient
+   errors keep the watch alive and only downgrade the visible status if
+   no position has ever successfully arrived yet (an already-"sharing"
+   tracker stays showing "sharing" through a momentary blip). Re-verified
+   — the movement test (§41) now passes cleanly end-to-end.
+2. Fixed: added `formatLocationFreshnessLabelCompact()` — a shortened
+   label ("Just now"/"N min ago"/"Stale"/"No location") for the grid's
+   own dense row-label column, with the full-length wording preserved as
+   that same element's `title` tooltip. Re-verified via a fresh
+   screenshot — both states now render cleanly without truncation.
+
+--------------------------------------------------------------------
+60. REMAINING LIMITATIONS
+--------------------------------------------------------------------
+- No background/locked-screen tracking (genuine web/PWA platform
+  limitation, documented not overclaimed).
+- No automated retention-cleanup job (documented policy, no
+  implementation — no safe scheduled-job infrastructure exists yet).
+- No embedded map — external link only (explicitly-sanctioned MVP
+  fallback).
+- No Realtime — restrained polling instead (deliberately deferred,
+  documented, security-motivated).
+- No multi-tab coordination (deliberately deferred, documented,
+  harmless given backend correctness holds regardless).
+- No Trip Detail "Last Driver Location" section (explicitly optional
+  per work item §34, deferred for scope discipline — Dispatch remains
+  the primary, fully-built location workspace).
+
+--------------------------------------------------------------------
+61. DOCS CREATED
+--------------------------------------------------------------------
+  - docs/product/driver-location-architecture.md
+  - docs/product/live-dispatch-location-data-map.md
+  - docs/reports/P1-E3-S7A-driver-location-live-dispatch-report.txt
+    (this file)
+
+--------------------------------------------------------------------
+62. DOCS UPDATED
+--------------------------------------------------------------------
+  - docs/data/schema.md (new table + indexes)
+  - docs/data/mutation-api.md (new RPC contract, Operations read path,
+    testing table)
+  - docs/security/rls-model.md (new table's policy inventory, updated
+    total policy/table counts)
+  - docs/security/mutation-authorization.md (new authorization-chain
+    section)
+  - docs/design/component-inventory.md (new "Driver location + live
+    Dispatch components" section)
+  - docs/product/application-implementation-plan.md (status summary,
+    steps 9-10 added for S7B/S7A, "Next recommended phase" updated)
+  - docs/product/ui-backend-gap-register.md (GAP-6 reconfirmed —
+    location ≠ availability, explicitly not conflated)
+  - docs/product/decision-register.md (ZD-160 through ZD-168, 9 new
+    decisions)
+
+--------------------------------------------------------------------
+63. DECISIONS RECORDED
+--------------------------------------------------------------------
+  ZD-160  SQL baseline "33" was a P1-E3-S4 reporting error (S7B)
+  ZD-161  One append-only history table, no separate "latest" projection
+  ZD-162  Controlled RPC write path, reusing the existing active-
+          assignment helper verbatim
+  ZD-163  Server-authoritative recorded_at, no client timestamp param
+  ZD-164  Eligible window includes both "arrived" states
+  ZD-165  Realtime deferred; restrained 20s polling instead
+  ZD-166  Map provider: plain external OpenStreetMap link
+  ZD-167  Driver has zero read access, including own location
+  ZD-168  Transient geolocation errors must not be fatal (real bug fix)
+
+--------------------------------------------------------------------
+64. FILES CREATED
+--------------------------------------------------------------------
+  supabase/migrations/20260902140000_driver_location_tracking.sql
+  supabase/tests/driver_location_tests.sql
+  src/lib/operations/live-location.ts
+  src/lib/operations/live-location-shared.ts
+  src/lib/operations/location-freshness.ts
+  src/lib/driver/location-errors.ts
+  src/components/driver/DriverLocationTracker.tsx
+  src/components/operations/dispatch/DispatchLiveRefresh.tsx
+  docs/product/driver-location-architecture.md
+  docs/product/live-dispatch-location-data-map.md
+  docs/design/qa/driver-location/ (6 screenshots)
+  docs/design/qa/live-dispatch/ (5 screenshots)
+  docs/reports/P1-E3-S7A-driver-location-live-dispatch-report.txt
+
+--------------------------------------------------------------------
+65. FILES MODIFIED
+--------------------------------------------------------------------
+  src/lib/supabase/database.types.ts (regenerated — new table/type/RPC)
+  src/lib/operations/dispatch-board.ts (driverLocation field, location
+    query wiring, assignment-scoped merge)
+  src/components/operations/dispatch/AssignmentGrid.tsx (freshness
+    indicator + map link per driver row)
+  src/app/operations/dispatch/page.tsx (mounts DispatchLiveRefresh)
+  src/lib/driver/trip-presentation.ts (ELIGIBLE_LOCATION_TRACKING_STATES)
+  src/app/driver/trips/[tripId]/actions.ts (recordLocationAction)
+  src/app/driver/trips/[tripId]/page.tsx (mounts DriverLocationTracker)
+  docs/data/schema.md, docs/data/mutation-api.md,
+    docs/security/rls-model.md, docs/security/mutation-authorization.md,
+    docs/design/component-inventory.md,
+    docs/product/application-implementation-plan.md,
+    docs/product/ui-backend-gap-register.md,
+    docs/product/decision-register.md
+
+Nothing under `/operations/trips/new`, `/operations/trips/[tripId]`
+(Operations Trip Detail — untouched, "Last Driver Location" explicitly
+deferred, §60), `/driver/history`, `/driver/profile`, or
+`/Users/datamatics/Zenward-Web` was touched. No existing RLS policy was
+broadened or removed — every change to `rls-model.md`'s policy inventory
+is a genuinely new table/policy, not a modification to an existing one.
+
+--------------------------------------------------------------------
+66. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+67. DEFERRED NATIVE/BACKGROUND WORK
+--------------------------------------------------------------------
+Documented in driver-location-architecture.md §22: a future native (or
+Capacitor/React-Native-wrapped) Driver app would remove the web/PWA
+foreground-only limitation and could implement the retention-cleanup
+(§6) and offline-queue (§20) requirements more robustly. This document's
+own eligibility/schema/authorization/timestamp-authority/freshness
+decisions all remain valid unchanged for a native client — only the
+Driver-side collection mechanism would differ. Not built this phase
+(work item §77 explicit exclusion).
+
+--------------------------------------------------------------------
+68. FUNCTIONAL GATE
+--------------------------------------------------------------------
+All 16 required conditions met:
+  1.  secure location schema/read/write architecture — YES (§3/§6/§7)
+  2.  eligible Driver can post — YES (§31, 4/4)
+  3.  wrong Driver denied — YES (§32)
+  4.  inactive Membership denied — YES (§33)
+  5.  former Driver after reassignment denied — YES (§34, 8/8)
+  6.  terminal Trip denied — YES (§36, 4/4)
+  7.  Operations own-org reads work — YES (§37)
+  8.  cross-org read denied — YES (§37)
+  9.  Driver cannot broadly read other Driver locations — YES (§38)
+  10. no service role — YES (audited — `createServerSupabaseClient`
+      (publishable key) is the only client used anywhere in this
+      phase's code)
+  11. Driver lifecycle remains usable without GPS — YES (§39/§40)
+  12. permission denial handled — YES (§39)
+  13. location update appears in Dispatch — YES (§21/§42)
+  14. current assignment determines current live Driver — YES (§8/§21,
+      assignment-scoped merge)
+  15. freshness accurate — YES (§42)
+  16. TypeScript/lint/build pass — YES (§53/54/55)
+
+DRIVER LOCATION FUNCTIONAL GATE: READY.
+
+--------------------------------------------------------------------
+69. VISUAL GATE
+--------------------------------------------------------------------
+All 10 required conditions met:
+  1.  real Driver screenshots — YES (§56, 6 files)
+  2.  real Dispatch screenshots — YES (§57, 5 files)
+  3.  tracking states deliberate — YES (5 distinct states, restrained
+      copy, no surveillance language)
+  4.  no fake LIVE state — YES (§25/§29 — every label derives from a
+      real timestamp; no permanent glowing badge exists anywhere)
+  5.  location freshness visible — YES (§42, verified live/stale side
+      by side on the same real board)
+  6.  map/location treatment production-quality — YES (real OSM link,
+      real coordinates, no placeholder/decorative map)
+  7.  Dispatch hierarchy preserved — YES (§57 — no redesign, only the
+      freshness indicator added to the existing row label)
+  8.  Driver mobile usability preserved — YES (§56 — one-handed layout,
+      no wrapping/clipping at any required width)
+  9.  permission-denied state deliberate — YES (§39, calm amber, honest
+      copy, lifecycle action fully usable beside it)
+  10. direct QA at required widths — YES (§56/§57, all required widths
+      captured)
+
+LIVE DISPATCH VISUAL GATE: READY.
+
+--------------------------------------------------------------------
+70. SECURITY GATE
+--------------------------------------------------------------------
+All 10 required conditions met:
+  1.  location tied to organization — YES (§3, direct FK)
+  2.  location tied to Driver — YES (§3, composite FK)
+  3.  location tied to Trip/Assignment — YES (§3, composite FKs, §8)
+  4.  former Driver write revocation — YES (§34, live-verified)
+  5.  terminal-state write revocation — YES (§36, live-verified)
+  6.  anon denied — YES (SQL TEST LOC-N, PASS)
+  7.  foreign organization denied — YES (§32/§37, live-verified both
+      write (LOC-D) and read (LOC-P) directions)
+  8.  Driver cannot enumerate other locations — YES (§38)
+  9.  no precise-location analytics/logging — YES (§29/§30)
+  10. retention policy documented — YES (§5)
+
+LOCATION SECURITY GATE: READY.
+
+--------------------------------------------------------------------
+71. OVERALL GATE
+--------------------------------------------------------------------
+FUNCTIONAL GATE: READY. VISUAL GATE: READY. SECURITY GATE: READY.
+
+DRIVER LOCATION IMPLEMENTATION GATE: READY.
+
+--------------------------------------------------------------------
+72. RECOMMENDED NEXT PHASE
+--------------------------------------------------------------------
+P1-E3-S8 — Trip Assurance & Operational Exceptions, per this work item's
+own stated expectation. Dispatch Board drag-and-drop (ZD-138, ready
+since P1-E3-S7) remains fully available whenever prioritized instead.
+====================================================================
+DRIVER LOCATION FUNCTIONAL GATE:
+READY
+
+LIVE DISPATCH VISUAL GATE:
+READY
+
+LOCATION SECURITY GATE:
+READY
+
+DRIVER LOCATION IMPLEMENTATION GATE:
+READY
+
+DRIVER LOCATION WRITE:
+PASS
+
+REASSIGNMENT LOCATION REVOCATION:
+PASS
+
+TERMINAL LOCATION REVOCATION:
+PASS
+
+TENANT ISOLATION:
+PASS
+
+DRIVER CROSS-LOCATION READ:
+DENIED
+
+REALTIME:
+DEFERRED
+
+LOCATION RETENTION POLICY:
+DOCUMENTED
+
+AUTHORITATIVE SQL ASSERTION COUNT:
+240
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S8 — Trip Assurance & Operational Exceptions
+
+REPORT FILE:
+docs/reports/P1-E3-S7A-driver-location-live-dispatch-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; no remote
+Supabase was linked; no production map provider or Vercel configuration
+was touched; native background GPS, Facility Portal, public Web intake,
+billing, route optimization, and production deployment were not begun.
+This phase stops here.
+====================================================================

@@ -131,6 +131,17 @@ Full field-level rationale: [operations-trip-detail-data-map.md](../product/oper
 
 Full field-level rationale: [new-trip-data-map.md](../product/new-trip-data-map.md).
 
+## Driver location + live Dispatch components — P1-E3-S7A
+
+| Component | Status | Change |
+|---|---|---|
+| `DriverLocationTracker` | **New** | Isolated geolocation side effects (permission state, `watchPosition` lifecycle, 20s submission throttle, cleanup, status display) — kept out of the Active Trip page component itself (work item §46). Found and fixed a real bug during this phase's own testing: an initial version treated every `watchPosition` error (including ordinary transient `POSITION_UNAVAILABLE`/`TIMEOUT` blips) as fatal and silently killed tracking for the rest of the Trip after the first one — corrected to only stop on `PERMISSION_DENIED`. |
+| `DispatchLiveRefresh` | **New** | Realtime was evaluated and deliberately deferred this phase (could not be proven tenant-safe with real adversarial tests in the time available — "security beats animation"). Renders nothing; triggers `router.refresh()` every 20s, reusing the Dispatch Board's own already-proven re-fetch mechanism rather than a new data path. |
+| `AssignmentGrid` | **Extended** | Each driver row now shows a real freshness indicator + external map link (`MapPin` icon, compact "Just now"/"N min ago"/"Stale" text, full wording in the `title` tooltip) for whichever of that Driver's Trips is currently in the tracking window — assignment-scoped (work item §51), never a stale former Driver's last-known position. |
+| `AttentionState` `info` level | Reused (extended in P1-E3-S7) | No further change this phase. |
+
+Full field-level rationale: [driver-location-architecture.md](../product/driver-location-architecture.md), [live-dispatch-location-data-map.md](../product/live-dispatch-location-data-map.md).
+
 ## Explicitly not building generically
 
 Per work item §35's own caution: no generic "Card" or "ListItem" abstraction is proposed merely for reuse. `DispatchQueueCard`, `DriverCapacityCard`, `TripRouteTimeline`, etc. are each named for what they specifically show, following the existing codebase's own pattern (`DriverTripCard`, not a generic `Card`).

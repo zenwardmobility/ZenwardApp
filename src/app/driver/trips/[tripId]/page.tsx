@@ -10,9 +10,15 @@ import { TripStatus } from "@/components/ui/TripStatus";
 import { DriverActiveTripLegs } from "@/components/driver/DriverActiveTripLegs";
 import { DriverInstruction } from "@/components/driver/DriverInstruction";
 import { DriverLifecycleAction } from "@/components/driver/DriverLifecycleAction";
+import { DriverLocationTracker } from "@/components/driver/DriverLocationTracker";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
-import { driverTripStateLabel, formatTripTime, DRIVER_NEXT_ACTION } from "@/lib/driver/trip-presentation";
+import {
+  driverTripStateLabel,
+  formatTripTime,
+  DRIVER_NEXT_ACTION,
+  ELIGIBLE_LOCATION_TRACKING_STATES,
+} from "@/lib/driver/trip-presentation";
 
 interface DriverNote {
   id: string;
@@ -108,6 +114,8 @@ export default async function DriverTripDetailPage({ params }: { params: Promise
           passengerPhone={data.passenger_phone}
         />
       </Panel>
+
+      {ELIGIBLE_LOCATION_TRACKING_STATES.has(state) && <DriverLocationTracker tripId={tripId} />}
 
       {notes.length > 0 && (
         <div className="flex flex-col gap-2">

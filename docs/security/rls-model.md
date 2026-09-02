@@ -20,7 +20,7 @@ No table anywhere in this schema has any grant to the `anon` role. Public/anonym
 
 ## Policy inventory
 
-52 policies were created in P1-E2-S1; P1-E2-S2 dropped 2 as superseded (ZD-092); P1-E2-S3 dropped 6 more as superseded by the controlled read API (ZD-096); P1-E3-S0A dropped 1 more (`trips_insert_org_operations`, superseded by `create_trip`, ZD-101), leaving **43** active across 15 tables, all scoped `TO authenticated` (none to `anon`), none using a blanket `USING (true)`. Full list, table by table (see `supabase/migrations/20260830131700_rls_policies.sql` for the original SQL, `20260831100000_trip_assignment_privilege_tightening.sql` for the P1-E2-S2 change, `20260831110200_driver_base_table_policy_tightening.sql` for the P1-E2-S3 change, and `20260831120100_retire_direct_trip_insert.sql` for the P1-E3-S0A change):
+52 policies were created in P1-E2-S1; P1-E2-S2 dropped 2 as superseded (ZD-092); P1-E2-S3 dropped 6 more as superseded by the controlled read API (ZD-096); P1-E3-S0A dropped 1 more (`trips_insert_org_operations`, superseded by `create_trip`, ZD-101); P1-E3-S7A added 1 (`driver_location_updates_select_org_operations`, a new table), leaving **44** active across 16 tables, all scoped `TO authenticated` (none to `anon`), none using a blanket `USING (true)`. Full list, table by table (see `supabase/migrations/20260830131700_rls_policies.sql` for the original SQL, `20260831100000_trip_assignment_privilege_tightening.sql` for the P1-E2-S2 change, `20260831110200_driver_base_table_policy_tightening.sql` for the P1-E2-S3 change, and `20260831120100_retire_direct_trip_insert.sql` for the P1-E3-S0A change):
 
 | Table | Policies |
 |---|---|
@@ -39,6 +39,7 @@ No table anywhere in this schema has any grant to the `anon` role. Public/anonym
 | `trip_notes` | `trip_notes_select_operations`, `trip_notes_insert_operations`, `trip_notes_insert_assigned_driver`, `trip_notes_update_operations` — **`trip_notes_select_assigned_driver_visible` retired in P1-E2-S3 (ZD-096)**, superseded by `driver_notes` embedded in Trip detail (ZD-098). Driver INSERT (writing their own notes) is untouched — this phase is read-only |
 | `trip_exceptions` | `trip_exceptions_select_operations`, `trip_exceptions_select_assigned_driver`, `trip_exceptions_insert_operations`, `trip_exceptions_insert_assigned_driver`, `trip_exceptions_update_operations` — no Driver UPDATE (cannot resolve). **`trip_exceptions_select_assigned_driver` was reviewed in P1-E2-S3 and deliberately retained, not retired** (ZD-096 — no replacement projection was built) |
 | `audit_events` | `audit_events_select_org_admin`, `audit_events_select_platform_admin` — **no INSERT/UPDATE/DELETE policy for any role**; no Dispatcher or Driver SELECT |
+| `driver_location_updates` (P1-E3-S7A) | `driver_location_updates_select_org_operations` — **no Driver policy of any kind, including their own location** (matches the `passengers`/ZD-080 shape exactly: the table-level `GRANT SELECT` is broad, RLS filters every row for a Driver caller); **no INSERT/UPDATE/DELETE policy for any role** — `driver_record_location()` (SECURITY DEFINER) is the sole write path |
 
 Naming convention (authorization-model.md §U): `<table>_<action>_<actor>`.
 

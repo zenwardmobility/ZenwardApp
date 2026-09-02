@@ -1,5 +1,6 @@
 "use client";
 
+import { MapPin } from "@phosphor-icons/react/dist/ssr";
 import { Panel } from "@/components/ui/Panel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatOperationsTime } from "@/lib/operations/presentation";
@@ -14,6 +15,12 @@ import {
   GRID_ROW_HEIGHT_PX,
 } from "@/lib/operations/dispatch-grid";
 import type { DispatchDriverRow, DispatchTrip } from "@/lib/operations/dispatch-board";
+import {
+  classifyLocationFreshness,
+  formatLocationFreshnessLabel,
+  formatLocationFreshnessLabelCompact,
+} from "@/lib/operations/location-freshness";
+import { externalMapUrl } from "@/lib/operations/live-location-shared";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
@@ -77,10 +84,22 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
               </div>
             </div>
 
-            {driverRows.map((row) => (
+            {driverRows.map((row) => {
+              // P1-E3-S7A — the row's own live-location indicator (work
+              // item §24: "Driver row → last known location state →
+              // freshness indicator"), not per-block, to keep the grid
+              // scannable. At most one of a Driver's trips is genuinely
+              // in the tracking window at a time in practice; the first
+              // one found with a location is what's shown.
+              const trackedTrip = row.trips.find((trip) => trip.driverLocation !== null);
+              const location = trackedTrip?.driverLocation ?? null;
+              const now = new Date();
+              const freshness = location ? classifyLocationFreshness(location.recordedAt, now) : "none";
+
+              return (
               <div key={row.driver.id} className="flex border-b border-border-subtle last:border-b-0">
                 <div
-                  className="flex shrink-0 flex-col justify-center border-r border-border-subtle px-3"
+                  className="flex shrink-0 flex-col justify-center gap-0.5 border-r border-border-subtle px-3"
                   style={{ width: ROW_LABEL_WIDTH_PX, height: GRID_ROW_HEIGHT_PX }}
                 >
                   <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
@@ -88,6 +107,24 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
                   </p>
                   {row.trips[0]?.vehicleLabel && (
                     <p className={cn(typography.metadata, "truncate text-text-muted")}>{row.trips[0].vehicleLabel}</p>
+                  )}
+                  {location && (
+                    <a
+                      href={externalMapUrl(location.latitude, location.longitude)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={cn(
+                        typography.metadata,
+                        "flex items-center gap-1 truncate hover:underline",
+                        freshness === "live" && "text-success-strong",
+                        freshness === "recent" && "text-text-secondary",
+                        freshness === "stale" && "text-text-muted",
+                      )}
+                      title={formatLocationFreshnessLabel(location.recordedAt, now)}
+                    >
+                      <MapPin className="size-3 shrink-0" aria-hidden weight={freshness === "live" ? "fill" : "regular"} />
+                      <span className="truncate">{formatLocationFreshnessLabelCompact(location.recordedAt, now)}</span>
+                    </a>
                   )}
                 </div>
 
@@ -134,7 +171,8 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
                   })}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Panel>

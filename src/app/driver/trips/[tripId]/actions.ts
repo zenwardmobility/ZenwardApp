@@ -6,6 +6,7 @@ import { requireDriverAccess } from "@/lib/auth/authorization";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { DRIVER_NEXT_ACTION, type DriverLifecycleRpc } from "@/lib/driver/trip-presentation";
 import { mapDriverActionError, type DriverActionErrorCode } from "@/lib/driver/errors";
+import { mapDriverLocationError, type DriverLocationErrorCode } from "@/lib/driver/location-errors";
 
 export interface ProgressTripState {
   status: "idle" | "success" | "error";
@@ -104,4 +105,55 @@ export async function progressTripAction(
     changed: data.changed ?? false,
     newState: data.current_state ?? undefined,
   };
+}
+
+export interface RecordLocationResult {
+  status: "success" | "error";
+  errorCode?: DriverLocationErrorCode;
+}
+
+/**
+ * Records one location update for the Trip the Driver is currently
+ * tracking (P1-E3-S7A, work item §46) — invoked directly from
+ * `DriverLocationTracker` on each throttled `watchPosition` reading, NOT
+ * bound to a `<form>` (there is no user-facing submit button; this is a
+ * background write triggered by the browser's geolocation callback).
+ * Next.js Server Actions may be called as plain async functions from a
+ * Client Component exactly like this — the `"use server"` boundary above
+ * still applies per-call.
+ *
+ * Same layered-authorization discipline as `progressTripAction`:
+ * `requireDriverAccess()` re-derived fresh on every single call (never
+ * cached across the tracker's own polling loop), then
+ * `driver_record_location` itself remains the final, real authority
+ * (currently-active assignment, eligible lifecycle state, valid
+ * coordinates). Deliberately does NOT call `revalidatePath` — a location
+ * post changes no Trip-visible field this page itself renders, and
+ * calling it on a ~20s cadence would trigger unnecessary Server Component
+ * re-renders of the Driver's own active-trip view for no visible benefit.
+ */
+export async function recordLocationAction(
+  tripId: string,
+  latitude: number,
+  longitude: number,
+  accuracyMeters: number | null,
+): Promise<RecordLocationResult> {
+  const access = await requireDriverAccess(`/driver/trips/${tripId}`);
+  if (access.status !== "ok") {
+    return { status: "error", errorCode: "NOT_FOUND" };
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase.rpc("driver_record_location", {
+    p_trip_id: tripId,
+    p_latitude: latitude,
+    p_longitude: longitude,
+    p_accuracy_meters: accuracyMeters ?? undefined,
+  });
+
+  if (error || !data) {
+    return { status: "error", errorCode: mapDriverLocationError(error?.code) };
+  }
+
+  return { status: "success" };
 }
