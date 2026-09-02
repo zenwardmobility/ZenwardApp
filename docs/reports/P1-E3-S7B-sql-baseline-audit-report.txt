@@ -1,0 +1,270 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S7B — SQL Regression Baseline Count Audit
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Date/time:            2026-09-02
+====================================================================
+
+--------------------------------------------------------------------
+1. PREVIOUS REPORTED COUNT
+--------------------------------------------------------------------
+`rls_adversarial_tests.sql` = 33 assertions; total SQL baseline = 221
+assertions — reported identically by FIVE consecutive prior phases:
+P1-E3-S4, P1-E3-S5, P1-E3-S5A, P1-E3-S5B, and P1-E3-S6 (all verified by
+direct grep against each phase's own completion report file, §3 below).
+
+--------------------------------------------------------------------
+2. S7 REPORTED COUNT
+--------------------------------------------------------------------
+`rls_adversarial_tests.sql` = 32 assertions; total SQL baseline = 220
+assertions.
+
+--------------------------------------------------------------------
+3. TEST-FILE GIT DIFF RESULT
+--------------------------------------------------------------------
+  git status --short         → clean with respect to supabase/tests/
+                                (no test file appears as modified)
+  git diff -- supabase/tests/ → EMPTY. Zero uncommitted changes to any
+                                SQL test file.
+  git log --oneline -- supabase/tests/rls_adversarial_tests.sql →
+      7bbdb18  Implement secure driver read models       (P1-E2-S3)
+      79f4f76  Implement Supabase schema, RLS, and security hardening
+
+The file has not been touched by any commit since P1-E2-S3 — long before
+P1-E3-S4 through P1-E3-S7 even began. `git show 79f4f76:...` and
+`git show 7bbdb18:...` were both diffed for distinct `'TEST <label>`
+occurrences: BOTH historical versions already contain exactly 32 distinct
+test labels (A-Z, AA-AF). The file's actual content, and the number of
+distinct adversarial scenarios it defines, has never changed at any point
+in this project's entire history.
+
+--------------------------------------------------------------------
+4. ROOT CAUSE
+--------------------------------------------------------------------
+**A reporting error, not a security regression.** The file has always
+contained exactly 32 distinct test scenarios and has always produced
+exactly 32 PASS/FAIL result lines when run — confirmed independently at
+FOUR separate points in this project's history, all agreeing:
+
+  P1-E2-S2  completion report: "rls_adversarial_tests.sql   32/32  PASS"
+  P1-E2-S2A completion report: "rls_adversarial_tests.sql   32/32  PASS"
+  P1-E2-S3  completion report: "rls_adversarial_tests.sql   32/32  PASS"
+                                (even after tests F/I were edited that
+                                same phase — still 32, a modification,
+                                not an addition/removal of a test)
+  P1-E3-S2  completion report: "...and the 32 rls_adversarial_tests.sql
+                                assertions..."
+  P1-E3-S4  completion report: "rls_adversarial_tests.sql   33 assertions"
+                                ← THE ERROR FIRST APPEARS HERE
+  P1-E3-S5, S5A, S5B, S6:      "rls_adversarial_tests.sql   33 assertions"
+                                ← mechanically copied forward, unverified,
+                                for 4 more consecutive phases
+  P1-E3-S7  completion report: "rls_adversarial_tests.sql   32 assertions"
+                                ← correct count restored, by actually
+                                re-tallying from a fresh run's raw output
+                                rather than copying the prior report's
+                                own table forward
+
+The "33" figure was introduced as a manual miscount in P1-E3-S4's own SQL
+regression section — most plausibly, the trailing summary line the test
+file itself prints (`=== RLS adversarial test suite complete — review
+PASS/FAIL lines above ===`, a `NOTICE:` line just like every real test
+result) was counted alongside the 32 genuine `TEST <label>: PASS/FAIL`
+lines during a manual or loosely-automated tally, producing 33. That
+incorrect figure was then reused as the "known" baseline by P1-E3-S5,
+S5A, S5B, and S6's own SQL regression sections without independently
+re-deriving it from a fresh run each time — an unverified copy-forward
+chain, not a re-audit. No test was ever added, removed, renamed, or
+disabled at any point; no assertion ever failed to execute; the counting
+convention (grep `NOTICE:.*: PASS`/`: FAIL`) is unchanged and was applied
+identically in this audit.
+
+**Conclusion: 220/32 (P1-E3-S7's own figures) are correct. 221/33 (P1-E3-
+S4 through P1-E3-S6's figures) were incorrect** — an over-count of
+exactly 1, isolated entirely to this one file's own reported total, that
+persisted uncaught for four consecutive phases until this audit.
+
+--------------------------------------------------------------------
+5. ACTUAL RLS_ADVERSARIAL ASSERTION COUNT
+--------------------------------------------------------------------
+Executed directly against a freshly-reset database (not inferred from
+terminal formatting):
+
+  supabase db reset
+  docker exec -i supabase_db_ZenWard psql -U postgres -d postgres \
+    -f - < supabase/tests/rls_adversarial_tests.sql
+
+Deterministic count via `grep -oE "NOTICE:\s+TEST [A-Z0-9]+: (PASS|FAIL)"`
+against the raw captured output: **32 result lines, one per distinct test
+label (A through Z, then AA through AF), each appearing EXACTLY once — no
+duplicates, no gaps, no label skipped.** All 32 read PASS. Zero
+unexpected `psql ERROR` lines. Every one of the 32 intended adversarial
+scenarios genuinely executed and genuinely passed — none silently
+short-circuited.
+
+--------------------------------------------------------------------
+6. FULL AUTHORITATIVE SQL BASELINE
+--------------------------------------------------------------------
+Fresh `supabase db reset`, all 18 test files run once in sequence, counted
+deterministically via `grep -cE "NOTICE:.*: PASS"` / `: FAIL` against the
+raw captured psql output (not terminal-formatting inference):
+
+  constraint_tests.sql                        13 assertions
+  create_trip_atomicity_tests.sql               2 assertions
+  create_trip_privilege_tests.sql               5 assertions
+  create_trip_tests.sql                        20 assertions
+  driver_read_authorization_tests.sql          17 assertions
+  driver_read_history_tests.sql                 8 assertions
+  driver_read_minimization_tests.sql           13 assertions
+  driver_read_privilege_tests.sql               8 assertions
+  function_privilege_tests.sql                  7 assertions
+  mutation_assignment_tests.sql                19 assertions
+  mutation_atomicity_tests.sql                   2 assertions
+  mutation_authorization_tests.sql              4 assertions
+  mutation_idempotent_authorization_tests.sql   6 assertions
+  mutation_lifecycle_tests.sql                 24 assertions
+  mutation_privilege_tests.sql                  7 assertions
+  organization_timezone_tests.sql              13 assertions
+  rls_adversarial_tests.sql                    32 assertions
+  security_definer_exposure_tests.sql          20 assertions
+  ------------------------------------------------------------------
+  TOTAL: 220 assertions, 0 failures, 0 unexpected errors (100% PASS).
+
+**This is the authoritative baseline: 220, not 221.** Every per-file
+count above is byte-for-byte identical to both the P1-E3-S6 and P1-E3-S7
+reports EXCEPT `rls_adversarial_tests.sql` itself — confirming the
+discrepancy was isolated entirely to that one file's own reported number,
+never a second, compounding error elsewhere.
+
+--------------------------------------------------------------------
+7. TENANT-ISOLATION RESULT
+--------------------------------------------------------------------
+PASS, no regression. Directly re-verified this run:
+  TEST A: PASS (Org A admin sees Org A trip)
+  TEST B: PASS (Org A admin cannot see Org B trip)
+  TEST C: PASS (Org A dispatcher sees Org A passenger)
+  TEST D: PASS (Org A dispatcher cannot see Org B passenger)
+  TEST H: PASS (Driver A cannot see Org B trip)
+  TEST AF: PASS (Org A dispatcher sees zero Org B child entities:
+    assignments/notes/exceptions)
+
+--------------------------------------------------------------------
+8. DRIVER ISOLATION RESULT
+--------------------------------------------------------------------
+PASS, no regression. Directly re-verified this run:
+  TEST E: PASS (Driver A cannot directly SELECT any Passenger row,
+    including their own assigned trip's passenger — the CRITICAL,
+    non-negotiable ZD-080 rule)
+  TEST F: PASS (Driver A cannot directly SELECT trips at all — retired
+    in favor of the controlled read API, ZD-096)
+  TEST G: PASS (Driver A cannot see Driver A2's trip in the same org)
+  TEST I: PASS (Driver A cannot directly SELECT trip_notes at all)
+  TEST J: PASS (Driver A cannot see an operations_only note, even on
+    their own trip)
+  TEST K: PASS (Driver A cannot see a driver_visible note on Driver A2's
+    trip)
+
+--------------------------------------------------------------------
+9. TRIPASSIGNMENT PRIVILEGE RESULT
+--------------------------------------------------------------------
+PASS, no regression. Directly re-verified this run:
+  TEST M: PASS (Driver A's attempted trip_assignments INSERT correctly
+    denied: "permission denied for table trip_assignments" — the raw
+    table grant itself is absent, not merely RLS-denied)
+
+--------------------------------------------------------------------
+10. ANON RESULT
+--------------------------------------------------------------------
+PASS, no regression. Directly re-verified this run:
+  TEST Q: PASS (anon SELECT on transportation_requests denied:
+    "permission denied for table transportation_requests")
+  TEST R: PASS (anon SELECT on passengers denied: "permission denied for
+    table passengers")
+
+Platform-admin boundary also re-verified as part of this audit's scope
+(work item §4's own list):
+  TEST S: PASS (Organization Admin self-granting a PlatformAdminGrant
+    denied: "permission denied for table platform_admin_grants" —
+    self-service escalation remains structurally impossible, not merely
+    policy-denied)
+
+Foreign-org read/write also re-verified (beyond §7's read-only cases):
+  TEST AC: PASS (a cross-org passengers INSERT attempt denied by RLS:
+    "new row violates row-level security policy for table \"passengers\"")
+  TEST AD: PASS (guessing another org's Trip UUID grants nothing)
+  TEST AE: PASS (guessing another driver's note UUID grants nothing)
+
+No RLS policy, grant, or privilege was touched during this audit — every
+result above reflects the schema exactly as it already stood.
+
+--------------------------------------------------------------------
+11. ANY CORRECTION MADE
+--------------------------------------------------------------------
+None to application code, migrations, RLS, or the test file itself — none
+was needed; nothing regressed. No historical completion report (P1-E3-S4
+through P1-E3-S6) was retroactively edited — this project's own
+established convention treats a completion report as an immutable
+point-in-time record of what was reported at that time (distinct from
+decision-register.md, which IS amended live when a recorded decision
+turns out to be factually wrong, e.g. ZD-145→ZD-146). The correction here
+is this audit report itself: a clear, documented root-cause explanation
+of the "33" figure's origin and the confirmation that P1-E3-S7's "32"/
+"220" figures are the correct, authoritative baseline going forward.
+
+--------------------------------------------------------------------
+12. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, zero errors.
+
+--------------------------------------------------------------------
+13. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, zero errors, zero warnings.
+
+--------------------------------------------------------------------
+14. BUILD
+--------------------------------------------------------------------
+`npm run build` — succeeded, all 24 routes compiled, unchanged from
+P1-E3-S7 (no application code was touched by this audit).
+
+--------------------------------------------------------------------
+15. FILES MODIFIED
+--------------------------------------------------------------------
+Created only: docs/reports/P1-E3-S7B-sql-baseline-audit-report.txt (this
+file). No SQL migration, RLS policy, test file, or application source
+file was created, modified, or deleted. `git status --short` reflects
+exactly the pre-existing P1-E3-S7 diff plus this one new report.
+
+--------------------------------------------------------------------
+16. BLOCKERS
+--------------------------------------------------------------------
+None.
+====================================================================
+SQL BASELINE AUDIT:
+READY
+
+AUTHORITATIVE SQL ASSERTION COUNT:
+220
+
+RLS ADVERSARIAL ASSERTION COUNT:
+32
+
+RLS REGRESSION:
+NONE
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S7A — Driver Location & Live Dispatch Tracking
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; no
+deployment occurred; no product/RLS redesign was performed. This phase
+stops here.
+====================================================================

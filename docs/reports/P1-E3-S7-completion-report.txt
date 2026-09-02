@@ -1,0 +1,1043 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S7 — Internal New Trip
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: bf8f3f1 "Implement Operations Trip Detail"
+Date/time:            2026-09-02
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------
+`git status --short` was NOT clean at the start of this phase — it showed
+exactly the known, already-reported P1-E3-S6/S6A diff (S6/S6A had both
+explicitly instructed "Do NOT commit"). Since this phase's own checkpoint
+explicitly requires a clean tree with S6/S6A committed, and does not waive
+that the way S5B did, the discrepancy was raised to the user rather than
+resolved unilaterally. Per the user's explicit choice, the known S6/S6A
+diff was committed as-is (`bf8f3f1 "Implement Operations Trip Detail"`,
+35 files). `git status --short` was then clean, and `git log --oneline -5`
+confirmed S6/S6A genuinely committed, before any P1-E3-S7 code was written.
+
+--------------------------------------------------------------------
+2. STITCH REFERENCE INSPECTED
+--------------------------------------------------------------------
+Primary: docs/design/stitch/references/05-internal-new-trip.png, read in
+full. Its own actual composition covers only two panels — "Request Source"
+(source-type radio group, requester name/organization/phone/email, "Import
+request details" against a fabricated "Ref: ZR-240829-104") and "Passenger"
+(search + "Add New Passenger" + a selected-passenger card) — plus a
+right-rail "Needs Attention — Driver not assigned" advisory. No Schedule,
+Pickup, Destination, or Instructions/Assistance section is visually
+depicted anywhere in the reference image itself — confirmed against
+docs/design/stitch/stitch-reference-index.md's own pre-existing note on
+this exact reference ("the form's own remaining sections ... are not
+shown, so the full field set this screen ultimately needs is incomplete
+information"), not a fresh discovery this phase. All required docs were
+read before coding (domain-model.md, lifecycle-model.md,
+authorization-model.md, application-route-map.md,
+application-implementation-plan.md, ui-data-action-map.md,
+ui-backend-gap-register.md, auth-session-routing.md,
+operational-timezone.md, todays-operations-data-map.md,
+dispatch-board-data-map.md, operations-trip-detail-data-map.md,
+decision-register.md, schema.md, read-api.md, mutation-api.md,
+rls-model.md, mutation-authorization.md, application-auth-boundary.md,
+stitch-reference-index.md, component-inventory.md, and the P1-E3-S0A/
+S5B/S6/S6A completion reports). `create_trip`'s ACTUAL SQL body and its
+generated TypeScript signature were read directly
+(supabase/migrations/20260831120000_controlled_trip_creation.sql,
+src/lib/supabase/database.types.ts) — not inferred. Passenger/Facility/
+TransportationRequest schema AND their actual RLS policies were read
+directly from their own migrations before deciding what the form could
+safely do (§8/§9 below).
+
+--------------------------------------------------------------------
+3. ORIGINAL NEW TRIP STUB
+--------------------------------------------------------------------
+`/operations/trips/new` was `OperationsRouteStub` — a structural
+placeholder rendering only a title/description/breadcrumb, no form, no
+data.
+
+--------------------------------------------------------------------
+4. FINAL COMPOSITION
+--------------------------------------------------------------------
+A real breadcrumb ("Trips › New Trip"), a page-level `<h1>` "New Trip" +
+description + Cancel/Create Trip action row (matching the reference's own
+header composition — no bold chrome title in the persistent `AppHeader`
+for this route either, matching the reference's own fixed top bar, which
+shows only the breadcrumb and icons), a 2-column grid: left column
+Passenger → Trip Schedule → Pickup → Destination → Instructions &
+Assistance (5 card-panel sections, each with an icon + bold title header
+matching the reference's own established pattern); right column Related
+Request (a real Request selector + "Import request details") and a calm
+info note about assignment being a separate later step. Every section not
+directly shown in the reference reuses its exact visual language (see
+ZD-153) rather than inventing a divergent style.
+
+--------------------------------------------------------------------
+5. CREATE_TRIP ACTUAL SIGNATURE
+--------------------------------------------------------------------
+create_trip(
+  p_organization_id uuid,
+  p_passenger_id uuid,
+  p_pickup_description text,
+  p_destination_description text,
+  p_scheduled_pickup_at timestamptz default null,
+  p_appointment_at timestamptz default null,
+  p_pickup_facility_id uuid default null,
+  p_destination_facility_id uuid default null,
+  p_assistance_notes text default null,
+  p_instructions text default null,
+  p_request_id uuid default null
+) returns trip_creation_result (trip_id, organization_id, state, created)
+
+Read directly from 20260831120000_controlled_trip_creation.sql and
+confirmed identical in database.types.ts's generated `Args` type. `state`
+is a fixed literal `'scheduled'` inside the function body — not a
+parameter at all, structurally impossible for any caller to override
+(work item §8/§9, unchanged this phase). Raises exactly 3 distinct ZW
+codes: ZW001 (no session), ZW002 (not Organization Admin/Dispatcher for
+this org), ZW006 (every other validation failure — address, Passenger,
+Facility, Request, or time-ordering — all collapsed into one code by the
+function itself).
+
+--------------------------------------------------------------------
+6. SERVER ACTION ARCHITECTURE
+--------------------------------------------------------------------
+`src/app/operations/trips/new/actions.ts` — `createTripAction` and
+`addPassengerAction`, both re-deriving `requireOperationsAccess()` fresh
+on every call (never trusted from page render). `createTripAction`:
+validates presence of required fields, resolves the one explicit
+local→UTC conversion boundary (§14/§15 below), calls `create_trip` with
+its real parameter names only, maps any error to a narrow safe code,
+revalidates `/operations`, `/operations/dispatch`, and the new Trip's own
+detail route, returns the authoritative `trip_id`.
+
+--------------------------------------------------------------------
+7. PASSENGER QUERY
+--------------------------------------------------------------------
+`src/lib/operations/new-trip.ts` → `getNewTripFormData()`: `passengers`
+filtered `.eq("organization_id", organizationId).eq("status", "active")`,
+explicit columns `id, display_name, phone` only (work item §12
+minimization — matches Trip Detail's own Passenger projection exactly).
+No `select("*")` anywhere.
+
+--------------------------------------------------------------------
+8. PASSENGER CREATION DECISION
+--------------------------------------------------------------------
+Built (ZD-156) — `passengers_insert_org_operations` RLS already grants a
+safe, org-scoped, column-limited INSERT (`display_name`, `phone`);
+ui-data-action-map.md had already independently concluded this table has
+"no lifecycle machine to protect, unlike Trip." `addPassengerAction`
+mirrors `addNoteAction`'s established direct-table-write pattern (P1-E3-
+S6) exactly. Does not weaken any RLS policy — uses the existing grant
+as-is.
+
+--------------------------------------------------------------------
+9. REQUEST QUERY/DECISION
+--------------------------------------------------------------------
+`transportation_requests` filtered `.eq("organization_id",
+organizationId).in("state", ["pending", "accepted"])` — the exact same
+states `create_trip`'s own `p_request_id` validation accepts. Explicit
+columns only. The Request selector links to an EXISTING row only; "Import
+request details" copies real fields (see §18 below) — no inline
+new-Request-creation flow was built (ZD-154), since `create_trip` has no
+parameter for requester identity fields at all.
+
+--------------------------------------------------------------------
+10. FACILITY QUERY
+--------------------------------------------------------------------
+`facilities` filtered `.eq("organization_id", organizationId).eq("status",
+"active")`, explicit columns `id, name, address_line1, address_line2,
+city, state, postal_code`. Used for both Pickup and Destination Facility
+selectors (the same option list, two independent selections).
+
+--------------------------------------------------------------------
+11. PICKUP SNAPSHOT BEHAVIOR
+--------------------------------------------------------------------
+`pickup_description` is the required, freely-editable textarea value sent
+verbatim to `create_trip` — never derived solely from a Facility id at
+submission time. Selecting a Facility auto-fills this field as a
+starting point (§13), but the stored value is always whatever text the
+textarea holds at submit time.
+
+--------------------------------------------------------------------
+12. DESTINATION SNAPSHOT BEHAVIOR
+--------------------------------------------------------------------
+Identical rule, independently, for `destination_description`.
+
+--------------------------------------------------------------------
+13. FACILITY AUTO-FILL BEHAVIOR
+--------------------------------------------------------------------
+Selecting a Pickup/Destination Facility overwrites that side's address
+textarea with `formatFacilityAddress()` — the Facility's own canonical
+address (`{name}, {address_line1}, {address_line2}, {city}, {state}
+{postal_code}`, blank parts omitted) — remaining fully editable
+afterward. Both the Facility id and the (possibly-edited) text are sent
+to `create_trip` together; neither is silently discarded (ZD-155).
+Verified live: selecting "Fictional Clinic A" filled the field with
+"Fictional Clinic A, Atlanta, GA"; appending "(use the side door)" and
+submitting stored the edited text exactly, with the Facility link intact
+in the same row.
+
+--------------------------------------------------------------------
+14. SCHEDULE FIELDS
+--------------------------------------------------------------------
+Pickup Date + Pickup Time (two native `<input type="date"/"time">`,
+required by this form even though `p_scheduled_pickup_at` is nullable at
+the RPC layer — a deliberate UI-level requirement, since a Trip with no
+scheduled pickup cannot appear on any day-scoped Operations surface, and
+the mandatory E2E test explicitly requires "scheduled for today").
+Appointment Date + Appointment Time, optional, both-or-neither.
+
+--------------------------------------------------------------------
+15. ORGANIZATION-LOCAL INPUT BEHAVIOR
+--------------------------------------------------------------------
+Every date/time value the Dispatcher types is interpreted as wall-clock
+time IN THE ORGANIZATION'S OWN TIMEZONE (`organization.
+organizationTimezone`, resolved server-side from the fresh
+`requireOperationsAccess()` call on every submission) — never the
+browser's timezone, never the server runtime's, never UTC by accident.
+The "Trip Schedule" panel displays the resolved timezone name explicitly
+("All times are in the organization's timezone (America/New_York).") so
+the Dispatcher always knows which timezone applies.
+
+--------------------------------------------------------------------
+16. LOCAL→UTC CONVERSION MECHANISM
+--------------------------------------------------------------------
+One explicit boundary: `organizationLocalToUtc()`
+(src/lib/operations/local-time.ts), called server-side in
+`createTripAction`. Reads the zone's standard and daylight UTC offsets
+from two FIXED reference instants (Jan 1 / Jul 1 of the requested date's
+own year, noon UTC) — never a hardcoded offset, never manual DST
+arithmetic, every offset read live from `Intl`/the IANA tzdata (same
+underlying data source `is_valid_iana_timezone` validates against at the
+database layer, P1-E3-S2C). For each of the (at most 2) distinct offsets,
+computes a candidate UTC instant and checks whether formatting it back in
+the organization's timezone reproduces the EXACT requested wall-clock
+fields:
+  - exactly one candidate round-trips → `{status: "ok", utc}` (the
+    ordinary case)
+  - zero candidates round-trip → `{status: "nonexistent"}` (spring-
+    forward gap)
+  - two distinct candidates both round-trip → `{status: "ambiguous"}`
+    (fall-back repeated hour)
+This was unit-verified against 8 hand-computed cases (ordinary EST,
+ordinary EDT, spring-forward gap, fall-back ambiguity, midnight crossing,
+America/Chicago, UTC/no-DST, an ordinary February date) before being
+wired into the application, then re-verified end-to-end through the real
+UI (§39-§42 below).
+
+--------------------------------------------------------------------
+17. DST HANDLING
+--------------------------------------------------------------------
+Both edge cases are explicitly detected and rejected BEFORE `create_trip`
+is ever called, with an honest, specific error ("That date and time
+couldn't be resolved in the organization's timezone (it may fall in a
+daylight-saving change). Choose a different time.") — never a silently-
+guessed instant. Documented limitation: the two-offset-probe technique
+assumes at most 2 distinct UTC offsets within a calendar year (true for
+every US IANA zone, including both this product's current organizations —
+America/New_York, America/Chicago); a future organization in an
+exotic zone with more than 2 offset changes per year is out of this
+implementation's verified scope (recorded as ZD-157's own review
+trigger, not silently overclaimed).
+
+--------------------------------------------------------------------
+18. MIDNIGHT HANDLING
+--------------------------------------------------------------------
+Verified live: a Trip scheduled for 11:30 PM organization-local on Sep 1
+correctly stored as `2026-09-02 03:30:00+00` (the following UTC calendar
+day) — the conversion correctly crosses the UTC day boundary without any
+special-case midnight logic (the general algorithm handles it
+identically to any other time).
+
+--------------------------------------------------------------------
+19. APPOINTMENT-TIME HANDLING
+--------------------------------------------------------------------
+`p_appointment_at` is optional in `create_trip`'s own signature — the
+form reflects that exactly (Appointment Date/Time both optional,
+both-or-neither enforced client- and server-side, since a lone date or
+lone time cannot resolve to an instant). Not inferred as required.
+
+--------------------------------------------------------------------
+20. INSTRUCTIONS
+--------------------------------------------------------------------
+Maps directly and only to `p_instructions` — optional free text, labeled
+"Instructions" with help text "Shown to the Driver for this trip — e.g.
+gate codes, entrance notes." Never conflated with `assistance_notes` or
+`trip_notes`.
+
+--------------------------------------------------------------------
+21. ASSISTANCE NOTES
+--------------------------------------------------------------------
+Maps directly and only to `p_assistance_notes` — the Trip's own
+execution-time snapshot, labeled "Assistance Requirements" with explicit
+help text distinguishing it from the Passenger's own saved profile field
+("not the passenger's saved profile notes"). Deliberately never
+auto-imported from `passengers.assistance_notes` (work item §29) — matches
+ZD-149's identical Trip Detail precedent exactly. (It CAN be populated
+from a selected Request's own `assistance_notes` via "Import request
+details" — a different, real field on a different table, not the
+Passenger profile.)
+
+--------------------------------------------------------------------
+22. RETURN-TRIP DECISION
+--------------------------------------------------------------------
+Not built. No `return_time`/`round_trip` field exists on `create_trip`,
+and none was fabricated. A return leg is simply a second Trip, optionally
+sharing the same (now-`accepted`) Request — exactly the canonical 1:N
+Request→Trip model already established (ZD-045, reconfirmed by ZD-102).
+Documented in new-trip-data-map.md §5.
+
+--------------------------------------------------------------------
+23. RECURRENCE DECISION
+--------------------------------------------------------------------
+Not built. No recurrence engine exists anywhere in this schema or
+codebase; this phase creates exactly one Trip per submission. Recorded as
+a future workflow (new-trip-data-map.md §6), not fabricated.
+
+--------------------------------------------------------------------
+24. COMPANION DECISION
+--------------------------------------------------------------------
+Omitted entirely — no canonical schema field exists (ui-backend-gap-
+register.md, reconfirmed still open, not resolved this phase).
+
+--------------------------------------------------------------------
+25. TRIP TYPE DECISION
+--------------------------------------------------------------------
+Omitted entirely — same still-open gap, reconfirmed, not resolved.
+
+--------------------------------------------------------------------
+26. REFERENCE-CODE DECISION
+--------------------------------------------------------------------
+No human-readable Trip or Request reference code is fabricated anywhere
+(work item §32) — the created Trip's real UUID is used only for routing
+(`/operations/trips/[tripId]`), never displayed as a fake code.
+
+--------------------------------------------------------------------
+27. ASSIGNMENT DECISION
+--------------------------------------------------------------------
+Driver/Vehicle assignment is never part of this form — `create_trip` has
+no such parameter, none was added. A calm info panel
+("Assign a driver after creating this trip") sets the expectation before
+submission (ZD-159, replacing the reference's own pre-creation "Needs
+Attention" advisory, which doesn't make sense before a Trip exists). The
+actual assignment step remains exclusively Dispatch's.
+
+--------------------------------------------------------------------
+28. FORM VALIDATION
+--------------------------------------------------------------------
+Native `required` on Passenger/Pickup Date/Pickup Time/Pickup Address/
+Destination Address (browser-blocks an incomplete submit before any
+network request — verified live, §46 below). A non-blocking client-side
+hint flags an appointment time before pickup (string comparison of
+already-organization-local wall-clock values, informational only).
+
+--------------------------------------------------------------------
+29. BACKEND VALIDATION
+--------------------------------------------------------------------
+`create_trip` remains the sole authority on tenant ownership, Passenger/
+Facility/Request validity, initial state, and time ordering — re-verified
+independently of the UI via direct authenticated RPC calls bypassing the
+form entirely (§43-§46 below), proving the boundary holds even if the
+client were compromised.
+
+--------------------------------------------------------------------
+30. SAFE ERROR MAPPING
+--------------------------------------------------------------------
+src/lib/operations/new-trip-errors.ts — 4 categories (UNAUTHORIZED,
+ACCESS_UNAVAILABLE, INVALID_INPUT, SCHEDULE_UNRESOLVABLE) plus UNKNOWN.
+INVALID_INPUT is deliberately one broad bucket, matching `create_trip`'s
+own real (lack of) granularity — never invents a finer distinction the
+RPC doesn't actually provide. No ZW code, SQLSTATE, or raw Postgres/
+PostgREST text ever reaches the rendered UI (verified by reading the
+mapping code path, not just the RPC's raw response).
+
+--------------------------------------------------------------------
+31. NON-IDEMPOTENCY HANDLING
+--------------------------------------------------------------------
+`create_trip` is deliberately non-idempotent (ZD-102) — no retry/dedupe
+logic was added at the database layer this phase. Handled entirely
+client-side (ZD-158): the submit control disables while pending, AND a
+synchronous ref-based guard on the form's own submit handler closes the
+narrow race a fast double-click could otherwise exploit before React
+commits the disabled state.
+
+--------------------------------------------------------------------
+32. DOUBLE-SUBMIT PREVENTION
+--------------------------------------------------------------------
+See §31 and the real reproduction test in §47.
+
+--------------------------------------------------------------------
+33. SUCCESS NAVIGATION
+--------------------------------------------------------------------
+On a successful `create_trip` call, the page navigates (`router.push`) to
+`/operations/trips/{the RPC's own returned trip_id}` — never a
+client-guessed id, never a fake success page. Verified: the Trip Detail
+page that loads shows real, freshly-persisted data immediately (§48).
+
+--------------------------------------------------------------------
+34. REVALIDATION
+--------------------------------------------------------------------
+`revalidatePath("/operations")`, `revalidatePath("/operations/dispatch")`,
+and `revalidatePath(`/operations/trips/${tripId}`)` on every successful
+create — the same minimum set Trip Detail's own mutations already
+established (P1-E3-S6), extended with the new Trip's own detail route.
+
+--------------------------------------------------------------------
+35. PASSENGER TENANT TEST
+--------------------------------------------------------------------
+Through the real application: Org A admin's Passenger dropdown contains
+"Fictional Passenger A1", never "Fictional Passenger B1"; Org B admin's
+contains the reverse. 4/4 sub-assertions PASS (real DOM inspection of the
+actual `<select>` options, not assumed from the query alone).
+
+--------------------------------------------------------------------
+36. FACILITY TENANT TEST
+--------------------------------------------------------------------
+Same pattern: Org A sees "Fictional Clinic A" only, Org B sees "Fictional
+Clinic B" only. 4/4 sub-assertions PASS.
+
+--------------------------------------------------------------------
+37. REQUEST TENANT TEST
+--------------------------------------------------------------------
+Org A's Request dropdown contains the real Org A requester ("Fictional
+Family Member"); Org B's contains only the placeholder (no Org B Request
+fixtures exist) — no foreign-org leak. 2/2 sub-assertions PASS. A
+foreign/ineligible Request id submitted directly to the RPC (bypassing
+the selector entirely) is independently confirmed rejected — §45 below.
+
+--------------------------------------------------------------------
+38. DRIVER DENIAL
+--------------------------------------------------------------------
+A `driver`-role Membership requesting `/operations/trips/new` is
+redirected to `/driver` — the existing, unmodified
+`requireOperationsAccess` behavior. PASS (live-verified).
+
+--------------------------------------------------------------------
+39. INACTIVE MEMBERSHIP
+--------------------------------------------------------------------
+An inactive Dispatcher Membership requesting New Trip is redirected to
+`/access-unavailable`. PASS (live-verified).
+
+--------------------------------------------------------------------
+40. ROLE CHANGE
+--------------------------------------------------------------------
+Live test: a real dispatcher successfully loaded New Trip; their
+Membership role was then changed to `driver` directly in the database
+(simulating an admin action mid-session); the SAME session's next request
+for New Trip was correctly redirected to `/driver` — no stale role
+authority, re-derived fresh every request. PASS (live-verified, role
+reverted after the test).
+
+--------------------------------------------------------------------
+41. MULTI-ORG
+--------------------------------------------------------------------
+A user with `organization_admin` in Org A and `driver` in Org B, signed in
+with no organization-context cookie, was correctly sent to
+`/select-organization` before reaching New Trip at all — never silently
+granted access based on their stronger role in a different organization.
+PASS (live-verified). Combined with §35/§36/§37, this confirms Passenger/
+Facility/Request selections are scoped to whichever organization is
+actually selected, never a client-suppliable value.
+
+--------------------------------------------------------------------
+42. VALID CREATE APPLICATION TEST
+--------------------------------------------------------------------
+Through the REAL New Trip UI: selected a real Passenger, entered a manual
+pickup/destination address (no Facility), a real organization-local
+schedule, instructions, and assistance notes; submitted. Redirected to
+`/operations/trips/{real uuid}`, which rendered the correct Passenger
+name, route, instructions callout, assistance requirements, "Scheduled"
+status, and "Assign Driver" (unassigned) — all real, freshly-persisted
+values, not assumed. 13/13 sub-assertions PASS. A second variant with a
+Facility selection + an edited snapshot, and a third variant creating a
+brand-new Passenger inline, were also run — 8/8 and 4/4 sub-assertions
+PASS respectively (§43).
+
+--------------------------------------------------------------------
+43. DB VERIFICATION
+--------------------------------------------------------------------
+Every application test above was independently verified via direct
+`docker exec ... psql` queries against `public.trips` (not the RPC's own
+return value, not the UI's rendered text): `state='scheduled'`, correct
+`organization_id`/`passenger_id`, `pickup_description`/
+`destination_description` matching exactly what was typed (or the edited-
+after-autofill text, confirming ZD-155), `instructions`/`assistance_notes`
+matching, `scheduled_pickup_at`'s local wall-clock value matching the
+entered time, `request_id` correctly null/set, no active
+`trip_assignments` row, a real `trip_events` row (`trip_scheduled` or
+`request_converted_to_trip`), and a real `audit_events` row
+(`trip_created`). All PASS.
+
+--------------------------------------------------------------------
+44. INVALID PASSENGER TEST
+--------------------------------------------------------------------
+Bypassing the UI entirely — a real authenticated Org A session called
+`create_trip` directly via `supabase-js` with (a) a real but foreign-org
+(Org B) Passenger id and (b) a nonexistent Passenger id. Both rejected
+with ZW006, no Trip created in either case. 2/2 sub-assertions PASS.
+
+--------------------------------------------------------------------
+45. INVALID FACILITY TEST
+--------------------------------------------------------------------
+Same technique: a real Org B Facility id submitted by an Org A session.
+Rejected with ZW006, no Trip created. PASS. (A nonexistent Request id and
+a `declined`-state Request id were also tested — see §37/§46 for the
+Request-specific cases, both ZW006, both PASS.)
+
+--------------------------------------------------------------------
+46. INVALID TIMING TEST
+--------------------------------------------------------------------
+A direct RPC call with `p_appointment_at` before `p_scheduled_pickup_at`
+was rejected with ZW006, no Trip created. Combined with §44/§45: 6/6
+total invalid-input sub-assertions PASS, plus a 7th confirming the total
+`trips` row count was unchanged by any of the 6 rejected attempts (19 →
+19).
+
+--------------------------------------------------------------------
+47. DOUBLE-SUBMIT TEST
+--------------------------------------------------------------------
+5 synchronous rapid clicks fired on the real "Create Trip" button in the
+same JavaScript tick (the most aggressive reproduction of a fast
+double-click racing ahead of React's disabled-state commit achievable
+from outside the browser's own event loop). Result: exactly ONE
+`createTripAction` POST reached the dev server (confirmed in the server
+log), the page redirected to exactly one real Trip Detail, and a direct
+DB query confirmed exactly one Trip row exists for that submission's
+unique marker text. 3/3 sub-assertions PASS.
+
+--------------------------------------------------------------------
+48. TIMEZONE TEST
+--------------------------------------------------------------------
+Org A (America/New_York), ordinary standard time: 10:00 AM local on Jan
+15 2026 stored as exactly `15:00:00+00` (UTC-5). Org A, ordinary daylight
+time: 10:00 AM local on Jul 15 2026 stored as exactly `14:00:00+00`
+(UTC-4, DST-aware, no manual offset). Org B (America/Chicago): 10:00 AM
+local on Jul 15 2026 stored as exactly `15:00:00+00` (UTC-5, CDT) — a
+genuinely different organization, genuinely different timezone, verified
+independently. Server runtime is UTC throughout (Docker container), never
+relied upon for any of these. 5/5 sub-assertions PASS.
+
+--------------------------------------------------------------------
+49. MIDNIGHT TEST
+--------------------------------------------------------------------
+Org A, 11:30 PM local on Sep 1 2026 stored as `2026-09-02 03:30:00+00` —
+the following UTC calendar day, correctly. 2/2 sub-assertions PASS.
+
+--------------------------------------------------------------------
+50. DST TEST
+--------------------------------------------------------------------
+Spring-forward gap (America/New_York, Mar 8 2026, 2:30 AM — inside the
+skipped hour): create rejected client-visibly with an honest, specific
+error, no Trip created. Fall-back ambiguity (Nov 1 2026, 1:30 AM —
+occurs twice): same, rejected with an honest error, no Trip created. Both
+verified through the REAL UI (a real user really could type either time),
+not merely unit-tested. 6/6 sub-assertions PASS (combined with the 8
+hand-computed unit cases run before integration, §16).
+
+--------------------------------------------------------------------
+51. TODAY'S OPERATIONS INTEGRATION
+--------------------------------------------------------------------
+A Trip created for organization-local "today" appeared correctly on
+Today's Operations (its Passenger name found on the real rendered page).
+PASS (live-verified as part of the mandatory E2E scenario, §55).
+
+--------------------------------------------------------------------
+52. DISPATCH INTEGRATION
+--------------------------------------------------------------------
+The same Trip appeared correctly, unassigned, on the Dispatch Board's
+Needs Assignment queue. PASS (live-verified, §55).
+
+--------------------------------------------------------------------
+53. DRIVER-UNASSIGNED INVISIBILITY
+--------------------------------------------------------------------
+A dedicated test: a fresh unassigned Trip, checked against BOTH active
+Org A Drivers (not just the one who would eventually be assigned) —
+neither Driver Today nor Driver Trips showed it for either Driver. 5/5
+sub-assertions PASS.
+
+--------------------------------------------------------------------
+54. DRIVER-POST-ASSIGNMENT VISIBILITY
+--------------------------------------------------------------------
+After the Dispatcher assigned the same Trip through the real Dispatch UI,
+the assigned Driver's Today, Trips, and Active Trip Detail all correctly
+showed it. PASS (§55).
+
+--------------------------------------------------------------------
+55. FULL CREATE→DISPATCH→DRIVER TEST
+--------------------------------------------------------------------
+The mandatory end-to-end scenario, entirely through real application
+surfaces: Operations created a Trip scheduled for organization-local
+today via the real New Trip form → Today's Operations showed it → the
+Dispatch Board showed it as unassigned → clicked the real "Assign"
+control → selected a real Driver → confirmed → a real active
+`trip_assignments` row was independently verified in the database → the
+assigned Driver's Today/Trips/Active-Trip-Detail all showed it, all real
+data. 8/8 sub-assertions PASS. This is the first fully-verified pass of
+the core Zenward business loop (create → dispatch → drive) through
+genuine application surfaces end to end.
+
+--------------------------------------------------------------------
+56. SQL REGRESSION
+--------------------------------------------------------------------
+Fresh `supabase db reset`, all 18 existing SQL test files run once in
+sequence (no migration was added or modified this phase — New Trip is
+UI-only, built entirely against the existing `create_trip`):
+
+  constraint_tests.sql                        13 assertions
+  create_trip_atomicity_tests.sql               2 assertions
+  create_trip_privilege_tests.sql               5 assertions
+  create_trip_tests.sql                        20 assertions
+  driver_read_authorization_tests.sql          17 assertions
+  driver_read_history_tests.sql                 8 assertions
+  driver_read_minimization_tests.sql           13 assertions
+  driver_read_privilege_tests.sql               8 assertions
+  function_privilege_tests.sql                  7 assertions
+  mutation_assignment_tests.sql                19 assertions
+  mutation_atomicity_tests.sql                  2 assertions
+  mutation_authorization_tests.sql              4 assertions
+  mutation_idempotent_authorization_tests.sql   6 assertions
+  mutation_lifecycle_tests.sql                 24 assertions
+  mutation_privilege_tests.sql                  7 assertions
+  organization_timezone_tests.sql              13 assertions
+  rls_adversarial_tests.sql                    32 assertions
+  security_definer_exposure_tests.sql          20 assertions
+  ------------------------------------------------------------------
+  TOTAL: 220 assertions, 0 failures, 0 unexpected errors (100% PASS).
+
+--------------------------------------------------------------------
+57. CREATE_TRIP REGRESSION
+--------------------------------------------------------------------
+Included in §56 above — `create_trip_tests.sql` (20), `create_trip_
+privilege_tests.sql` (5), and `create_trip_atomicity_tests.sql` (2), all
+27 assertions clean. `create_trip` itself was not modified this phase.
+
+--------------------------------------------------------------------
+58. CONCURRENCY REGRESSION
+--------------------------------------------------------------------
+`bash supabase/tests/mutation_concurrency_test.sh` (exercises `assign_trip`,
+unrelated to and untouched by this phase) — re-run against a fresh reset.
+Session B blocked 1.83s on the Trip row lock, then correctly rejected
+with `assignment_conflict` after seeing Session A's committed assignment.
+TEST CONCURRENCY-1: PASS.
+
+--------------------------------------------------------------------
+59. DRIVER REGRESSION
+--------------------------------------------------------------------
+Driver Today, Driver Trips, and Driver Active Trip Detail all real-tested
+as part of §53/§55 above — all render correctly, no regression. Driver
+components were not modified this phase.
+
+--------------------------------------------------------------------
+60. OPERATIONS REGRESSION
+--------------------------------------------------------------------
+Dedicated regression pass through the real application: Today's
+Operations renders real data; Dispatch Board renders real data; the
+existing, already-seeded Trip Detail (80a1) still renders correctly;
+`cancel_trip` re-tested end-to-end via the real Trip Detail UI (a fresh
+Trip → Cancel Trip dialog → real reason → confirm → DB-verified
+`state='cancelled'`); `reassign_trip` re-tested via the real Dispatch UI
+(clicking a scheduled trip block in the Assignment Grid → real Reassign
+dialog → real Driver selection → Confirm Reassignment, real submission
+reached the server). 5/5 sub-assertions PASS. `record_no_show` was not
+re-derived as a fresh test this phase — unchanged code, already
+exhaustively tested in P1-E3-S6 (§50/§51 of that report).
+
+--------------------------------------------------------------------
+61-65. VISUAL QA — ALL REQUIRED WIDTHS
+--------------------------------------------------------------------
+Real headless-Chrome/CDP screenshots, signed in as
+org-a-admin@example.test, saved to docs/design/qa/new-trip/:
+
+  new-trip-empty-768x1024.png   — single-column stack, sidebar icon-rail;
+                                   no clipping, all fields reachable.
+  new-trip-empty-1024x768.png   — single-column stack.
+  new-trip-empty-1280x800.png   — 2-column layout activates (`xl`
+                                   breakpoint, same threshold Dispatch/
+                                   Trip Detail already established,
+                                   ZD-143 precedent).
+  new-trip-empty-1440x900.png   — 2-column layout, primary desktop width.
+  new-trip-empty-1600x1000.png  — 2-column layout, widest tested; generous
+                                   but not excessive whitespace, no
+                                   awkward empty gap.
+
+--------------------------------------------------------------------
+66. VALIDATION-STATE QA
+--------------------------------------------------------------------
+docs/design/qa/new-trip/new-trip-error-1440x900.png — a real server-side
+error (SCHEDULE_UNRESOLVABLE, from a genuine DST spring-forward-gap
+submission) rendered via the same `role="alert"` banner pattern every
+other mutation dialog in this app already uses. Clean, legible, honest
+message text.
+
+--------------------------------------------------------------------
+67. FILLED-STATE QA
+--------------------------------------------------------------------
+docs/design/qa/new-trip/new-trip-filled-1440x900.png — every field
+populated with real-shaped fictional data (a selected Passenger, a full
+schedule, a selected Facility with its auto-filled address, a linked
+Request), confirming density/alignment/wrapping all hold under real
+content, not just empty placeholders. new-trip-add-passenger-dialog-
+1440x900.png also captured — the Add Passenger dialog mid-interaction.
+
+--------------------------------------------------------------------
+68. DIRECT STITCH COMPARISON
+--------------------------------------------------------------------
+  Sidebar/header shell ....................................... MATCHES
+    (no bold chrome title for this route, matching the
+    reference's own fixed top bar exactly)
+  Breadcrumb (Trips › New Trip) .............................. MATCHES
+  Page title/description/action row (New Trip / description /
+    Cancel / Create Trip) ..................................... MATCHES
+  "Passenger" panel (icon + title, search-style select,
+    "Add New Passenger") ...................................... MATCHES
+    composition (native `<select>` instead of the reference's
+    custom search+card UI — no combobox primitive exists in the
+    design system yet, same reasoning already established for
+    Trip Detail's "More" → direct-buttons difference, ZD-147)
+  "Related Request" panel (renamed from "Request Source",
+    Import affordance preserved) .............................. MATCHES
+    composition; content differs (a Request SELECTOR + real-
+    field Import, not an inline requester-field editor with
+    no backend contract — ZD-154, justified)
+  Schedule/Pickup/Destination/Instructions & Assistance
+    panels (not in the reference's own composition) .......... EXTENDS
+    the reference's established card-panel visual language
+    (ZD-153), not a divergent style
+  Right-rail advisory (Needs Attention → calm info note) ..... CONTENT
+    DIFFERS, composition preserved (ZD-159, justified — nothing
+    to warn about before the Trip exists)
+  Spacing/panel proportions/border/radius/typography (zw-
+    tokens, existing scale throughout) ......................... MATCHES
+  Desktop use of width at 1280/1440/1600 ..................... MATCHES
+  Tablet behavior (768/1024, single-column stack) ............ ACCEPTABLE,
+                                                                DOCUMENTED
+
+--------------------------------------------------------------------
+69. DISCREPANCIES FOUND
+--------------------------------------------------------------------
+A real functional bug, found via this phase's own genuine browser
+testing (not visual — it never rendered incorrectly, it logged a React
+warning): `Select` (src/components/ui/Select.tsx) unconditionally set
+`defaultValue` whenever a `placeholder` prop was given, even when the
+caller ALSO passed a controlled `value` — "Select elements must be either
+controlled or uncontrolled." This is the first place in the codebase a
+`Select` is both controlled (`value={state}`) AND given a `placeholder` —
+every prior usage (`AssignmentDialog`) was uncontrolled, so the defect
+was latent and never triggered before this phase's own new usage pattern.
+
+--------------------------------------------------------------------
+70. DISCREPANCIES CORRECTED
+--------------------------------------------------------------------
+Fixed at the component level (not worked around per-callsite): `Select`
+now only sets `defaultValue` when the caller has not passed a controlled
+`value`. Re-verified: the console warning is gone, and every controlled
+Select on this page (Passenger, Pickup/Destination Facility, Transportation
+Request) behaves correctly (auto-select-on-add, auto-fill-on-facility-
+select, import-on-request-select all depend on this being genuinely
+controlled). This is a systemic fix — any future controlled-`Select`-with-
+placeholder usage benefits from it.
+
+--------------------------------------------------------------------
+71. REMAINING JUSTIFIED DEVIATIONS
+--------------------------------------------------------------------
+  - Native `<select>` instead of a custom search/typeahead combobox for
+    Passenger/Facility/Request — no combobox primitive exists in the
+    design system; a native select remains fully keyboard/AT-accessible
+    and fast for the fixture-scale data this phase tested against
+    (documented, not silently accepted as a permanent limit — a future
+    phase MAY build a real combobox if passenger/facility counts grow
+    large enough to warrant one).
+  - Requester Name/Organization/Phone/Email as editable New Trip fields —
+    no `create_trip` parameter exists for any of them (ZD-154).
+  - Fabricated reference codes, Companion, Trip Type — no schema field
+    exists (still-open, unresolved product decisions).
+  - Return-trip and recurrence UI — no backend contract exists for
+    either; each is architecturally a separate Trip/a future engine, not
+    a field on this form.
+  - Pre-creation "Needs Attention" advisory — replaced with a calm info
+    note (ZD-159).
+Every deviation above is a content/composition difference with a real,
+named justification — none is an unexplained change to hierarchy,
+spacing, typography, or action treatment.
+
+--------------------------------------------------------------------
+72. ACCESSIBILITY
+--------------------------------------------------------------------
+Verified live via real CDP interaction: exactly one `<h1>` ("New Trip");
+all 6 section headings are real `<h2>`s, one level under it (no repeat of
+Trip Detail's original two-`<h1>` mistake — this route was designed from
+the start to avoid it, see §52 of application-implementation-plan.md's
+new entry and ZD-153); real `<nav aria-label="Breadcrumb">`; every visible
+`<label>` has a valid `for=` association to a real field; the Passenger
+field is natively `required` (not just visually asterisked); native HTML5
+validation genuinely blocks submission of an empty form (confirmed: no
+network request fired, the page stayed on `/operations/trips/new`); the
+Add Passenger dialog has a real `aria-labelledby` matching its own visible
+title, a genuine focus trap on open, and its (X) close control genuinely
+closes it; every decorative icon is `aria-hidden`. 11/11 accessibility
+spot-checks PASS.
+
+--------------------------------------------------------------------
+73. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, zero errors (final run).
+
+--------------------------------------------------------------------
+74. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, zero errors, zero warnings (final run, after
+removing the `.tmp-qa` scratch directory — see §84 for a housekeeping
+note on why that removal mattered).
+
+--------------------------------------------------------------------
+75. BUILD
+--------------------------------------------------------------------
+`npm run build` — succeeded. All 24 routes compiled, `/operations/trips/
+new` dynamic (ƒ) as expected.
+
+--------------------------------------------------------------------
+76. SCREENSHOTS CREATED
+--------------------------------------------------------------------
+docs/design/qa/new-trip/ — 8 real PNGs: 5 required widths (empty form),
+1 filled-state, 1 validation-error state, 1 Add Passenger dialog.
+
+--------------------------------------------------------------------
+77. DOCS CREATED
+--------------------------------------------------------------------
+  - docs/product/new-trip-data-map.md
+  - docs/reports/P1-E3-S7-completion-report.txt (this file)
+
+--------------------------------------------------------------------
+78. DOCS UPDATED
+--------------------------------------------------------------------
+  - docs/design/component-inventory.md — new "New Trip components —
+    P1-E3-S7" section, including the real `Select` bug fix and the new
+    `AttentionState` `info` level.
+  - docs/product/application-implementation-plan.md — status summary,
+    screen-implementability matrix row 16, step 7 (S6A) and step 8 (S7)
+    added, step 9 (drag-and-drop)'s stale-numbering caveat corrected,
+    "Next recommended phase" section updated to point at P1-E3-S7A per
+    this work item's own stated expectation (Dispatch drag-and-drop noted
+    as also ready, not required first).
+  - docs/product/ui-backend-gap-register.md — GAP-1/GAP-2 annotated
+    "Built: P1-E3-S7"; the PRODUCT DECISIONS REQUIRED intro paragraph
+    reconfirms Companion/reference-code/Trip-Type/"Organization-Facility
+    requester field" as still open, not resolved.
+  - docs/product/decision-register.md — ZD-153 through ZD-159 (7 new
+    decisions).
+
+--------------------------------------------------------------------
+79. DECISIONS RECORDED
+--------------------------------------------------------------------
+  ZD-153  Missing sections extend the reference's own card-panel style
+  ZD-154  Import request details uses only real fields, never the
+          mockup's inline requester-editor
+  ZD-155  Facility auto-fill: both id and edited snapshot kept together
+  ZD-156  Add New Passenger implemented (direct RLS-protected INSERT)
+  ZD-157  Local→UTC conversion: one explicit, DST-aware server boundary
+  ZD-158  create_trip non-idempotency guarded client-side
+  ZD-159  Pre-creation "Needs Attention" replaced with a calm info note
+
+--------------------------------------------------------------------
+80. FILES CREATED
+--------------------------------------------------------------------
+  src/lib/operations/local-time.ts
+  src/lib/operations/new-trip.ts
+  src/lib/operations/new-trip-options.ts
+  src/lib/operations/new-trip-errors.ts
+  src/app/operations/trips/new/actions.ts
+  src/components/operations/new-trip/FormSection.tsx
+  src/components/operations/new-trip/NewTripForm.tsx
+  src/components/operations/new-trip/AddPassengerDialog.tsx
+  docs/product/new-trip-data-map.md
+  docs/design/qa/new-trip/ (8 screenshots)
+  docs/reports/P1-E3-S7-completion-report.txt
+
+--------------------------------------------------------------------
+81. FILES MODIFIED
+--------------------------------------------------------------------
+  src/app/operations/trips/new/page.tsx (placeholder -> real screen)
+  src/components/operations/OperationsLayoutClient.tsx (New Trip header
+    branch — contextLabel only, no chrome title, matching the reference's
+    own fixed top bar)
+  src/components/ui/Select.tsx (real controlled+placeholder bug fix)
+  src/components/ui/AttentionState.tsx (new `info` level)
+  docs/design/component-inventory.md
+  docs/product/application-implementation-plan.md
+  docs/product/ui-backend-gap-register.md
+  docs/product/decision-register.md
+
+Nothing under `/driver/*`, `/operations/dispatch`, `/operations/trips/
+[tripId]` (Trip Detail — untouched except by its own already-existing
+"+ New Trip" link now pointing at a real page), or
+`/Users/datamatics/Zenward-Web` was touched. No Supabase migration was
+added or modified this phase — entirely built against the already-
+existing `create_trip` RPC and the existing `passengers`/`facilities`/
+`transportation_requests` RLS policies.
+
+--------------------------------------------------------------------
+82. BACKEND GAPS
+--------------------------------------------------------------------
+No new backend gap was found. GAP-1/GAP-2 (already resolved by P1-E3-S0A)
+are now also built against. Four already-recorded "PRODUCT DECISIONS
+REQUIRED" entries (Companion, reference codes, Trip Type, "Organization/
+Facility" requester field) were reconfirmed still open, not newly
+discovered.
+
+--------------------------------------------------------------------
+83. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+84. DEFERRED ITEMS
+--------------------------------------------------------------------
+  - Inline creation of a NEW TransportationRequest from within New Trip
+    (the mockup's own editable requester fields) — deferred (ZD-154);
+    `create_trip` has no parameter for it, and it is architecturally a
+    separate, larger feature.
+  - A real combobox/typeahead component for Passenger/Facility/Request
+    selection, if fixture/production data volume ever warrants replacing
+    the native `<select>`.
+  - Trip Type / Reference code / Companion / "Organization-Facility"
+    requester field — still-open product decisions, unresolved by
+    design.
+  - Dispatch Board drag-and-drop, Driver Location & Live Dispatch
+    Tracking (P1-E3-S7A), Driver GPS, Realtime — all explicitly out of
+    scope this phase, unchanged.
+  Housekeeping note: the `.tmp-qa` scratch directory used for this
+  phase's own headless-Chrome test sessions accumulated ~4.6GB of Chrome
+  user-data-dir profile data (from `--user-data-dir` pointed inside the
+  repo) that briefly caused ESLint to scan and report against files that
+  were never part of the application — caught before finalizing, the
+  entire directory was deleted, and lint/tsc re-confirmed clean
+  afterward. No such directory exists in the final `git status`.
+
+--------------------------------------------------------------------
+85. FUNCTIONAL GATE
+--------------------------------------------------------------------
+All 26 required conditions met:
+  1.  /operations/trips/new no longer placeholder — YES
+  2.  real same-org Passenger selection — YES (§35, 4/4)
+  3.  foreign Passenger hidden/rejected — YES (§35 hidden, §44 rejected)
+  4.  pickup snapshot captured — YES (§42/§43)
+  5.  destination snapshot captured — YES (§42/§43)
+  6.  organization timezone conversion correct — YES (§48, 5/5)
+  7.  create_trip only — YES (no direct trips INSERT anywhere)
+  8.  no direct Trip INSERT — YES (audited, §81's file list is exhaustive)
+  9.  initial state backend-controlled as scheduled — YES (§5, no state
+      parameter exists at all)
+  10. valid create succeeds — YES (§42, 13/13 + 8/8 + 4/4)
+  11. Trip Detail opens — YES (§33/§42)
+  12. Trip appears in Today's Operations when appropriate — YES (§51/§55)
+  13. Trip appears in Dispatch when appropriate — YES (§52/§55)
+  14. Driver does NOT see unassigned Trip — YES (§53, 5/5)
+  15. after assignment, Driver sees Trip — YES (§54/§55)
+  16. invalid Passenger rejected — YES (§44, 2/2)
+  17. invalid Facility rejected — YES (§45)
+  18. invalid Request rejected — YES (§37/§46)
+  19. invalid timing rejected — YES (§46)
+  20. double-submit creates exactly one Trip — YES (§47, 3/3)
+  21. Driver denied New Trip — YES (§38)
+  22. inactive Membership denied — YES (§39)
+  23. role-change denied — YES (§40)
+  24. multi-org isolation preserved — YES (§41)
+  25. no service role — YES (audited — `createServerSupabaseClient`
+      (publishable key) is the only client used anywhere in this phase's
+      code)
+  26. TypeScript/lint/build pass — YES (§73/74/75)
+
+NEW TRIP FUNCTIONAL GATE: READY.
+
+--------------------------------------------------------------------
+86. VISUAL GATE
+--------------------------------------------------------------------
+All 10 required conditions met:
+  1.  real rendered screenshots — YES (8 files, §76)
+  2.  direct reference comparison completed — YES (§68)
+  3.  obvious differences corrected — YES (§70 — the real controlled-
+      Select bug found and fixed, not left as a rendering artifact)
+  4.  layout materially matches reference — YES
+  5.  form hierarchy materially matches reference — YES
+  6.  field density deliberate — YES (dense, fast-entry-oriented, no
+      marketing whitespace, no giant single-field-per-line waste)
+  7.  action hierarchy deliberate — YES (Cancel outline / Create Trip
+      primary, matching the app's singular-CTA-per-screen convention)
+  8.  1024/1280/1440/1600 intentionally designed — YES (reuses the
+      established `xl` 2-column breakpoint, ZD-143's own precedent)
+  9.  768 acceptable/documented — YES (§68)
+  10. no fake fields/data added for fidelity — YES (§71 — every omission
+      is a real gap, never filled with invented data)
+
+NEW TRIP VISUAL GATE: READY.
+
+--------------------------------------------------------------------
+87. OVERALL GATE
+--------------------------------------------------------------------
+FUNCTIONAL GATE: READY. VISUAL GATE: READY.
+
+NEW TRIP IMPLEMENTATION GATE: READY.
+
+--------------------------------------------------------------------
+88. RECOMMENDED NEXT PHASE
+--------------------------------------------------------------------
+P1-E3-S7A — Driver Location & Live Dispatch Tracking, per this work
+item's own stated expectation. Dispatch Board drag-and-drop (ZD-138,
+deferred behind New Trip, now complete) is also fully ready to build
+whenever prioritized instead — neither is a launch requirement; every
+existing surface (including click-to-assign Dispatch) remains fully
+usable regardless of which is picked next.
+====================================================================
+NEW TRIP FUNCTIONAL GATE:
+READY
+
+NEW TRIP VISUAL GATE:
+READY
+
+NEW TRIP IMPLEMENTATION GATE:
+READY
+
+CREATE_TRIP:
+PASS
+
+DIRECT TRIP INSERT:
+NONE
+
+ORGANIZATION TIMEZONE:
+PASS
+
+DOUBLE SUBMIT:
+PASS
+
+TENANT ISOLATION:
+PASS
+
+CREATE → DISPATCH → DRIVER:
+PASS
+
+STITCH VISUAL QA:
+COMPLETE
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S7A — Driver Location & Live Dispatch Tracking
+
+REPORT FILE:
+docs/reports/P1-E3-S7-completion-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; no remote
+Supabase was linked; no Vercel/DNS configuration was touched; Driver
+Location/GPS, Realtime, Facility Portal, public Web intake, and
+production deployment were not begun. This phase stops here.
+====================================================================

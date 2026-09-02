@@ -1865,6 +1865,90 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Design / Engineering
 - **Review Trigger:** None anticipated.
 
+### ZD-153 — New Trip's missing sections extend the reference's own established card-panel visual language
+
+- **Date:** 2026-09-02
+- **Category:** Visual fidelity
+- **Decision:** The Schedule/Pickup/Destination/Instructions & Assistance sections — not shown in the canonical reference's own actual composition (stitch-reference-index.md's own note on 05-internal-new-trip.png) but required by `create_trip`'s real contract (`p_pickup_description`/`p_destination_description` NOT NULL) — reuse the exact card-panel + icon + bold-title header pattern the reference DOES show for "Request Source"/"Passenger", via a new shared `FormSection` component, rather than inventing a second, divergent section style.
+- **Status:** CONFIRMED — implemented and verified via direct screenshot comparison.
+- **Reason:** Preserves composition/hierarchy/spacing/typography consistency (work item §3's explicit requirement) even where content had to be authored without a visual reference — the alternative (a differently-styled ad hoc section) would have been a real, avoidable visual regression relative to the one part of the screen the reference DOES specify.
+- **Affected Product Areas:** `src/components/operations/new-trip/FormSection.tsx`, `NewTripForm.tsx`
+- **Dependencies:** None
+- **Owner:** Design / Engineering
+- **Review Trigger:** A future, more complete Stitch reference for this screen that shows these sections explicitly.
+
+### ZD-154 — "Import request details" uses only real `TransportationRequest` fields, never the mockup's inline requester-editor
+
+- **Date:** 2026-09-02
+- **Category:** Product / Data integrity
+- **Decision:** The Request selector links to an EXISTING same-org `pending`/`accepted` `transportation_requests` row only (`p_request_id`). "Import request details" copies that row's own real fields (`pickup_description`, `destination_description`, `preferred_date`/`preferred_time`, `assistance_notes`, and `passenger_id` when it matches an active Passenger option) into the form. The mockup's own editable Requester Name/Organization/Phone/Email fields and its fabricated "Ref: ZR-240829-104" reference code are NOT built — `create_trip` has no parameter for any of them, and building an inline "create a new inbound Request" flow would be a second, materially larger feature outside this phase's actual mutation contract.
+- **Status:** CONFIRMED — implemented and verified end-to-end (real Request selected → Import → real fields copied → Trip created with `request_id` set → Request atomically transitions `pending` → `accepted`).
+- **Reason:** Matches work item §13/§14/§15 exactly: reflect `create_trip`'s real Request behavior accurately, never force every Trip through a Request, never expose confusing/fabricated fields the backend doesn't actually support.
+- **Affected Product Areas:** `src/lib/operations/new-trip.ts`, `new-trip-options.ts`, `src/components/operations/new-trip/NewTripForm.tsx`
+- **Dependencies:** ZD-045 (Request/Trip separation), P1-E3-S0A's `create_trip` architecture
+- **Owner:** Product / Engineering
+- **Review Trigger:** A future decision to build a real, safe inbound-Request-creation path (distinct from public intake, ZD-044/ZD-050) — at which point this decision should be revisited, not silently expanded around.
+
+### ZD-155 — Facility selection auto-fills the address snapshot; both values are stored together, neither silently discarded
+
+- **Date:** 2026-09-02
+- **Category:** Product / Data integrity
+- **Decision:** Selecting a Pickup/Destination Facility overwrites that side's address `<textarea>` with the Facility's own canonical address, formatted and fully editable afterward. Both the Facility id and the (possibly-edited) address text are submitted to `create_trip` together — the RPC's own validation (tenant/active-status check on the id; non-blank/length check on the text) remains sole authority, and neither value is ever silently dropped in favor of the other.
+- **Status:** CONFIRMED — implemented and verified (edited-after-autofill snapshot persists exactly as edited; Facility link persists alongside it).
+- **Reason:** Matches work item §18/§20 exactly — a Trip may legitimately need an address note beyond a Facility's bare canonical address ("use the side door"), and the execution snapshot must remain the Trip's own text, never silently replaced by a live Facility read.
+- **Affected Product Areas:** `src/lib/operations/new-trip-options.ts` (`formatFacilityAddress`), `NewTripForm.tsx`
+- **Dependencies:** ZD-051-adjacent snapshot-vs-live-reference reasoning (Trip Detail's own Facility-annotation precedent, ZD-152)
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated.
+
+### ZD-156 — Add New Passenger is implemented (direct RLS-protected INSERT), matching the Add Note/ZD-151 precedent
+
+- **Date:** 2026-09-02
+- **Category:** Product / Security
+- **Decision:** "Add New Passenger" is a real, working feature — a direct `passengers` INSERT (`display_name`, `phone`), gated by the existing `passengers_insert_org_operations` RLS policy. The newly-created Passenger is handed directly back to the New Trip form (never a page refresh) and appended to its in-memory option list, so an already-in-progress form is never at risk of losing other typed fields.
+- **Status:** CONFIRMED — implemented and verified (created Passenger persists correctly, org-scoped; unrelated already-typed fields survive the dialog).
+- **Reason:** ui-data-action-map.md had already independently concluded "direct table access is adequate here — Passenger has no lifecycle machine to protect, unlike Trip." Matches work item §11's own allowance ("you MAY implement it... if it does not materially expand this phase") — one table, two columns, the exact affordance the reference itself shows.
+- **Affected Product Areas:** `src/app/operations/trips/new/actions.ts` (`addPassengerAction`), `src/components/operations/new-trip/AddPassengerDialog.tsx`
+- **Dependencies:** ZD-151 (identical direct-INSERT precedent for Add Note)
+- **Owner:** Product / Security
+- **Review Trigger:** None anticipated.
+
+### ZD-157 — Organization-local date/time → UTC conversion: one explicit server-side boundary, DST-aware, no manual arithmetic
+
+- **Date:** 2026-09-02
+- **Category:** Correctness / Timezone
+- **Decision:** `organizationLocalToUtc()` (`src/lib/operations/local-time.ts`) is the sole conversion boundary between a Dispatcher's organization-local `date`+`time` form input and the `timestamptz` values `create_trip` requires — run once, server-side, in `createTripAction`, using the organization's own resolved timezone (never the client's, never the server runtime's). It resolves both DST edge cases explicitly: a nonexistent local time (spring-forward gap) and an ambiguous local time (fall-back repeated hour) are both rejected with an honest, specific error before `create_trip` is ever called — never silently resolved to a guessed instant.
+- **Status:** CONFIRMED — implemented and verified: ordinary EST/EDT dates, a midnight crossing, both DST edge cases, and a second organization timezone (America/Chicago) all verified through the real UI against the real stored `timestamptz`.
+- **Reason:** Matches work item §21/§22/§23 exactly. The two-offset-probe technique (reading the zone's standard and daylight offsets from fixed Jan 1/Jul 1 reference instants, never a hardcoded offset or transition date) correctly handles any US IANA zone without manual DST arithmetic; it does not attempt to handle a zone with more than 2 offset changes within a year, which no organization in this product's current or near-term scope uses (documented limitation, not silently overclaimed).
+- **Affected Product Areas:** `src/lib/operations/local-time.ts`, `src/app/operations/trips/new/actions.ts`
+- **Dependencies:** ZD-119 (organization timezone), P1-E3-S2C's `organizationDayBoundsUtc` (the reverse-direction precedent this reuses the same offset-resolution technique from)
+- **Owner:** Engineering
+- **Review Trigger:** A future organization outside the current Georgia-launch scope whose IANA zone has more than 2 offset changes within a year.
+
+### ZD-158 — `create_trip`'s non-idempotency is guarded client-side, not solved at the database layer
+
+- **Date:** 2026-09-02
+- **Category:** Correctness / Data integrity
+- **Decision:** Double-submit prevention for New Trip is two client-side layers: `disabled={pending}` on the submit button (the established pattern every other mutation dialog in this app already uses), plus a synchronous `useRef` guard on the form's own `onSubmit` handler that closes the narrow race where a very fast repeated click could fire a second submission before React commits the disabled state. No new database-layer idempotency mechanism was added to `create_trip` itself.
+- **Status:** CONFIRMED — verified via a real 5-rapid-synchronous-click reproduction: exactly one `createTripAction` invocation reached the server, exactly one Trip row was created.
+- **Reason:** Matches ZD-102's own explicit review trigger ("if application usage reveals accidental double-submission is a real, recurring problem — revisit whether a deliberate, durable idempotency key belongs in a future revision") — this phase's own testing found the client-side guard sufficient; no evidence yet that a database-layer key is needed.
+- **Affected Product Areas:** `src/components/operations/new-trip/NewTripForm.tsx`
+- **Dependencies:** ZD-102 (create_trip's original non-idempotency decision, unmodified)
+- **Owner:** Engineering
+- **Review Trigger:** Real-world evidence of accidental double-submission getting past the client-side guard (e.g. a network retry after an ambiguous timeout) — ZD-102's own trigger, unchanged.
+
+### ZD-159 — No pre-creation "Needs Attention" advisory; a calm info note replaces it
+
+- **Date:** 2026-09-02
+- **Category:** Visual fidelity / Product
+- **Decision:** The reference's right-rail "Needs Attention — Driver not assigned" advisory (an alarm-styled warning box, anticipating a state the Trip will be in immediately AFTER creation) is not built as shown. Replaced with a calm, non-alarming info note ("Assign a driver after creating this trip") using a new `AttentionState` `info` level.
+- **Status:** CONFIRMED — implemented and verified.
+- **Reason:** A warning about a Trip's unassigned state doesn't make sense before the Trip exists — nothing is actually wrong yet. An honest, forward-looking note sets the same expectation (assignment is a separate, later step, work item §33) without a false alarm.
+- **Affected Product Areas:** `src/components/ui/AttentionState.tsx` (new `info` level, using existing unused `--color-info-*` tokens), `src/components/operations/new-trip/NewTripForm.tsx`
+- **Dependencies:** None
+- **Owner:** Design / Product
+- **Review Trigger:** None anticipated.
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

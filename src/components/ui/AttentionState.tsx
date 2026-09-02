@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
-import { WarningCircle, WarningOctagon } from "@phosphor-icons/react/dist/ssr";
+import { WarningCircle, WarningOctagon, Info } from "@phosphor-icons/react/dist/ssr";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 
 export interface AttentionStateProps {
-  level?: "warning" | "critical";
+  level?: "warning" | "critical" | "info";
   title: string;
   description?: string;
   action?: ReactNode;
@@ -21,6 +21,12 @@ const levelStyles = {
     container: "border-critical-border bg-critical-bg",
     icon: "text-critical-strong",
     IconComponent: WarningOctagon,
+  },
+  /** Calm, non-alarming variant (P1-E3-S7) — for a genuine forward-looking note that isn't a problem (e.g. "you'll assign a Driver after creating this trip"), distinct from warning/critical, which both imply something needs fixing. Uses the existing `--color-info-*` tokens (globals.css), already defined for `StatusBadge`'s `informational` category but unused here until now. */
+  info: {
+    container: "border-info-border bg-info-bg",
+    icon: "text-info-strong",
+    IconComponent: Info,
   },
 } as const;
 

@@ -163,6 +163,16 @@ function buildHeaderProps(pathname: string, organization: OrganizationContext, a
     return { title: "Trip Detail", avatarName };
   }
 
+  // New Trip (P1-E3-S7) — the reference's own fixed top bar (05-internal-
+  // new-trip.png) shows no bold chrome title, only the breadcrumb + icons;
+  // the real "New Trip" heading lives in the page's own scrollable content
+  // as its `<h1>` (no `title` here, so AppHeader renders none — avoids the
+  // same two-`<h1>` mistake S6 found and fixed for Trip Detail, this time
+  // by not introducing a second h1 in the first place).
+  if (pathname === "/operations/trips/new") {
+    return { contextLabel: "New Trip", avatarName };
+  }
+
   return { contextLabel: getContextLabel(pathname), avatarName };
 }
 

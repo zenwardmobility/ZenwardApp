@@ -16,7 +16,7 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Finding:** `trips` INSERT is granted to `authenticated` **without column restriction** (`grant select, insert, update on public.trips to authenticated;`, `supabase/migrations/20260830131700_rls_policies.sql`), gated only by `trips_insert_org_operations` (an org-role check). Unlike UPDATE — which was later revoked and re-granted only for specific planning columns — INSERT was never narrowed. A client-side direct INSERT could set `state` to any value at creation (bypassing the entire lifecycle model this project has otherwise carefully enforced), or set terminal timestamps at creation time.
 - **Severity:** High — this is a real, currently-exploitable gap in the existing schema, not merely a missing feature. It predates this phase (created in P1-E2-S1) but was not caught by any prior audit because no prior phase built a Trip-creation UI to exercise it.
 - **Resolution:** `create_trip` (SECURITY DEFINER RPC, `supabase/migrations/20260831120000_controlled_trip_creation.sql`) is now the sole creation path — `state` is not a parameter at all (structurally impossible to override, not merely rejected at runtime), hard-coded `'scheduled'`. The raw `trips` INSERT grant to `authenticated` is revoked (`20260831120100_retire_direct_trip_insert.sql`, ZD-101), mirroring ZD-092's treatment of `trip_assignments`. Verified: 27 SQL assertions + a forced-failure atomicity test + 6 real-HTTP checks, zero failures, full prior regression (204 total SQL assertions) remains green. See docs/reports/P1-E3-S0A-controlled-trip-creation-report.txt.
-- **Blocks:** Nothing, as of P1-E3-S0A — `/operations/trips/new` can now be safely implemented once P1-E3-S1's auth plumbing exists.
+- **Blocks:** Nothing, as of P1-E3-S0A — `/operations/trips/new` can now be safely implemented once P1-E3-S1's auth plumbing exists. **Built: P1-E3-S7** — see docs/reports/P1-E3-S7-completion-report.txt.
 
 ### GAP-2 — Request-to-Trip conversion / acceptance — **RESOLVED (P1-E3-S0A)**
 
@@ -24,7 +24,7 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Finding:** Reading a `transportation_requests` row to pre-fill a form is already possible (existing RLS SELECT). Nothing currently transitions a Request's `state` from `pending` to `accepted` when a Trip is created from it, despite the schema's own comment describing this as intended ("system-driven, triggered by first Trip creation"). No atomic create-Trip-and-accept-Request operation exists.
 - **Severity:** Medium — depended on GAP-1.
 - **Resolution:** Folded into `create_trip` exactly as recommended — an optional `p_request_id`, validated for tenant consistency and a usable state (`pending`/`accepted`; `declined`/`cancelled` rejected), atomically transitions a `pending` request to `accepted` in the same transaction as the Trip INSERT. Correctly preserves 1:N (an already-`accepted` request — e.g. producing a return-leg Trip — is left untouched, not treated as an error). A `decline_request`-style RPC for the request queue remains unbuilt — not evidenced by any reference in the P1-E3-S0 batch, so not proposed or built here.
-- **Blocks:** Nothing, as of P1-E3-S0A.
+- **Blocks:** Nothing, as of P1-E3-S0A. **Built: P1-E3-S7** — "Import request details" implemented using only real `transportation_requests` fields (never the fabricated Requester-editor fields the reference's own mockup shows for this — see new-trip-data-map.md §4/§7). A `decline_request`-style RPC remains unbuilt, unchanged.
 
 ### GAP-3 — Missing reference images: Driver History and Driver Profile screens — **History built (P1-E3-S3), Profile still open**
 
@@ -114,7 +114,7 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 
 ## PRODUCT DECISIONS REQUIRED (not backend gaps per se — need product input, not engineering, before either can be built)
 
-These block full fidelity of specific UI concepts but are not "missing backend capability" in the RPC/schema sense — they need a defined business rule before any implementation, backend or frontend. **P1-E3-S6 (Operations Trip Detail) reconfirmed the Companion, reference-code, and Trip Type rows below as still open** — none was resolved or implemented, each was simply omitted from the real screen (ZD-148, ZD-149) rather than left unaddressed.
+These block full fidelity of specific UI concepts but are not "missing backend capability" in the RPC/schema sense — they need a defined business rule before any implementation, backend or frontend. **P1-E3-S6 (Operations Trip Detail) reconfirmed the Companion, reference-code, and Trip Type rows below as still open** — none was resolved or implemented, each was simply omitted from the real screen (ZD-148, ZD-149) rather than left unaddressed. **P1-E3-S7 (Internal New Trip) reconfirmed the same three rows, plus the "Organization/Facility" requester field row** — omitted from the real New Trip form for the identical reason (no schema field exists to receive it as a `create_trip` parameter; see new-trip-data-map.md §7).
 
 | Concept | Screens | What's missing |
 |---|---|---|

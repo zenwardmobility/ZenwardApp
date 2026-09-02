@@ -58,7 +58,9 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             disabled={disabled}
             aria-describedby={cn(helpId, errorId) || undefined}
             aria-invalid={Boolean(error) || undefined}
-            defaultValue={props.defaultValue ?? (placeholder ? "" : undefined)}
+            {...(props.value === undefined
+              ? { defaultValue: props.defaultValue ?? (placeholder ? "" : undefined) }
+              : {})}
             className={cn(
               typography.body,
               "h-10 w-full appearance-none rounded-sm border bg-surface-elevated pl-3 pr-9 text-text-primary disabled:cursor-not-allowed disabled:bg-surface-secondary disabled:text-text-disabled",

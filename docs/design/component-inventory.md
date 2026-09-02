@@ -118,6 +118,19 @@ Full field-level rationale: [dispatch-board-data-map.md](../product/dispatch-boa
 
 Full field-level rationale: [operations-trip-detail-data-map.md](../product/operations-trip-detail-data-map.md).
 
+## New Trip components — P1-E3-S7
+
+| Component | Status | Change |
+|---|---|---|
+| `FormSection` | **New** | The card-panel + icon + bold-title header pattern the reference establishes for "Request Source"/"Passenger", extended here to the Schedule/Pickup/Destination/Instructions & Assistance sections the reference's own composition doesn't show (see the data map). |
+| `NewTripForm` | **New** | The one controlled client orchestrator — real `<form>` + Server Action (`useActionState`), holds Facility-select-populates-address and Request-Import cross-field state, plus the double-submit guard (create_trip is non-idempotent, ZD-102). |
+| `AddPassengerDialog` | **New** | Built on the shared `Dialog` primitive, mirrors `AddNoteDialog`'s real-RLS-INSERT pattern exactly — never `router.refresh()`s (would risk clearing an in-progress form); hands the created Passenger back to the parent form directly. |
+| `AttentionState` (`src/components/ui/AttentionState.tsx`) | **Extended** | Added an `info` level (calm, non-alarming — for "you'll assign a driver after creating this trip") using the existing `--color-info-*` tokens, already defined in `globals.css` for `StatusBadge`'s `informational` category but unused by `AttentionState` until now. `warning`/`critical` unchanged. |
+| `Select` (`src/components/ui/Select.tsx`) | **Fixed (real bug)** | Found via this phase's own real browser testing: `Select` unconditionally set `defaultValue` whenever a `placeholder` was given, even when the caller also passed a controlled `value` — React's "must be either controlled or uncontrolled" warning, the first genuinely NEW usage pattern (a controlled `Select` with a placeholder) to exercise this latent defect. Fixed to only set `defaultValue` when the caller hasn't passed `value` — benefits any future controlled-`Select`-with-placeholder usage. |
+| `Dialog`, `Select`, `Input`, `Textarea`, `Button`, `LinkButton`, `Panel` | Reused unchanged | No new form-field primitive was needed beyond the `Select` fix above. |
+
+Full field-level rationale: [new-trip-data-map.md](../product/new-trip-data-map.md).
+
 ## Explicitly not building generically
 
 Per work item §35's own caution: no generic "Card" or "ListItem" abstraction is proposed merely for reuse. `DispatchQueueCard`, `DriverCapacityCard`, `TripRouteTimeline`, etc. are each named for what they specifically show, following the existing codebase's own pattern (`DriverTripCard`, not a generic `Card`).
