@@ -31,3 +31,30 @@ export function mapTripExceptionError(code: string | undefined): TripExceptionEr
 export function tripExceptionErrorMessage(code: TripExceptionErrorCode): string {
   return TRIP_EXCEPTION_ERROR_MESSAGE[code];
 }
+
+/**
+ * A restrained, explicit MVP exception-type list (P1-E3-S8, work item
+ * §20/ZD-1xx) — `exception_type` remains genuinely free text at the
+ * schema layer (no CHECK constraint, "taxonomy not yet finalized"); this
+ * is an APPLICATION-layer convenience only, chosen deliberately after
+ * inspecting the actual schema and product need, not merely copied from
+ * the work item's own illustrative list without review. A future value
+ * outside this set is not blocked by the database.
+ *
+ * P1-E3-S8B: moved here (from being defined locally inside
+ * ReportIssueDialog.tsx, and separately re-listed as a bare Set in the
+ * Operations Server Action file) so both the Operations dialog and the
+ * new Driver-facing one (§37) share exactly one list — never two
+ * independently-maintained copies of the same categories.
+ */
+export const EXCEPTION_TYPE_OPTIONS = [
+  { value: "driver_issue", label: "Driver issue" },
+  { value: "vehicle_issue", label: "Vehicle issue" },
+  { value: "passenger_not_ready", label: "Passenger not ready" },
+  { value: "pickup_issue", label: "Pickup issue" },
+  { value: "facility_delay", label: "Facility delay" },
+  { value: "route_issue", label: "Route issue" },
+  { value: "other", label: "Other" },
+];
+
+export const EXCEPTION_TYPE_VALUES = new Set(EXCEPTION_TYPE_OPTIONS.map((o) => o.value));

@@ -33,7 +33,11 @@ export interface AssignmentGridProps {
 /** Bare active-state labels read as "in progress" (teal); "Assigned"/"Scheduled" read as pending — matches the same category distinction TripStatus/operationsTripStatusLabel already makes, applied to plain text here rather than a full badge, to keep the dense grid scannable. */
 const IN_PROGRESS_LABELS = new Set(["En Route", "Arrived", "Passenger Onboard"]);
 
-const ROW_LABEL_WIDTH_PX = 140;
+// P1-E3-S8B: widened from 140px — real driver names plus a vehicle label
+// and freshness link were visibly truncating mid-word in QA (work item
+// §12/§28). Unlike the trip-block width below, this column carries no
+// time semantics, so widening it has no misleading side effect.
+const ROW_LABEL_WIDTH_PX = 168;
 
 /**
  * "Today's Assignments" — the center time-axis grid
@@ -102,11 +106,13 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
                   className="flex shrink-0 flex-col justify-center gap-0.5 border-r border-border-subtle px-3"
                   style={{ width: ROW_LABEL_WIDTH_PX, height: GRID_ROW_HEIGHT_PX }}
                 >
-                  <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
+                  <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")} title={row.driver.displayName}>
                     {row.driver.displayName}
                   </p>
                   {row.trips[0]?.vehicleLabel && (
-                    <p className={cn(typography.metadata, "truncate text-text-muted")}>{row.trips[0].vehicleLabel}</p>
+                    <p className={cn(typography.metadata, "truncate text-text-muted")} title={row.trips[0].vehicleLabel}>
+                      {row.trips[0].vehicleLabel}
+                    </p>
                   )}
                   {location && (
                     <a
@@ -162,7 +168,7 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
                             title="Open issue reported"
                           />
                         )}
-                        <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
+                        <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")} title={trip.passengerName}>
                           {trip.passengerName}
                         </p>
                         <p

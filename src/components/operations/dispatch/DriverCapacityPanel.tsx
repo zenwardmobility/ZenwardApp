@@ -40,12 +40,19 @@ export function DriverCapacityPanel({ driverRows }: DriverCapacityPanelProps) {
                 <Avatar name={driver.displayName} size="sm" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
+                    <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")} title={driver.displayName}>
                       {driver.displayName}
                     </p>
                     {onTrip && <StatusBadge label="On Trip" category="active" />}
                   </div>
-                  <p className={cn(typography.metadata, "truncate text-text-muted")}>
+                  <p
+                    className={cn(typography.metadata, "truncate text-text-muted")}
+                    title={
+                      onTrip
+                        ? `${onTrip.passengerName}${onTrip.vehicleLabel ? ` · ${onTrip.vehicleLabel}` : ""}`
+                        : undefined
+                    }
+                  >
                     {onTrip
                       ? `${onTrip.passengerName}${onTrip.vehicleLabel ? ` · ${onTrip.vehicleLabel}` : ""}`
                       : trips.length > 0

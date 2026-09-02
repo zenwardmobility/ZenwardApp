@@ -43,6 +43,9 @@ export default async function DispatchBoardPage() {
           { label: "trips today", value: data.summary.todayCount },
           { label: "unassigned", value: data.summary.unassignedCount, tone: "warning", dot: true },
           { label: "active", value: data.summary.activeCount, dot: true },
+          ...(data.summary.attentionCount > 0
+            ? [{ label: "need attention", value: data.summary.attentionCount, tone: "warning" as const, dot: true }]
+            : []),
         ]}
       />
 

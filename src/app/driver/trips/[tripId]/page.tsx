@@ -11,6 +11,7 @@ import { DriverActiveTripLegs } from "@/components/driver/DriverActiveTripLegs";
 import { DriverInstruction } from "@/components/driver/DriverInstruction";
 import { DriverLifecycleAction } from "@/components/driver/DriverLifecycleAction";
 import { DriverLocationTracker } from "@/components/driver/DriverLocationTracker";
+import { DriverReportIssueButton } from "@/components/driver/DriverReportIssueButton";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 import {
@@ -135,7 +136,18 @@ export default async function DriverTripDetailPage({ params }: { params: Promise
       </Panel>
 
       {nextAction && (
-        <DriverLifecycleAction tripId={tripId} currentState={state} rpc={nextAction.rpc} label={nextAction.label} />
+        <>
+          {/* P1-E3-S8B (work item §37): the reference shows Report Issue
+              as a clear, natural affordance here, and the backend (after
+              P1-E3-S8A's own hardening) now safely supports exactly this
+              scope — current assignment only, non-terminal only, the
+              same controlled RPC, no Driver resolve, no broad exception
+              read. Gated on `nextAction` (the same signal that gates the
+              lifecycle button below) since a Trip with no next action is
+              terminal, and report_trip_exception would deny it anyway. */}
+          <DriverReportIssueButton tripId={tripId} className="w-full" />
+          <DriverLifecycleAction tripId={tripId} currentState={state} rpc={nextAction.rpc} label={nextAction.label} />
+        </>
       )}
     </div>
   );

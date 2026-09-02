@@ -6,7 +6,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { mapTripDetailError, type TripDetailErrorCode } from "@/lib/operations/trip-detail-errors";
-import { mapTripExceptionError, type TripExceptionErrorCode } from "@/lib/operations/trip-exception-errors";
+import { mapTripExceptionError, type TripExceptionErrorCode, EXCEPTION_TYPE_VALUES } from "@/lib/operations/trip-exception-errors";
 
 export interface TripDetailActionState {
   status: "idle" | "success" | "error";
@@ -154,16 +154,6 @@ export interface TripExceptionActionState {
   errorCode?: TripExceptionErrorCode;
 }
 
-const EXCEPTION_TYPES = new Set([
-  "driver_issue",
-  "vehicle_issue",
-  "passenger_not_ready",
-  "pickup_issue",
-  "facility_delay",
-  "route_issue",
-  "other",
-]);
-
 /**
  * Report Issue — the real `report_trip_exception` RPC only, never a
  * direct `trip_exceptions` INSERT (work item §19/§24 of P1-E3-S8; see
@@ -184,7 +174,7 @@ export async function reportExceptionAction(
   if (typeof tripId !== "string" || tripId.length === 0) {
     return { status: "error", errorCode: "NOT_FOUND" };
   }
-  if (typeof exceptionType !== "string" || !EXCEPTION_TYPES.has(exceptionType)) {
+  if (typeof exceptionType !== "string" || !EXCEPTION_TYPE_VALUES.has(exceptionType)) {
     return { status: "error", errorCode: "INVALID_INPUT" };
   }
   if (typeof description !== "string" || description.trim().length === 0) {

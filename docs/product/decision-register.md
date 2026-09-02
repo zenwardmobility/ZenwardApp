@@ -2177,6 +2177,78 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Security
 - **Review Trigger:** A future phase that decouples "Trip terminal" from "assignment closed" (none currently planned — every terminal-reaching RPC closes the assignment by design, and changing that would itself be a significant, separately-reviewed lifecycle-model change).
 
+### ZD-179 — Operations sidebar converges to dark Care Navy, per the canonical Stitch references
+
+- **Date:** 2026-09-02
+- **Category:** Design
+- **Decision:** `OperationsSidebar` moves from the light (`bg-surface-elevated`) treatment every prior phase used to the dark Care Navy background the canonical references (01, 02, 03, 05) all consistently show. A new, dedicated `--color-navy-*` token set (surface, muted text, border, hover/active backgrounds, active text) is added to `globals.css`, reserved for this one component.
+- **Status:** CONFIRMED — implemented, screenshot-confirmed across all 4 Operations screens at the reference-matched viewport, contrast spot-checked live (real distinct background/text colors resolved, no invisible-text regression).
+- **Reason:** The single largest, most visible systemic deviation this phase's own audit found — every prior phase explicitly accepted it as temporary while backend functionality was the priority (P1-E3-S8B's own stated premise: "that tolerance ENDS in P1-E3-S8B"). Fixed at the shared-component level, not patched per-page, per the phase's own explicit instruction (§12).
+- **Affected Product Areas:** `src/components/operations/OperationsSidebar.tsx`, `src/app/globals.css`
+- **Dependencies:** None
+- **Owner:** Design
+- **Review Trigger:** None anticipated — this is now the canonical treatment.
+
+### ZD-180 — Logo-on-dark rendered via a plain white badge chip, never a redesigned asset
+
+- **Date:** 2026-09-02
+- **Category:** Design
+- **Decision:** `zenward-mobility-logo.png`, confirmed by direct pixel inspection to be a flat 8-bit RGB PNG with no alpha channel (an opaque white background baked into the file), is wrapped in a small plain white rounded badge (`bg-white`, padded, rounded) inside the now-dark sidebar header, rather than placed directly on navy (which rendered as a jarring white rectangle) or redesigned/recolored.
+- **Status:** CONFIRMED — implemented, visually confirmed clean.
+- **Reason:** The approved brand rules explicitly forbid redesigning the logo or creating an alternate version (work item §3). A plain badge chip is a standard, non-decorative, widely-used pattern for reconciling a light-background asset with a dark shell — it does not touch the artwork's own pixels, and is not a gradient/glassmorphism/novelty device the same rules also forbid.
+- **Affected Product Areas:** `src/components/operations/OperationsSidebar.tsx`
+- **Dependencies:** ZD-179 (the dark-sidebar decision that exposed this)
+- **Owner:** Design
+- **Review Trigger:** If a transparent-background version of the approved logo is ever produced, revisit whether the badge chip is still needed.
+
+### ZD-181 — A real accessible `Combobox` primitive replaces the temporary native Passenger `<select>`
+
+- **Date:** 2026-09-02
+- **Category:** Design / Accessibility
+- **Decision:** `src/components/ui/Combobox.tsx` — a WAI-ARIA "combobox with list autocomplete, manual selection" implementation (full keyboard support, `aria-activedescendant`-tracked highlighting with DOM focus never leaving the input, a real empty state, search matching name or phone) — replaces New Trip's native `<select>` for Passenger selection, explicitly flagged as temporary since P1-E3-S7 and explicitly named by this phase's own work item (§20/§21) as the item most likely to warrant a real build.
+- **Status:** CONFIRMED — implemented, 5/5 keyboard/ARIA assertions PASS, 3/3 end-to-end trip-creation assertions PASS (real DB row, real combobox-selected passenger, real typed addresses), 4/4 additional accessibility spot-checks PASS.
+- **Reason:** The reference's own richer search/select composition (search input → filtered results → a distinct selected-item card with an avatar, identity, and a clear remove control) materially exceeds what a native `<select>` can express, and Passenger is exactly the kind of larger, genuinely-searchable option set the work item itself distinguishes from "a simple short select" that should NOT be replaced merely for novelty (§20's own caution, respected — Vehicle/Facility short selects were deliberately left as plain `Select`).
+- **Affected Product Areas:** `src/components/ui/Combobox.tsx` (new), `src/components/operations/new-trip/NewTripForm.tsx`
+- **Dependencies:** None
+- **Owner:** Design / Engineering
+- **Review Trigger:** A future screen with a similarly large/searchable option set (evaluate case-by-case, per §20 — never applied reflexively).
+
+### ZD-182 — Driver-facing "Report Issue" built, since the reference shows it and the hardened backend now safely supports exactly that scope
+
+- **Date:** 2026-09-02
+- **Category:** Product / Security
+- **Decision:** `DriverReportIssueButton`/`DriverReportIssueDialog` added to Driver Active Trip, calling the same `report_trip_exception` RPC through the same Server Action authorization layering as every other Driver mutation. GAP-7's report-side is now closed; the exception-status LIST/read side remains explicitly open.
+- **Status:** CONFIRMED — implemented, verified end-to-end (button renders, dialog submits, a real `trip_exceptions` row is created with the correct actor).
+- **Reason:** Work item §37 set an explicit, conditional bar for building this: the reference must show a clear, natural affordance (it does — Reference 04's own secondary button row) AND the backend must already safely support exactly that scope. Both were true only as of THIS phase, because P1-E3-S8A (immediately prior) tightened Driver exception-reporting from "ever assigned" to "currently assigned" — building this before that hardening would have let a reassigned-away or post-terminal Driver keep reporting, which is exactly the gap S8A closed. No new authorization logic was added for this feature; it inherits S8A's contract entirely.
+- **Affected Product Areas:** `src/components/driver/DriverReportIssueButton.tsx`, `src/components/driver/DriverReportIssueDialog.tsx`, `src/app/driver/trips/[tripId]/actions.ts`, `src/lib/operations/trip-exception-errors.ts` (the 7-value issue-type list moved here so both the Operations and Driver dialogs share one source, not two independently-maintained copies)
+- **Dependencies:** ZD-178 (the S8A authorization tightening this feature relies on entirely)
+- **Owner:** Product / Security
+- **Review Trigger:** None anticipated.
+
+### ZD-183 — Embedded Leaflet map deferred again; the external-link MVP is retained
+
+- **Date:** 2026-09-02
+- **Category:** Architecture / Scope discipline
+- **Decision:** Dispatch's live-location display remains the external OpenStreetMap link established in P1-E3-S7A (ZD-166) — an embedded, read-only Leaflet+OpenStreetMap view (explicitly permitted by this phase's own work item §29, under conditions this project could in fact meet: no paid API key, no new tracking capability, real coordinates only, no fabricated marker/ETA/geofence) was evaluated and NOT built this phase.
+- **Status:** CONFIRMED — a deliberate, documented non-change, not an oversight.
+- **Reason:** Building a genuine embedded map (tile-provider wiring, marker rendering, a real bundle-size/performance measurement per work item §52) is a meaningfully-sized addition on top of an already-large, 7-screen convergence pass. The blocker is scope/effort discipline, not the dependency or privacy profile (both were confirmed acceptable) — the phase's own explicit non-goal ("not a feature-expansion phase") and its own instruction not to let a single item "materially expand scope" were both judged to apply here.
+- **Affected Product Areas:** None (no code change)
+- **Dependencies:** ZD-166 (unchanged, reaffirmed)
+- **Owner:** Design / Engineering
+- **Review Trigger:** A future phase explicitly scoped and budgeted to build the embedded map as its own deliverable, with a real performance measurement — not folded incidentally into an unrelated phase again.
+
+### ZD-184 — Driver header stays page-title-first; not reverted to a brand-name-first pattern to chase literal reference parity
+
+- **Date:** 2026-09-02
+- **Category:** Design
+- **Decision:** Driver Today/Trips/Active Trip headers continue showing the page title ("Today"/"Trips"/"Trip") + Driver name, rather than the reference's own "Zenward Mobility" brand-name-first + shift-status header. This was reconsidered (not merely left unexamined) this phase and explicitly kept as-is.
+- **Status:** CONFIRMED — a deliberate non-change.
+- **Reason:** Two considerations outweighed literal reference-matching here: (1) the page-title-first pattern is already consistent across all 3 Driver screens, an internally-coherent, pre-existing choice — changing only Active Trip's header to match the reference would have introduced a NEW cross-screen inconsistency, which work item §55's own second-pass mandate explicitly weighs against single-screen literal fidelity; (2) the reference's "On Shift" status has no backing schema concept (same Driver-availability gap as GAP-6) and would need to be omitted regardless, undercutting most of the value of matching that header composition in the first place.
+- **Affected Product Areas:** None (no code change)
+- **Dependencies:** None
+- **Owner:** Design
+- **Review Trigger:** A future phase that also builds a real Driver shift-status concept, at which point this header composition is worth revisiting as a package with that feature, not in isolation.
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

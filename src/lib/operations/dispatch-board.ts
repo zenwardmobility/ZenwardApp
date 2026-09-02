@@ -177,6 +177,14 @@ export interface DispatchBoardData {
     todayCount: number;
     unassignedCount: number;
     activeCount: number;
+    /** Today's board Trips with a real open TripException — reuses
+     * openExceptionTripIds, already fetched for the per-block marker
+     * (P1-E3-S8), rather than a second query. Deliberately excludes
+     * unassignedCount from this figure's own meaning: "needs assignment"
+     * and "has an open issue" are different attention reasons, shown as
+     * two separate honest counts, never merged into one ambiguous
+     * number (P1-E3-S8B, work item §28). */
+    attentionCount: number;
   };
 }
 
@@ -278,6 +286,7 @@ export async function getDispatchBoardData(organizationId: string, timezone: str
       todayCount: trips.length,
       unassignedCount: unassignedTrips.length,
       activeCount: trips.filter((trip) => trip.isActiveState).length,
+      attentionCount: trips.filter((trip) => trip.hasOpenException).length,
     },
   };
 }

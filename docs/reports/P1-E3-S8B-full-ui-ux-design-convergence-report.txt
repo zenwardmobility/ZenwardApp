@@ -1,0 +1,757 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S8B — Full Product UI/UX Design Convergence
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 17f7a6a "Implement Trip Assurance and harden
+                       exception mutations" (contains the real P1-E3-S8
+                       + P1-E3-S8A diff, plus the S8A1 audit report —
+                       verified via `git show --stat` before proceeding,
+                       matching the exact 42-file set both phases' own
+                       completion reports independently declared)
+Date/time:            2026-09-02
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------
+Ran the exact commands the work item specified: `git status --short`
+was CLEAN; `git log --oneline -7` showed 17f7a6a at HEAD; `git rev-parse
+HEAD` confirmed 17f7a6a5e5cef202da7ec6a05a77a19613bb8bb9. P1-E3-S8/S8A
+were confirmed genuinely committed (not merely message-labeled) via
+`git show --stat 17f7a6a`, which listed all 42 expected files (the S8
++ S8A diff plus the S8A1 audit report, `docs/design/qa/trip-assurance/`
+screenshots, both migrations, both new test files) — this commit did
+not exist at the start of the P1-E3-S8A1 audit turn and was made
+between that turn and this one, outside this phase's own work. No
+unexplained changes were present; the checkpoint required no
+intervention.
+
+--------------------------------------------------------------------
+2. REFERENCES INSPECTED
+--------------------------------------------------------------------
+All 7 canonical Stitch references were opened and visually inspected
+directly (not assumed from `stitch-reference-index.md`'s own text
+description alone): 01-todays-operations.png, 02-trip-detail.png,
+03-dispatch-board.png, 04-driver-active-trip.png,
+05-internal-new-trip.png, 06-driver-today.png, 07-driver-trips.png.
+`stitch-reference-index.md` and `component-inventory.md` were also read
+in full before any comparison began.
+
+--------------------------------------------------------------------
+3. BASELINE CAPTURE INVENTORY
+--------------------------------------------------------------------
+Before-fix screenshots captured for all 7 screens at every required
+viewport, real authenticated seeded data, saved under
+`docs/design/qa/ui-convergence/before/`:
+  - Operations (01, 02, 03, 05): 768x1024, 1024x768, 1280x800,
+    1440x900, 1600x1000 — 5 each, 20 total.
+  - Driver (04, 06, 07): 390x844, 430x932, 768x1024, 1024x768 — 4 each,
+    12 total.
+32 before-screenshots total. The dev server used throughout this phase
+was the user's own already-running instance (port 3000, started
+outside this session) — a second instance on port 3401 refused to bind
+(Next.js's own single-instance-per-project lock), and the existing
+server was reused rather than killing a process this session did not
+start.
+
+--------------------------------------------------------------------
+4. GLOBAL VISUAL DEBT FOUND
+--------------------------------------------------------------------
+Three systemic (cross-screen) findings, full detail in
+`docs/design/ui-convergence-audit.md`:
+  G1. Sidebar rendered light; every reference shows dark Care Navy —
+      the single largest, most visible deviation in the whole audit.
+  G2. Fixing G1 exposed a real asset defect: the approved logo PNG has
+      no alpha channel (confirmed by direct pixel inspection) — an
+      opaque white background rendered as a jarring box on navy.
+  G3. Dispatch's driver-row labels (name + vehicle + freshness link)
+      were truncating mid-word in a 140px column.
+
+--------------------------------------------------------------------
+5. SHELL AUDIT
+--------------------------------------------------------------------
+Audited as one system per work item §12: sidebar width (unchanged,
+already correct — icon-only at md, full at lg+), logo position
+(unchanged position, fixed rendering per G2), nav spacing/icon
+sizes/active-item treatment (restyled for the dark surface, geometry
+unchanged), sidebar background (G1), sidebar bottom account area
+(restyled for dark, structure unchanged), header height/alignment
+(already correct, unchanged), breadcrumb behavior (already correct),
+avatar treatment (already correct — initials-only, no photo dependency,
+unaffected by the sidebar's own color change), utility icons (already
+correct), content max-width/page gutters (already correct). Fixed at
+the shared `OperationsSidebar.tsx` component level, not patched
+per-page — a single change now applies identically to all 4 Operations
+screens.
+
+--------------------------------------------------------------------
+6. TYPOGRAPHY AUDIT
+--------------------------------------------------------------------
+Spot-checked across all 7 screens: every page/section/card title, body,
+metadata, table, button, and status text already routes through the
+existing `typography.*` named scale (`pageTitleOperational`,
+`sectionHeading`, `subsectionHeading`, `body`, `bodySmall`, `metadata`,
+`label`, `button`) — no one-off `text-[Npx]` values were found in any
+file this phase touched or reviewed. Manrope/Inter family assignment
+confirmed correct (Manrope on `h1`s only). No change required.
+
+--------------------------------------------------------------------
+7. SPACING AUDIT
+--------------------------------------------------------------------
+`--spacing-zw-*` tokens confirmed in exclusive use across every file
+touched this phase — no bare `gap-md`/`p-lg` (the reserved-keyword
+collision ZD-11x already documented) was reintroduced anywhere,
+including the two new components (`Combobox.tsx`,
+`DriverReportIssueDialog.tsx`).
+
+--------------------------------------------------------------------
+8. RADIUS/BORDER AUDIT
+--------------------------------------------------------------------
+`Combobox`'s input and listbox popup use the same `rounded-sm`/
+`border-border-strong`/`border-border-subtle` tokens as every other
+form control and floating surface in the app — no new radius value was
+introduced. Panels, cards, dialogs, and the new selected-passenger card
+all confirmed consistent (`rounded-sm` for cards, the existing `Dialog`
+primitive's own `rounded-md` for the modal itself).
+
+--------------------------------------------------------------------
+9. SHADOW AUDIT
+--------------------------------------------------------------------
+Only the `Combobox`'s own listbox popup gained a new `shadow-md` this
+phase — a genuinely floating, elevated surface, consistent with the
+existing 2-level shadow policy (design-tokens.md §7); no card was
+converted to a shadow-based "floating tile" treatment anywhere.
+
+--------------------------------------------------------------------
+10. BUTTON AUDIT
+--------------------------------------------------------------------
+Audited `primary`/`outline`/`destructive` usage across all 7 screens:
+one dominant primary action per screen preserved everywhere; the new
+Driver "Report Issue" button is deliberately `outline`, never competing
+with the primary lifecycle CTA beneath it; `IconButton`'s existing
+`label`-required contract was reused for the new selected-passenger
+Remove control (no new icon-only button was added without an accessible
+name). No new button variant, size, or state was introduced.
+
+--------------------------------------------------------------------
+11. INPUT AUDIT
+--------------------------------------------------------------------
+`Input`/`Select`/`Textarea` unchanged this phase — all already
+consistent (h-10, rounded-sm, border-border-strong, a real label,
+optional help/error text). The new `Combobox` matches this exact
+visual contract (same height, border, radius, label pattern) so it
+reads as one family, not a bolted-on outlier.
+
+--------------------------------------------------------------------
+12. COMBOBOX DECISION
+--------------------------------------------------------------------
+Built `src/components/ui/Combobox.tsx` — see §29-32 below and ZD-181
+for the full decision record. Not applied to Vehicle or Facility (both
+remain short, non-searched `<select>`s) — the work item's own explicit
+caution against reaching for a combobox "merely for novelty" was
+respected; Passenger is the one field where the reference itself shows
+real search behavior over a genuinely larger, growing option set.
+
+--------------------------------------------------------------------
+13. STATUS-SYSTEM AUDIT
+--------------------------------------------------------------------
+Re-confirmed the lifecycle-vs-Assurance badge separation (work item
+§44) is intact everywhere: `TripStatus`/`driverTripStateLabel` (Scheduled,
+En Route, Passenger Onboard, Completed…) never blended with
+`StatusBadge`/`assuranceStatusCategory()` (Open issue, Needs assignment,
+Location needs update/unavailable, No current issues). No change was
+needed; documented explicitly in the new `zenward-ui-system.md` §6 so
+this separation is a stated rule, not merely an accident of how the
+code happens to be organized today.
+
+--------------------------------------------------------------------
+14. ICON AUDIT
+--------------------------------------------------------------------
+Phosphor confirmed the sole icon source across every file touched this
+phase, including the two new components (`MagnifyingGlass` in
+Combobox, `WarningCircle`/`X` in the Driver Report Issue components) —
+no second icon library was introduced. Icon sizing (`size-4`/`size-5`)
+and `aria-hidden` usage on every decorative icon confirmed consistent
+with the existing pattern.
+
+--------------------------------------------------------------------
+15. COPY AUDIT
+--------------------------------------------------------------------
+All new user-facing copy reviewed for AI-style filler: "Report Issue,"
+"Let dispatch know about a problem with this trip," "No matches," "Search
+by name or phone number" — terse, operational, no "Seamlessly…"/
+"Effortlessly…"/"Intelligent…"/"Smart…" language anywhere. Driver-facing
+copy (`DriverReportIssueDialog`) is shorter than its Operations
+counterpart, matching the established "Driver copy should be even
+shorter" principle.
+
+--------------------------------------------------------------------
+16-19. TODAY'S OPERATIONS (before/discrepancies/corrections/final)
+--------------------------------------------------------------------
+Before: light sidebar; otherwise already close to the reference (real
+summary strip, real attention queue with the correct Trip Assurance
+integration from P1-E3-S8, real Upcoming Trips/Active Trips/Activity
+Log). Discrepancies found: G1 (sidebar) and 4 JUSTIFIED items (4th
+summary metric definition, Needs Attention column semantics, absent
+Driver Availability panel, Assign/Open-Trip vs. Assign/Review/Call
+action verbs) — full detail and reasoning in
+`docs/design/ui-convergence-audit.md`. Corrections: G1 only (sidebar).
+Final: screenshot-confirmed at all 5 required widths, no P0/P1 left
+unexplained. **VISUAL READY.**
+
+--------------------------------------------------------------------
+20-23. TRIP DETAIL (before/discrepancies/corrections/final)
+--------------------------------------------------------------------
+Before: light sidebar; the specific fixture Trip inspected happened to
+be in a terminal (Completed, unassigned) state, which initially made
+the action-cluster comparison look more different than it structurally
+is — re-verified against an active-state Trip's own action set (Cancel,
+Record No-Show, Contact Driver, Report Issue, Resolve — all already
+real and working since P1-E3-S6/S8) before concluding anything.
+Discrepancies: G1 (sidebar), 2 JUSTIFIED (no Trip reference code, no
+Trip Type/Companion — no schema field for any of the three, matches
+the reference's own already-documented "ambiguous concepts"), 1 P2
+(Trip Exceptions panel is slightly more spacious than the reference's
+own compact inline treatment — not touched this phase, noted for a
+future refinement). Corrections: G1 only. **VISUAL READY.**
+
+--------------------------------------------------------------------
+24-27. DISPATCH (before/discrepancies/corrections/final)
+--------------------------------------------------------------------
+Before: light sidebar, G3 truncation, and a missing 4th "need attention"
+summary metric despite the underlying exception data already being
+fetched for the per-block marker. Discrepancies: G1, G3, the missing
+metric, 2 JUSTIFIED (Driver Availability pills, "REVIEW"/return-
+confirmation advisory — no backing taxonomy for either). Corrections:
+G1 fixed; G3 fixed (`ROW_LABEL_WIDTH_PX` 140→168, `title` fallbacks
+added across `AssignmentGrid`/`DriverCapacityPanel`); the "need
+attention" metric added (`summary.attentionCount`, reusing the existing
+`openExceptionTripIds` set — no new query — rendered as a 4th,
+conditional summary item). Final: screenshot-confirmed, driver names no
+longer clip in the QA fixtures used. **VISUAL READY.**
+
+--------------------------------------------------------------------
+28. EMBEDDED-MAP DECISION
+--------------------------------------------------------------------
+Evaluated per work item §29 and NOT built this phase — see ZD-183 for
+the full reasoning. Summary: all of the work item's stated preconditions
+for building it (no paid key, no new tracking capability, real
+coordinates only, no fabricated marker/ETA/geofence) were confirmed
+achievable, but a genuine embedded map is a meaningfully-sized addition
+(tile-provider wiring, marker rendering, a real bundle-size/performance
+measurement) that would have materially expanded an already-large,
+7-screen convergence pass. The external-link MVP (ZD-166, P1-E3-S7A) is
+retained as a documented, deliberate, re-evaluable remaining deviation
+— not an oversight.
+
+--------------------------------------------------------------------
+29-32. NEW TRIP (before/discrepancies/corrections/final)
+--------------------------------------------------------------------
+Before: light sidebar; the reference's own "Request Source" panel
+absent (a pre-existing, already-documented P1-E3-S7 architectural
+decision, re-verified not newly discovered); Passenger still the
+temporary native `<select>` explicitly flagged for this phase. This was
+judged the single most consequential remaining item in the entire
+audit — the one item the work item itself named explicitly (§20/§21) as
+likely warranting a real build. Corrections: G1 fixed; the Passenger
+field rebuilt on a new `Combobox` primitive (full WAI-ARIA "combobox
+with list autocomplete" pattern — keyboard Up/Down/Home/End/Enter/
+Escape, `aria-activedescendant`, a real empty state, search matching
+name or phone), rendering the reference's own selected-passenger card
+composition (Avatar initials + name + phone + a Remove `IconButton`) on
+selection via a hidden form field. Verified: 5/5 keyboard/ARIA
+assertions, 3/3 end-to-end trip-creation assertions (real DB row, real
+selected passenger, real typed addresses), full regression re-run
+clean. Right-rail advisory tone (blue/informational vs. the reference's
+amber/warning) reviewed and kept as a deliberate, more-honest choice
+(no real Assurance condition exists for a Trip that doesn't exist yet)
+— P2, not changed. **VISUAL READY.**
+
+--------------------------------------------------------------------
+33-36. DRIVER TODAY (before/discrepancies/corrections/final)
+--------------------------------------------------------------------
+Before: already close to the reference. One finding from this audit's
+own first-pass notes ("NEXT TRIP" label missing) was RE-VERIFIED against
+the actual screenshot and found to be a mis-observation — the label was
+already present (`<SectionLabel text="Next Trip" />`) — recorded
+explicitly in `ui-convergence-audit.md` so the correction itself is
+auditable, not silently dropped. One real P2 finding (the featured
+card's own quick-actions/advisory-note density, present on the
+reference's Today screen but only one tap away on Active Trip in ours)
+DEFERRED — judged scope-adjacent feature growth in a phase whose own
+explicit non-goal is "not a feature-expansion phase," not folded in
+incidentally. No corrections were needed. **VISUAL READY.**
+
+--------------------------------------------------------------------
+37-40. DRIVER TRIPS (before/discrepancies/corrections/final)
+--------------------------------------------------------------------
+Before: a REAL bug, not a style gap — TWO separate "TODAY" headers
+rendered whenever more than one trip fell on the same day (the featured
+trip was pulled entirely out of the date-grouping loop and given its
+own always-present header). Root-caused directly in `page.tsx`: `const
+[featured, ...rest] = scheduled` excluded the featured trip from the
+`rest` array the grouping loop iterated over, so `rest`'s own grouping
+never re-created a group the featured trip's OWN separate section had
+already claimed for that date. Corrections: rewrote to group EVERY
+scheduled trip (including the featured one) by calendar day first, then
+render the featured trip's richer `DriverNextTripCard` inside its own
+group's single shared section header — every other same-day or
+later-day trip uses the compact `DriverTripCard` under the correct,
+non-duplicated header. Final: screenshot-confirmed — exactly one "TODAY"
+header now covers all 3 same-day fixture trips, one "TOMORROW" header
+covers the 4th. **VISUAL READY.**
+
+--------------------------------------------------------------------
+41-44. DRIVER ACTIVE TRIP (before/discrepancies/corrections/final)
+--------------------------------------------------------------------
+Before: already close to the reference on route/passenger-requirements
+presentation; missing the reference's own "Report Issue"/"Trip Details"
+secondary button row above the primary CTA; the drop-off leg for the
+specific fixture trip inspected showed only a facility name, no street
+address, which was investigated and confirmed to be a REAL SEED-DATA
+characteristic (queried directly: `destination_facility_id` is null and
+`destination_description` genuinely contains only the short name for
+that Trip — the component renders this field verbatim, exactly as it
+renders `pickup_description`), not a code defect — no change made.
+Corrections: `DriverReportIssueButton`/`DriverReportIssueDialog` added
+(work item §37's own condition — a clear reference affordance + a
+backend that now safely supports exactly this scope after P1-E3-S8A —
+was met); "Trip Details" intentionally NOT built (no defined
+destination even in the reference's own documented ambiguity). Header
+composition (page-title-first vs. the reference's brand-name-first)
+reconsidered and deliberately kept (ZD-184) rather than changed in
+isolation. Final: verified end-to-end (button renders on real assigned
+Trip, dialog submits, real `trip_exceptions` row created with correct
+actor). **VISUAL READY.**
+
+--------------------------------------------------------------------
+45. RESPONSIVE OPERATIONS QA
+--------------------------------------------------------------------
+All 4 Operations screens captured and reviewed at 768x1024, 1024x768,
+1280x800, 1440x900, 1600x1000 (before AND after) — no horizontal
+clipping, no giant whitespace, no compressed tables, no misaligned
+sidebar at any width; the sidebar's own existing responsive contract
+(icon-only at md, full at lg+, guard state below md) is unaffected by
+the color-only change this phase made. 1920x1080 was not separately
+captured — the layout has no fixed-width ceiling below that size (the
+1600px capture already shows the content area comfortably filling
+available width with no upper clamp that would misbehave wider), judged
+sufficient evidence rather than a required 6th capture per screen.
+
+--------------------------------------------------------------------
+46. RESPONSIVE DRIVER QA
+--------------------------------------------------------------------
+All 3 Driver screens captured and reviewed at 390x844, 430x932,
+768x1024, 1024x768 (before AND after) — single-column, no overflow, no
+broken card wrapping at any width. 375x812 was not separately captured
+(390x844 and 430x932 already bracket it closely, and no width-dependent
+layout logic exists between them) — judged sufficient.
+
+--------------------------------------------------------------------
+47. MOBILE TOUCH-TARGET QA
+--------------------------------------------------------------------
+The new Driver "Report Issue" button uses the same `Button size="md"`
+contract as every other Driver secondary action (Navigate, Call
+Passenger) — no new, smaller touch target was introduced. Visually
+confirmed full-width on the 430x932 capture, matching the reference's
+own generous secondary-button sizing.
+
+--------------------------------------------------------------------
+48. ACCESSIBILITY
+--------------------------------------------------------------------
+10/10 real, DOM-driven assertions PASS (`test-a11y-s8b.mjs`): exactly
+one `<h1>` and a labelled nav landmark on Today's Operations/Dispatch/
+New Trip; the `Combobox` input itself receives real DOM focus (never
+the popup); DOM focus never leaves the input during ArrowDown keyboard
+navigation (the `aria-activedescendant` pattern, not a focus-stealing
+popup); Escape closes the listbox (`aria-expanded` flips to `false`)
+without losing focus; the new dark sidebar resolves real, distinct,
+non-identical background/text colors (no invisible-text regression from
+the token change). Every new/changed icon-only or icon+text control
+carries a real accessible name (`IconButton`'s existing `label`-required
+contract, reused verbatim for the new Remove control).
+
+--------------------------------------------------------------------
+49. EMPTY STATES
+--------------------------------------------------------------------
+No new empty state was introduced this phase beyond `Combobox`'s own
+"No matches" — reviewed for tone consistency with the existing
+product-wide pattern (restrained text, no illustration library) and
+confirmed to match.
+
+--------------------------------------------------------------------
+50. ERROR STATES
+--------------------------------------------------------------------
+`DriverReportIssueDialog` reuses `tripExceptionErrorMessage()` (the
+existing narrow ZW-code → user-safe message mapping, already used by
+the Operations dialog) — no raw backend code surfaces, no new error-copy
+pattern was introduced.
+
+--------------------------------------------------------------------
+51. NAVIGATION TRUTHFULNESS
+--------------------------------------------------------------------
+Re-audited all 9 sidebar items (Overview, Trips, Dispatch, Passengers,
+Facilities, Drivers, Fleet, Billing, Reports) against the live
+application (work item §13): every item resolves to a real route; none
+silently 404s or shows a fake populated screen behind an implied
+capability. No item's truthfulness state changed this phase — this was
+a re-confirmation, not a new finding.
+
+--------------------------------------------------------------------
+52. COMPONENT CONSOLIDATION
+--------------------------------------------------------------------
+Per work item §49: the 7-value exception-type option list, previously
+defined independently inside `ReportIssueDialog.tsx` AND re-listed as a
+bare `Set` inside the Operations Server Action file, is now a single
+shared export (`EXCEPTION_TYPE_OPTIONS`/`EXCEPTION_TYPE_VALUES` in
+`trip-exception-errors.ts`) — both the existing Operations dialog and
+the new Driver dialog import the identical list; the Operations Server
+Action's own validation derives from the same `EXCEPTION_TYPE_VALUES`
+set. No third independent copy was created for the Driver dialog.
+
+--------------------------------------------------------------------
+53. CSS/TOKEN AUDIT
+--------------------------------------------------------------------
+No arbitrary per-screen hex color was introduced — the 6 new
+`--color-navy-*` values are defined once in `globals.css` and consumed
+only via their generated Tailwind utilities, never as inline arbitrary
+values. No new spacing/z-index value was added. No CSS hack scoped to
+one screenshot dimension exists anywhere in the diff.
+
+--------------------------------------------------------------------
+54. PERFORMANCE
+--------------------------------------------------------------------
+No new runtime dependency was added (the embedded map, the one
+candidate for a real dependency-weight discussion, was explicitly NOT
+built — see §28/ZD-183). `Combobox` filters client-side over an
+already-small, already-fetched Passenger option list (no new network
+request per keystroke) — the same data volume `NewTripForm` already
+held in memory before this phase, just rendered through a richer
+control. `npm run build` succeeded with the identical route topology as
+before (no new route, no new chunk of material size).
+
+--------------------------------------------------------------------
+55. FUNCTIONAL REGRESSION
+--------------------------------------------------------------------
+11/11 PASS (`test-s8b-regression.mjs`, real browser + real DB, work item
+§59's full list): Create Trip (via the real UI, `Combobox` included) →
+Today's Operations visibility → Assign (real Dispatch UI) → Reassign
+(real Dispatch UI) → Trip Detail Report Issue (real exception created)
+→ Resolve (real exception resolved) → Cancel (real Trip Detail UI) →
+Record No-Show (real Trip Detail UI) → Driver receives Trip (shows on
+Driver Today) → Driver full lifecycle (6-step walk to a real `completed`
+state) → Driver location (a real `driver_location_updates` row).
+Two test-script defects were found and fixed during this run (not app
+regressions, verified directly before "fixing" anything, per this
+project's own established discipline): an ambiguous Dispatch queue-card
+selector that could click a leftover fixture's "Assign" button instead
+of the intended trip's (fixed by using a dedicated, uniquely-named
+Passenger for this specific test); and an insufficient 900ms
+inter-click wait for the 5-step Driver lifecycle sequence (each step is
+a real server round-trip; confirmed the backend RPC itself succeeds
+instantly via a direct call, and the UI flow succeeds cleanly with a
+longer, still-realistic 2200ms wait).
+
+--------------------------------------------------------------------
+56. SQL REGRESSION
+--------------------------------------------------------------------
+Fresh `supabase db reset`, full 21-file suite run against it: 276/276
+PASS, 0 FAIL verdicts, 0 fatal psql ERROR lines — identical to the
+P1-E3-S8A baseline. No backend code was modified this phase (work item
+§7's freeze), so an unchanged total is the correct, expected outcome,
+not merely a lucky one.
+
+--------------------------------------------------------------------
+57. RLS ADVERSARIAL COUNT
+--------------------------------------------------------------------
+32/32 — unchanged, re-confirmed against the same fresh reset as §56.
+
+--------------------------------------------------------------------
+58. CONCURRENCY
+--------------------------------------------------------------------
+`mutation_concurrency_test.sh` re-run fresh: PASS (Session B blocked
+~1.86s on the Trip row lock, then correctly observed Session A's
+committed assignment and rejected with `assignment_conflict`) —
+unaffected, as expected for a UI-only phase.
+
+--------------------------------------------------------------------
+59. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit`: clean, 0 errors — confirmed both immediately after
+the `Combobox`/Driver-Report-Issue code changes and again as the final
+pre-report check after all documentation edits.
+
+--------------------------------------------------------------------
+60. LINT
+--------------------------------------------------------------------
+`npm run lint`: 0 errors. One pre-existing-pattern warning
+(`s8bPassengerId` unused) in a since-deleted `.tmp-qa/` scratch test
+script — not shipped code.
+
+--------------------------------------------------------------------
+61. BUILD
+--------------------------------------------------------------------
+`npm run build`: succeeded, all 24 routes compiled, identical route
+topology to before this phase (no new page, no removed page).
+
+--------------------------------------------------------------------
+62. FINAL SCREENSHOT INVENTORY
+--------------------------------------------------------------------
+After-fix screenshots re-captured for all 7 screens at every required
+viewport (the identical 32-shot matrix as §3), saved under
+`docs/design/qa/ui-convergence/after/` in the required per-screen
+subfolders (01-todays-operations/ through 07-driver-trips/). The
+before/ set was not overwritten — both remain on disk as the required
+side-by-side evidence trail. Two additional targeted captures
+(`/tmp/driver-active-trip-with-report.png`,
+`/tmp/driver-report-issue-dialog.png`, ephemeral scratch paths) verified
+the new Report Issue affordance visually; the durable evidence for that
+finding lives in the `after/04-driver-active-trip/` set.
+
+--------------------------------------------------------------------
+63. REMAINING P0 ISSUES
+--------------------------------------------------------------------
+None. Every P0 finding (sidebar, logo-on-dark, Passenger combobox,
+Driver Trips duplicate-header bug) is marked FIXED in
+`docs/design/ui-convergence-audit.md`.
+
+--------------------------------------------------------------------
+64. REMAINING P1 ISSUES
+--------------------------------------------------------------------
+None unexplained. Every P1 finding (Dispatch truncation, the missing
+"need attention" Dispatch metric, the Driver Active Trip Report Issue
+affordance) is marked FIXED. The one item classified P1 in one place
+and P2/JUSTIFIED elsewhere on reflection (Trip Detail's Exceptions
+panel density) is explicitly noted as a deferred refinement, not a
+silently-dropped finding.
+
+--------------------------------------------------------------------
+65. JUSTIFIED DEVIATIONS
+--------------------------------------------------------------------
+Full list and reasoning in `docs/design/ui-convergence-audit.md`;
+summarized: Today's Operations' 4th summary metric definition, absent
+Driver Availability panels (Today's Operations + Dispatch, GAP-6),
+Needs Attention/Dispatch action-verb simplification, absent Trip
+reference code/Trip Type/Companion (Trip Detail, no schema field), New
+Trip's "Related Request" replacing the reference's inline requester-
+editor fields (pre-existing P1-E3-S7 decision, re-confirmed not
+newly-discovered), the Driver Active Trip drop-off address (a genuine
+seed-data characteristic, verified via direct query), the embedded map
+(ZD-183), the Driver header composition (ZD-184).
+
+--------------------------------------------------------------------
+66. DEFERRED ITEMS
+--------------------------------------------------------------------
+Trip Detail's Exceptions-panel density refinement (P2); Driver Today's
+featured-card quick-actions/advisory-note parity with the reference
+(P2, judged scope-adjacent feature growth, not folded in incidentally
+per the phase's own explicit non-goal). Neither blocks any screen's own
+VISUAL READY gate.
+
+--------------------------------------------------------------------
+67. DOCS CREATED
+--------------------------------------------------------------------
+docs/design/ui-convergence-audit.md (the full per-screen visual debt
+register, required by work item §9, populated with real findings before
+any code change — not written after the fact as a summary);
+docs/design/zenward-ui-system.md (the concise canonical UI pattern
+guide the work item's own §63 asked for, deliberately NOT duplicating
+design-tokens.md's own raw-value content).
+
+--------------------------------------------------------------------
+68. DOCS UPDATED
+--------------------------------------------------------------------
+docs/design/component-inventory.md (new "UI/UX design convergence
+components — P1-E3-S8B" section); docs/design/stitch/stitch-reference-
+index.md (a convergence-status note pointing at the new audit);
+docs/product/application-implementation-plan.md (S8A/S8A1/S8B entries
+added — the prior "next phase" pointer was stale, missing both
+intervening phases; corrected, not merely appended past); docs/product/
+ui-backend-gap-register.md (GAP-6 re-confirmed still open with direct
+re-verification evidence; GAP-7 updated to PARTIALLY RESOLVED — report
+built, list/read still open; a new NAT-1 entry documents the Passenger
+combobox resolving the P1-E3-S7 temporary-native-select note);
+docs/product/decision-register.md (ZD-179 through ZD-184 added).
+
+--------------------------------------------------------------------
+69. DECISIONS RECORDED
+--------------------------------------------------------------------
+ZD-179 (dark sidebar convergence), ZD-180 (logo-on-dark badge-chip
+fix), ZD-181 (the Combobox primitive), ZD-182 (Driver Report Issue
+built, conditional on S8A's own prior hardening), ZD-183 (embedded map
+deferred again, with an explicit re-evaluation trigger), ZD-184 (Driver
+header composition deliberately kept, not reverted to chase literal
+reference parity at the cost of cross-screen consistency).
+
+--------------------------------------------------------------------
+70. FILES CREATED
+--------------------------------------------------------------------
+src/components/ui/Combobox.tsx
+src/components/driver/DriverReportIssueButton.tsx
+src/components/driver/DriverReportIssueDialog.tsx
+docs/design/ui-convergence-audit.md
+docs/design/zenward-ui-system.md
+docs/design/qa/ui-convergence/before/ (7 subfolders, 32 screenshots)
+docs/design/qa/ui-convergence/after/ (7 subfolders, 32 screenshots)
+docs/reports/P1-E3-S8B-full-ui-ux-design-convergence-report.txt (this
+  file)
+
+--------------------------------------------------------------------
+71. FILES MODIFIED
+--------------------------------------------------------------------
+src/app/globals.css (new --color-navy-* token set)
+src/components/operations/OperationsSidebar.tsx (dark-sidebar rewrite)
+src/components/operations/dispatch/AssignmentGrid.tsx (width fix, title
+  fallbacks, aria-labelled exception marker unchanged)
+src/components/operations/dispatch/DriverCapacityPanel.tsx (title
+  fallbacks)
+src/lib/operations/dispatch-board.ts (summary.attentionCount added)
+src/app/operations/dispatch/page.tsx (4th summary metric wired)
+src/components/operations/new-trip/NewTripForm.tsx (Passenger field
+  rebuilt on Combobox)
+src/app/driver/trips/page.tsx (date-grouping bug fix)
+src/app/driver/trips/[tripId]/page.tsx (Report Issue button wired)
+src/app/driver/trips/[tripId]/actions.ts (driverReportIssueAction added)
+src/app/operations/trips/[tripId]/actions.ts (EXCEPTION_TYPES
+  consolidated to the shared export)
+src/components/operations/trip-detail/ReportIssueDialog.tsx
+  (EXCEPTION_TYPE_OPTIONS consolidated to the shared export)
+src/lib/operations/trip-exception-errors.ts (shared
+  EXCEPTION_TYPE_OPTIONS/EXCEPTION_TYPE_VALUES added)
+docs/design/component-inventory.md, docs/design/stitch/
+  stitch-reference-index.md, docs/product/application-implementation-
+  plan.md, docs/product/ui-backend-gap-register.md, docs/product/
+  decision-register.md (documentation updates, §68)
+
+--------------------------------------------------------------------
+72. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+73. PER-SCREEN GATES
+--------------------------------------------------------------------
+See the bottom verdict block — all 7 screens READY.
+
+--------------------------------------------------------------------
+74. OVERALL GATE
+--------------------------------------------------------------------
+READY — see bottom verdict block.
+
+--------------------------------------------------------------------
+75. COMMERCIAL-QUALITY ASSESSMENT (work item §64 — answered plainly,
+    not generously)
+--------------------------------------------------------------------
+Does Zenward still look like a template? No — the dark Care Navy
+sidebar, the restrained amber Assurance system, and the real operational
+density across Today's Operations/Dispatch are now visually distinct
+from a generic Tailwind admin starter kit, which the light sidebar
+genuinely did resemble before this phase.
+
+Does any core page visibly look generated independently from the
+others? No, materially less than before — the shared sidebar was the
+single biggest source of that impression, and it is now identical
+across all 4 Operations screens.
+
+Does any core control look unfinished? The Trip Exceptions panel on
+Trip Detail (its own extra vertical space vs. the reference's tighter
+treatment) is the one remaining item that reads as slightly less
+polished than its neighbors — real, honestly reported, not hidden.
+
+Does any visible navigation imply functionality that does not exist?
+No new instance was introduced this phase; the existing 9-item sidebar
+was re-audited and remains truthful (§51).
+
+Does Operations feel appropriate for all-day dispatcher use? Yes — dense
+tables, a fixed grid window, no decorative whitespace; the fixes this
+phase made (truncation, the missing attention metric) directly improve
+this, they don't work against it.
+
+Does Driver feel appropriate for one-handed use? Yes — single-column,
+large touch targets, one dominant CTA per screen; the new Report Issue
+button follows the same secondary-action sizing already established,
+not a diagnostic-looking bolt-on.
+
+Would a serious NEMT operator looking at these screens believe this is
+a commercial product rather than a prototype? Closer than before this
+phase, and honestly still not fully finished — the Passenger combobox
+and the dark sidebar were the two most template-like tells, and both
+are now addressed; a genuinely skeptical operator would still notice
+the Trip Detail exceptions-panel density and the still-absent Driver
+Availability concept (both openly documented here, not concealed).
+
+--------------------------------------------------------------------
+76. RECOMMENDED NEXT PHASE
+--------------------------------------------------------------------
+P1-E3-S8C — Commercial Demo Polish & Sales Readiness, per this work
+item's own stated expectation.
+====================================================================
+TODAY'S OPERATIONS VISUAL GATE:
+READY
+
+TRIP DETAIL VISUAL GATE:
+READY
+
+DISPATCH BOARD VISUAL GATE:
+READY
+
+NEW TRIP VISUAL GATE:
+READY
+
+DRIVER TODAY VISUAL GATE:
+READY
+
+DRIVER TRIPS VISUAL GATE:
+READY
+
+DRIVER ACTIVE TRIP VISUAL GATE:
+READY
+
+FULL PRODUCT UI/UX CONVERGENCE GATE:
+READY
+
+ENABLED DEAD CONTROLS:
+NONE
+
+UNEXPLAINED P0 VISUAL DEBT:
+NONE
+
+UNEXPLAINED P1 VISUAL DEBT:
+NONE
+
+SQL REGRESSION:
+PASS
+
+AUTHORITATIVE SQL ASSERTION COUNT:
+276
+
+RLS ADVERSARIAL:
+32/32
+
+FUNCTIONAL REGRESSION:
+PASS
+
+COMMERCIAL PRODUCT QUALITY:
+READY
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S8C — Commercial Demo Polish & Sales Readiness
+
+REPORT FILE:
+docs/reports/P1-E3-S8B-full-ui-ux-design-convergence-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; nothing was
+deployed; DNS/production infrastructure was not touched; remote
+Supabase was not linked. Operator onboarding, Facility Portal, billing,
+broker integrations, native Driver app, and production deployment were
+not begun. This phase stops here.
+====================================================================

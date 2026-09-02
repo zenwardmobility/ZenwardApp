@@ -7,31 +7,11 @@ import { Textarea } from "@/components/ui/Textarea";
 import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { reportExceptionAction, type TripExceptionActionState } from "@/app/operations/trips/[tripId]/actions";
-import { tripExceptionErrorMessage } from "@/lib/operations/trip-exception-errors";
+import { tripExceptionErrorMessage, EXCEPTION_TYPE_OPTIONS } from "@/lib/operations/trip-exception-errors";
 import { cn } from "@/lib/cn";
 import { typography } from "@/design/typography";
 
 const INITIAL_STATE: TripExceptionActionState = { status: "idle" };
-
-/**
- * A restrained, explicit MVP exception-type list (P1-E3-S8, work item
- * §20/ZD-1xx) — `exception_type` remains genuinely free text at the
- * schema layer (no CHECK constraint, "taxonomy not yet finalized"); this
- * is an APPLICATION-layer convenience only, chosen deliberately after
- * inspecting the actual schema and product need (consistent, scannable
- * categories for a real operational report), not merely copied from the
- * work item's own illustrative list without review. A future value
- * outside this set is not blocked by the database.
- */
-const EXCEPTION_TYPE_OPTIONS = [
-  { value: "driver_issue", label: "Driver issue" },
-  { value: "vehicle_issue", label: "Vehicle issue" },
-  { value: "passenger_not_ready", label: "Passenger not ready" },
-  { value: "pickup_issue", label: "Pickup issue" },
-  { value: "facility_delay", label: "Facility delay" },
-  { value: "route_issue", label: "Route issue" },
-  { value: "other", label: "Other" },
-];
 
 export interface ReportIssueDialogProps {
   tripId: string;

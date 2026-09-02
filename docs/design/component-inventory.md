@@ -156,6 +156,22 @@ Full field-level rationale: [driver-location-architecture.md](../product/driver-
 
 Full field-level rationale: [trip-assurance-model.md](../product/trip-assurance-model.md), [trip-assurance-data-map.md](../product/trip-assurance-data-map.md).
 
+## UI/UX design convergence components — P1-E3-S8B
+
+Full audit and before/after evidence: [ui-convergence-audit.md](./ui-convergence-audit.md). Canonical pattern reference: [zenward-ui-system.md](./zenward-ui-system.md).
+
+| Component | Status | Change |
+|---|---|---|
+| `OperationsSidebar` | **Rewritten (visual only)** | Converges to the canonical Stitch references' dark Care Navy treatment (every prior phase left it light — an accepted-but-unconverged deviation this phase's own mandate exists to close). New `--color-navy-*` token set added to `globals.css`, reserved for this component alone. Logo asset unchanged; wrapped in a plain white badge chip since the PNG itself has an opaque white background baked in (no alpha channel, confirmed by direct inspection) — the artwork is never recolored. |
+| `Combobox` | **New (design-system primitive)** | A real, accessible search-select — WAI-ARIA "combobox with list autocomplete" pattern, replacing the temporary native `<select>` P1-E3-S7 used for New Trip's Passenger field (work item §20/§21, the single most consequential remaining item this audit identified). Keyboard Up/Down/Home/End/Enter/Escape, `aria-activedescendant`-tracked highlighting (DOM focus stays on the input), a real empty state, search matches name or phone. Represents only the "searching" state — callers render their own selected-item treatment. |
+| `NewTripForm` | **Extended** | Passenger field now uses `Combobox`; on selection renders a reference-matching selected-passenger card (Avatar initials + name + phone + a Remove `IconButton`) via a hidden form field, not a visible `<select>`. |
+| `AssignmentGrid` | **Extended again** | `ROW_LABEL_WIDTH_PX` widened 140→168px (real driver names + vehicle + freshness link were truncating); every truncatable label in this component and `DriverCapacityPanel` now carries a real `title` fallback. Trip-block width deliberately left unchanged — widening it would misrepresent elapsed Trip duration more than the existing fixed-width approximation already does (a documented tradeoff, `dispatch-grid.ts`). |
+| Dispatch summary strip | **Extended** | A 4th, conditional (only shown when >0) "need attention" metric, reusing the exception data `getDispatchBoardData` already fetches for the per-block marker — no new query. |
+| Driver Trips date grouping | **Bug fix** | A real bug found during reference comparison: the featured (first-scheduled) trip was pulled out of the day-grouping loop entirely, producing a SECOND, duplicate "Today" header whenever another trip shared its date. Fixed to group every scheduled trip (including the featured one) by calendar day first, then render the featured card inside its own group's single shared header. |
+| `DriverReportIssueButton` / `DriverReportIssueDialog` | **New** | Driver-facing "Report Issue" (work item §37) — the reference shows a clear, natural affordance here, and the backend (post-P1-E3-S8A hardening: current-assignment-only, non-terminal-only) now safely supports exactly this scope. Same `report_trip_exception` RPC and the same restrained 7-value issue-type list as the Operations dialog (now shared from `trip-exception-errors.ts` rather than duplicated a third time). No Driver resolve path, no broad exception read — write-only, matching the work item's explicit condition. |
+
+Full field-level rationale and the complete FIXED/JUSTIFIED/DEFERRED disposition of every finding: [ui-convergence-audit.md](./ui-convergence-audit.md).
+
 ## Explicitly not building generically
 
 Per work item §35's own caution: no generic "Card" or "ListItem" abstraction is proposed merely for reuse. `DispatchQueueCard`, `DriverCapacityCard`, `TripRouteTimeline`, etc. are each named for what they specifically show, following the existing codebase's own pattern (`DriverTripCard`, not a generic `Card`).

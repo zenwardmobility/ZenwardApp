@@ -50,6 +50,18 @@
   --color-info-border: #afd3ec;
   --color-info-strong: #1d5f91;
 
+  /* On-navy surface — the Operations sidebar (P1-E3-S8B design
+     convergence). Care Navy as background per the canonical Stitch
+     references; a small, dedicated on-dark text/border set since the
+     neutral-on-light tokens above are not legible against it. Reserved
+     for the sidebar only — never used as a body/content surface. */
+  --color-navy-surface: var(--color-brand-care-navy);
+  --color-navy-text-muted: #9fb4bd;
+  --color-navy-border: rgba(255, 255, 255, 0.1);
+  --color-navy-hover-bg: rgba(255, 255, 255, 0.06);
+  --color-navy-active-bg: rgba(33, 168, 154, 0.18);
+  --color-navy-active-text: #5fd6c4;
+
   /* Typography families */
   --font-display: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;

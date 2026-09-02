@@ -3,8 +3,11 @@
 import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { User, Calendar, MapPin, Flag, NotePencil, ClipboardText, Plus, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import { User, Calendar, MapPin, Flag, NotePencil, ClipboardText, Plus, DownloadSimple, X } from "@phosphor-icons/react/dist/ssr";
 import { Select } from "@/components/ui/Select";
+import { Combobox } from "@/components/ui/Combobox";
+import { Avatar } from "@/components/ui/Avatar";
+import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
@@ -120,9 +123,11 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
     }
   }
 
-  const passengerSelectOptions = passengerOptions.map((p) => ({
+  const selectedPassenger = passengerOptions.find((p) => p.id === passengerId) ?? null;
+  const passengerComboboxOptions = passengerOptions.map((p) => ({
     value: p.id,
-    label: p.phone ? `${p.displayName} — ${p.phone}` : p.displayName,
+    label: p.displayName,
+    secondaryLabel: p.phone ?? undefined,
   }));
   const facilitySelectOptions = facilities.map((f) => ({ value: f.id, label: formatFacilityOptionLabel(f) }));
   const requestSelectOptions = requests.map((r) => ({ value: r.id, label: formatRequestOptionLabel(r) }));
@@ -180,15 +185,35 @@ export function NewTripForm({ passengers: initialPassengers, facilities, request
               </Button>
             }
           >
-            <Select
-              label="Passenger"
-              name="passengerId"
-              required
-              placeholder={passengerOptions.length > 0 ? "Search by name or phone number" : "No passengers yet — add one"}
-              options={passengerSelectOptions}
-              value={passengerId}
-              onChange={(e) => setPassengerId(e.target.value)}
-            />
+            <input type="hidden" name="passengerId" value={passengerId} />
+            {selectedPassenger ? (
+              <div className="flex items-center gap-3 rounded-sm border border-brand-interactive-teal bg-brand-calm-mist/40 px-3 py-2.5">
+                <Avatar name={selectedPassenger.displayName} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
+                    {selectedPassenger.displayName}
+                  </p>
+                  {selectedPassenger.phone && (
+                    <p className={cn(typography.metadata, "text-text-muted")}>{selectedPassenger.phone}</p>
+                  )}
+                </div>
+                <IconButton
+                  label="Remove selected passenger"
+                  icon={<X className="size-4" aria-hidden />}
+                  onClick={() => setPassengerId("")}
+                />
+              </div>
+            ) : (
+              <Combobox
+                label="Passenger"
+                required
+                placeholder={passengerOptions.length > 0 ? "Search by name or phone number" : "No passengers yet — add one"}
+                noResultsText="No passenger matches that search."
+                disabled={passengerOptions.length === 0}
+                options={passengerComboboxOptions}
+                onSelect={(option) => setPassengerId(option.value)}
+              />
+            )}
           </FormSection>
 
           <FormSection icon={<Calendar className="size-5" aria-hidden />} title="Trip Schedule">

@@ -8,6 +8,8 @@ Inventory of every file in `docs/design/stitch/references/`. These images are th
 
 All 7 screens the work item names as expected (§5) are present. None missing.
 
+**P1-E3-S8B update:** every screen listed here has now received a real, evidence-based convergence pass against the running application (not merely referenced during initial UI mapping) — see [ui-convergence-audit.md](../ui-convergence-audit.md) for the full per-screen discrepancy list and disposition (FIXED/JUSTIFIED/DEFERRED), and [zenward-ui-system.md](../zenward-ui-system.md) for the resulting canonical pattern guide. Several "ambiguous concepts" flagged below at initial ingestion were re-confirmed still genuinely unsupported by the schema (Trip reference codes, Companion, Driver Availability, "Running Late"/"Pending Confirmation") rather than assumed still valid from this original pass.
+
 **Note on directory casing:** `git status` reports the reference directory as `docs/design/Stitch/` (capital S) while the actual path on disk is `docs/design/stitch/` (lowercase, per the work item's own path and every prior phase's usage). macOS's default case-insensitive filesystem resolves both to the same directory — this is not two different locations, just an artifact of how git's case-sensitive index reports a path first seen with different casing. No reference file was renamed; flagged here per §58 rather than silently worked around.
 
 ---

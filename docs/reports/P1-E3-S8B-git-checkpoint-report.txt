@@ -1,0 +1,156 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                Git Checkpoint — Commit P1-E3-S8B
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Date/time:            2026-09-02
+Scope:                Checkpoint only — no product functionality was
+                       modified, no refactor was performed, nothing was
+                       deployed, remote Supabase was not touched.
+====================================================================
+
+--------------------------------------------------------------------
+1. REPOSITORY
+--------------------------------------------------------------------
+`pwd` -> /Users/datamatics/ZenWard
+`git remote -v` -> origin https://github.com/zenwardmobility/ZenwardApp.git (fetch/push)
+Confirmed this is the ZenWard platform repository, not the separate
+marketing site.
+
+--------------------------------------------------------------------
+2. BRANCH
+--------------------------------------------------------------------
+`git branch --show-current` -> main
+
+--------------------------------------------------------------------
+3. PREVIOUS HEAD
+--------------------------------------------------------------------
+17f7a6a5e5cef202da7ec6a05a77a19613bb8bb9
+"Implement Trip Assurance and harden exception mutations"
+(= origin/main at the time of this checkpoint, confirmed via
+`git rev-parse origin/main` returning the identical SHA — local was not
+already ahead of the remote before this checkpoint's own commit.)
+
+--------------------------------------------------------------------
+4. S8B WORK REVIEWED
+--------------------------------------------------------------------
+`git status --short`, `git diff --stat`, and `git diff --name-status`
+were inspected directly. The outstanding diff comprises exactly 18
+modified files and 7 new paths (one of which,
+`docs/design/qa/ui-convergence/`, is a directory containing 64
+screenshot files — 32 before + 32 after). Every single path matches,
+file-for-file, the "Files Created"/"Files Modified" sections the
+P1-E3-S8B completion report itself already declared (§70/§71 of
+`docs/reports/P1-E3-S8B-full-ui-ux-design-convergence-report.txt`):
+
+  Modified (18):
+    docs/design/Stitch/stitch-reference-index.md (git's own case-
+      sensitive index reporting the pre-existing lowercase-on-disk
+      directory with its originally-seen capitalization — a known,
+      already-documented artifact in that file's own text, not a new
+      or unrelated change)
+    docs/design/component-inventory.md
+    docs/product/application-implementation-plan.md
+    docs/product/decision-register.md
+    docs/product/ui-backend-gap-register.md
+    src/app/driver/trips/[tripId]/actions.ts
+    src/app/driver/trips/[tripId]/page.tsx
+    src/app/driver/trips/page.tsx
+    src/app/globals.css
+    src/app/operations/dispatch/page.tsx
+    src/app/operations/trips/[tripId]/actions.ts
+    src/components/operations/OperationsSidebar.tsx
+    src/components/operations/dispatch/AssignmentGrid.tsx
+    src/components/operations/dispatch/DriverCapacityPanel.tsx
+    src/components/operations/new-trip/NewTripForm.tsx
+    src/components/operations/trip-detail/ReportIssueDialog.tsx
+    src/lib/operations/dispatch-board.ts
+    src/lib/operations/trip-exception-errors.ts
+
+  New (7 paths):
+    docs/design/qa/ui-convergence/ (before/ + after/, 64 screenshots)
+    docs/design/ui-convergence-audit.md
+    docs/design/zenward-ui-system.md
+    docs/reports/P1-E3-S8B-full-ui-ux-design-convergence-report.txt
+    src/components/driver/DriverReportIssueButton.tsx
+    src/components/driver/DriverReportIssueDialog.tsx
+    src/components/ui/Combobox.tsx
+
+No unexplained or unrelated change was found. Nothing outside this list
+is present in the working tree.
+
+--------------------------------------------------------------------
+5. SECRET SAFETY RESULT
+--------------------------------------------------------------------
+CLEAN. The full outstanding diff was scanned for common secret
+patterns (`service_role`, `SUPABASE_SERVICE`, `api_key`/`apikey`,
+`secret`, `password`, `token`, `bearer`, `private_key`) and separately
+for JWT-shaped (`eyJ...`) or Stripe-style (`sk_live`/`sk_test_`)
+strings. Every match was a false positive — prose in the new
+documentation discussing CSS design *tokens* (`--color-navy-*`), never
+a credential. No secret value is reproduced in this report, consistent
+with the checkpoint's own instruction.
+
+--------------------------------------------------------------------
+6. .env.local TRACKING RESULT
+--------------------------------------------------------------------
+`git ls-files .env` -> (empty — not tracked)
+`git ls-files .env.local` -> (empty — not tracked)
+`git ls-files | grep '^\.env'` -> only `.env.example` (a template file
+with no real values, expected and safe to track).
+`git status --ignored --short` confirms `.env.local` is correctly
+listed under ignored (`!!`) paths, alongside `node_modules/`, `.next/`,
+`supabase/.branches/`, `supabase/.temp/`, and the platform's own
+`.DS_Store`/`next-env.d.ts`/`tsconfig.tsbuildinfo` artifacts — none of
+these are staged or tracked. **`.env.local` is NOT tracked**, as
+required.
+
+--------------------------------------------------------------------
+7. TYPESCRIPT RESULT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — PASS, 0 errors.
+
+--------------------------------------------------------------------
+8. LINT RESULT
+--------------------------------------------------------------------
+`npm run lint` — PASS, 0 errors, 0 warnings.
+
+--------------------------------------------------------------------
+9. BUILD RESULT
+--------------------------------------------------------------------
+`npm run build` — PASS. All 24 routes compiled successfully, identical
+route topology to the pre-S8B build (no route added or removed by this
+phase).
+
+--------------------------------------------------------------------
+10. STAGED FILE SUMMARY
+--------------------------------------------------------------------
+`git add .` stages exactly the 18 modified + 7 new paths enumerated in
+§4 above, plus this report itself (written before the commit per the
+checkpoint's own required sequence, so it is included in the same
+commit as the S8B work it documents, not committed separately
+afterward). `git ls-files .env.local` was re-run immediately after
+staging and remains empty — confirmed nothing unexpected entered the
+index.
+
+--------------------------------------------------------------------
+11. COMMIT MESSAGE
+--------------------------------------------------------------------
+Complete full product UI convergence
+
+--------------------------------------------------------------------
+12. PUSH TARGET
+--------------------------------------------------------------------
+origin main
+(https://github.com/zenwardmobility/ZenwardApp.git)
+
+--------------------------------------------------------------------
+13. WARNINGS / BLOCKERS
+--------------------------------------------------------------------
+None found during review. This report was written before the commit
+and push described above were executed — see this session's terminal
+response for the resulting commit SHA and push outcome, which are
+deliberately NOT written back into this file (doing so after the
+commit would dirty the working tree, which the checkpoint's own
+instructions explicitly avoid).
+====================================================================

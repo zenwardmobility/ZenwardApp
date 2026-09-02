@@ -7,6 +7,11 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { DRIVER_NEXT_ACTION, type DriverLifecycleRpc } from "@/lib/driver/trip-presentation";
 import { mapDriverActionError, type DriverActionErrorCode } from "@/lib/driver/errors";
 import { mapDriverLocationError, type DriverLocationErrorCode } from "@/lib/driver/location-errors";
+import {
+  mapTripExceptionError,
+  type TripExceptionErrorCode,
+  EXCEPTION_TYPE_VALUES,
+} from "@/lib/operations/trip-exception-errors";
 
 export interface ProgressTripState {
   status: "idle" | "success" | "error";
@@ -155,5 +160,74 @@ export async function recordLocationAction(
     return { status: "error", errorCode: mapDriverLocationError(error?.code) };
   }
 
+  return { status: "success" };
+}
+
+export interface DriverReportIssueState {
+  status: "idle" | "success" | "error";
+  errorCode?: TripExceptionErrorCode;
+}
+
+/**
+ * Driver-facing "Report Issue" (P1-E3-S8B, work item §37) — the
+ * reference (docs/design/stitch/references/04-driver-active-trip.png)
+ * shows this as a clear, natural affordance on the Active Trip screen,
+ * and the backend already safely supports exactly this scope after
+ * P1-E3-S8A's own hardening: `report_trip_exception` now requires a
+ * CURRENTLY active assignment (not merely "ever assigned") and is the
+ * sole write path (direct INSERT is revoked entirely). This action adds
+ * no new authorization logic of its own — same `requireDriverAccess()` +
+ * RPC pattern as every other action in this file; the RPC itself remains
+ * the real, final authority.
+ *
+ * Deliberately narrow, matching the work item's own explicit conditions:
+ * no Driver resolve path (resolve_trip_exception is Operations-only, and
+ * this file exposes no way to call it), no broad exception read (the
+ * Driver UI never lists or displays existing exceptions — this is a
+ * write-only affordance), non-terminal enforced by the RPC's own
+ * current-assignment requirement (ZD-178), not duplicated here.
+ */
+export async function driverReportIssueAction(
+  _prevState: DriverReportIssueState,
+  formData: FormData,
+): Promise<DriverReportIssueState> {
+  const tripId = formData.get("tripId");
+  const exceptionType = formData.get("exceptionType");
+  const description = formData.get("description");
+
+  if (typeof tripId !== "string" || tripId.length === 0) {
+    return { status: "error", errorCode: "NOT_FOUND" };
+  }
+  if (typeof exceptionType !== "string" || !EXCEPTION_TYPE_VALUES.has(exceptionType)) {
+    return { status: "error", errorCode: "INVALID_INPUT" };
+  }
+  if (typeof description !== "string" || description.trim().length === 0) {
+    return { status: "error", errorCode: "INVALID_INPUT" };
+  }
+
+  const access = await requireDriverAccess(`/driver/trips/${tripId}`);
+  if (access.status !== "ok") {
+    return { status: "error", errorCode: "NOT_FOUND" };
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("report_trip_exception", {
+    p_trip_id: tripId,
+    p_exception_type: exceptionType,
+    p_description: description.trim(),
+  });
+
+  if (error) {
+    return { status: "error", errorCode: mapTripExceptionError(error.code) };
+  }
+
+  // No revalidation of this Driver route — the Driver UI never displays
+  // exception state (no broad exception read, per the work item's own
+  // explicit condition), so there is nothing here for a re-render to
+  // reflect. Operations-facing surfaces (Today's Operations, Dispatch,
+  // this Trip's own Operations Trip Detail) already revalidate
+  // themselves the identical way when Operations reports an issue
+  // (reportExceptionAction) — this is the same underlying row, so those
+  // surfaces will show it correctly on their own next load regardless.
   return { status: "success" };
 }
