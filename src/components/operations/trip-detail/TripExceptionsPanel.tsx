@@ -1,37 +1,45 @@
+"use client";
+
+import { useState } from "react";
 import { Panel } from "@/components/ui/Panel";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatOperationsTime, humanizeExceptionType } from "@/lib/operations/presentation";
+import { ReportIssueDialog } from "./ReportIssueDialog";
+import { ResolveExceptionDialog } from "./ResolveExceptionDialog";
 import type { TripDetailException } from "@/lib/operations/trip-detail";
 import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
 export interface TripExceptionsPanelProps {
+  tripId: string;
   openExceptions: TripDetailException[];
   timezone: string;
 }
 
 /**
- * "Trip Exceptions" (docs/design/stitch/references/02-trip-detail.png) —
- * real open `trip_exceptions` rows only, never manufactured from
- * lateness/GPS/time thresholds (work item §34 — no such derivation
- * exists anywhere in this codebase). "Report Issue" is rendered, real,
- * and disabled — creating a new exception-reporting surface (and its own
- * resolve workflow) is a deliberate deferral matching the exact
- * reasoning already established for the Driver-side "Report Issue"
- * button (ZD-125, P1-E3-S3): a new write surface disproportionate to
- * this phase's primary mandate, not something the reference or work item
- * explicitly required building this phase (work item §35 gates only
- * RESOLVING on an existing safe path — it does not mandate the CREATE
- * action either).
+ * "Trip Exceptions" (docs/design/stitch/references/02-trip-detail.png,
+ * upgraded P1-E3-S8) — real open `trip_exceptions` rows only, never
+ * manufactured from lateness/GPS/time thresholds (work item §16/§34 of
+ * P1-E3-S6 — no such derivation exists anywhere in this codebase). Calm
+ * empty state when nothing is open (work item §26 of P1-E3-S8). "Report
+ * Issue" and "Resolve" are now real, working actions — the controlled
+ * `report_trip_exception`/`resolve_trip_exception` RPCs (P1-E3-S6/S6A
+ * had deliberately deferred both; see that migration's own header for
+ * why a direct table write was not narrow enough to build against
+ * safely).
  */
-export function TripExceptionsPanel({ openExceptions, timezone }: TripExceptionsPanelProps) {
+export function TripExceptionsPanel({ tripId, openExceptions, timezone }: TripExceptionsPanelProps) {
+  const [reportOpen, setReportOpen] = useState(false);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const resolvingException = openExceptions.find((exception) => exception.id === resolvingId) ?? null;
+
   return (
     <Panel>
       <h3 className={cn(typography.subsectionHeading, "text-text-primary")}>Trip Exceptions</h3>
       <div className="mt-zw-md">
         {openExceptions.length === 0 ? (
-          <EmptyState title="No open exceptions" />
+          <EmptyState title="No open exceptions" description="Nothing reported on this trip needs review." />
         ) : (
           <ul className="flex flex-col gap-zw-sm">
             {openExceptions.map((exception) => (
@@ -47,19 +55,29 @@ export function TripExceptionsPanel({ openExceptions, timezone }: TripExceptions
                 {exception.description && (
                   <p className={cn(typography.bodySmall, "mt-1 text-text-secondary")}>{exception.description}</p>
                 )}
+                <div className="mt-zw-sm flex justify-end">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setResolvingId(exception.id)}>
+                    Resolve
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>
         )}
       </div>
-      <Button
-        variant="outline"
-        className="mt-zw-md w-full"
-        disabled
-        title="Reporting a new issue from Operations is not available yet."
-      >
+      <Button type="button" variant="outline" className="mt-zw-md w-full" onClick={() => setReportOpen(true)}>
         Report Issue
       </Button>
+
+      {reportOpen && <ReportIssueDialog tripId={tripId} onClose={() => setReportOpen(false)} />}
+      {resolvingException && (
+        <ResolveExceptionDialog
+          tripId={tripId}
+          exceptionId={resolvingException.id}
+          exceptionType={resolvingException.exceptionType}
+          onClose={() => setResolvingId(null)}
+        />
+      )}
     </Panel>
   );
 }

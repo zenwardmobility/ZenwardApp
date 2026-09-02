@@ -2,8 +2,8 @@ import Link from "next/link";
 import { WarningCircle, ArrowRight } from "@phosphor-icons/react/dist/ssr";
 import { requireOperationsAccess } from "@/lib/auth/authorization";
 import { getCurrentPathname } from "@/lib/auth/current-path";
-import { getTodaysOperations, type TodaysOperationsTrip } from "@/lib/operations/todays-operations";
-import { formatOperationsTime } from "@/lib/operations/presentation";
+import { getTodaysOperations, type TodaysOperationsTrip, type TodaysOperationsAttentionItem } from "@/lib/operations/todays-operations";
+import { formatOperationsTime, assuranceStatusCategory } from "@/lib/operations/presentation";
 import { SummaryStrip } from "@/components/ui/SummaryStrip";
 import { Panel } from "@/components/ui/Panel";
 import { SectionHeader } from "@/components/ui/SectionHeader";
@@ -16,16 +16,19 @@ import { typography } from "@/design/typography";
 import { cn } from "@/lib/cn";
 
 /**
- * Today's Operations (P1-E3-S4) —
+ * Today's Operations (P1-E3-S4, "Needs Attention" upgraded to a real
+ * assurance queue P1-E3-S8) —
  * docs/design/stitch/references/01-todays-operations.png, treated as the
  * canonical visual specification (work item §1). Deliberately omits the
  * reference's "Driver Availability" panel entirely (GAP-6,
  * ui-backend-gap-register.md — no schema concept exists for
- * Available/Break/Unavailable) and narrows "Needs Attention" to
- * Needs-Assignment rows only (Running Late/Pending Confirmation have no
- * defined product rule — see ui-backend-gap-register.md "PRODUCT DECISIONS
- * REQUIRED"). See docs/product/todays-operations-data-map.md for the full
- * field-level rationale behind every value and every omission on this page.
+ * Available/Break/Unavailable). "Needs Attention" is now a real,
+ * deterministic operational attention queue — Open issue / Needs
+ * assignment / Location needs update — derived from
+ * `src/lib/operations/trip-assurance.ts`, the one shared evaluator every
+ * Operations surface uses (never a fabricated "Running Late," never a
+ * numeric score). See docs/product/trip-assurance-model.md and
+ * docs/product/todays-operations-data-map.md for the full rationale.
  */
 export default async function OperationsOverviewPage() {
   const pathname = await getCurrentPathname("/operations");
@@ -33,15 +36,15 @@ export default async function OperationsOverviewPage() {
   const data = await getTodaysOperations(organization.organizationId, organization.organizationTimezone);
   const timezone = organization.organizationTimezone;
 
-  const needsAttentionColumns: DataTableColumn<TodaysOperationsTrip>[] = [
-    { key: "time", header: "Time", render: (row) => formatOperationsTime(row.scheduledPickupAt, timezone) },
+  const attentionColumns: DataTableColumn<TodaysOperationsAttentionItem>[] = [
+    { key: "time", header: "Time", render: (row) => formatOperationsTime(row.trip.scheduledPickupAt, timezone) },
     {
       key: "passenger",
       header: "Passenger",
       primary: true,
       render: (row) => (
-        <Link href={`/operations/trips/${row.id}`} className="hover:text-brand-interactive-teal hover:underline">
-          {row.passengerName}
+        <Link href={`/operations/trips/${row.trip.id}`} className="hover:text-brand-interactive-teal hover:underline">
+          {row.trip.passengerName}
         </Link>
       ),
     },
@@ -50,20 +53,29 @@ export default async function OperationsOverviewPage() {
       header: "Route",
       render: (row) => (
         <span className="text-text-secondary">
-          {row.pickupDescription} <ArrowRight className="inline size-3" aria-hidden /> {row.destinationDescription}
+          {row.trip.pickupDescription} <ArrowRight className="inline size-3" aria-hidden /> {row.trip.destinationDescription}
         </span>
       ),
     },
-    { key: "issue", header: "Issue", render: () => <TripStatus status="Needs Assignment" /> },
+    {
+      key: "issue",
+      header: "Reason",
+      render: (row) => <StatusBadge label={row.assurance.label} category={assuranceStatusCategory(row.assurance.code)} />,
+    },
     {
       key: "action",
       header: "Action",
       align: "right",
-      render: () => (
-        <LinkButton href="/operations/dispatch" variant="outline" size="sm">
-          Assign
-        </LinkButton>
-      ),
+      render: (row) =>
+        row.assurance.code === "NEEDS_ASSIGNMENT" ? (
+          <LinkButton href="/operations/dispatch" variant="outline" size="sm">
+            Assign
+          </LinkButton>
+        ) : (
+          <LinkButton href={`/operations/trips/${row.trip.id}`} variant="outline" size="sm">
+            Open Trip
+          </LinkButton>
+        ),
     },
   ];
 
@@ -93,8 +105,8 @@ export default async function OperationsOverviewPage() {
         items={[
           { label: "trips today", value: data.summary.todayCount },
           { label: "active", value: data.summary.activeCount, dot: true },
-          { label: "need attention", value: data.summary.needsAssignmentCount, tone: "warning", dot: true },
-          { label: "completed", value: data.summary.completedTodayCount, dot: true },
+          { label: "need attention", value: data.summary.attentionCount, tone: "warning", dot: true },
+          { label: "no current issues", value: data.summary.onTrackCount, dot: true },
         ]}
       />
 
@@ -106,18 +118,18 @@ export default async function OperationsOverviewPage() {
                 <WarningCircle className="size-5 text-warning-strong" weight="fill" aria-hidden />
                 <h2 className={cn(typography.subsectionHeading, "text-text-primary")}>Needs Attention</h2>
               </div>
-              {data.needsAssignmentTrips.length > 0 && (
+              {data.attentionItems.length > 0 && (
                 <StatusBadge
-                  label={`${data.needsAssignmentTrips.length} ${data.needsAssignmentTrips.length === 1 ? "Issue" : "Issues"}`}
+                  label={`${data.attentionItems.length} ${data.attentionItems.length === 1 ? "Item" : "Items"}`}
                   category="warning"
                 />
               )}
             </div>
             <div className="p-zw-lg">
-              {data.needsAssignmentTrips.length === 0 ? (
-                <EmptyState title="Nothing needs attention" description="Every trip scheduled today already has a driver assigned." />
+              {data.attentionItems.length === 0 ? (
+                <EmptyState title="Nothing needs attention" description="No open issues, unassigned trips, or location concerns right now." />
               ) : (
-                <DataTable columns={needsAttentionColumns} rows={data.needsAssignmentTrips} getRowId={(row) => row.id} />
+                <DataTable columns={attentionColumns} rows={data.attentionItems} getRowId={(row) => row.trip.id} />
               )}
             </div>
           </Panel>

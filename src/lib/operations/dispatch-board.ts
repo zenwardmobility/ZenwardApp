@@ -102,9 +102,15 @@ export interface DispatchTrip {
   vehicleLabel: string | null;
   /** P1-E3-S7A — the Driver's latest known position, ONLY when it belongs to the CURRENT active assignment (never a stale former Driver's last-known position after reassignment, work item §51). Null whenever no location has been recorded yet, or the only recorded location belongs to a superseded assignment. */
   driverLocation: DispatchTripLocation | null;
+  /** P1-E3-S8 — a real open TripException exists for this Trip. Restrained use only (work item §31): a small indicator on the grid block, never a second full location-style panel. */
+  hasOpenException: boolean;
 }
 
-function mapTripRow(row: TripRow, locationsByTrip: Map<string, DispatchTripLocation>): DispatchTrip {
+function mapTripRow(
+  row: TripRow,
+  locationsByTrip: Map<string, DispatchTripLocation>,
+  openExceptionTripIds: Set<string>,
+): DispatchTrip {
   const activeAssignment = (row.trip_assignments ?? []).find((assignment) => assignment.ended_at === null) ?? null;
   const driver = unwrapOne(activeAssignment?.drivers);
   const vehicle = unwrapOne(activeAssignment?.vehicles);
@@ -135,6 +141,7 @@ function mapTripRow(row: TripRow, locationsByTrip: Map<string, DispatchTripLocat
     vehicleId: vehicle?.id ?? null,
     vehicleLabel: vehicle?.label ?? null,
     driverLocation,
+    hasOpenException: openExceptionTripIds.has(row.id),
   };
 }
 
@@ -223,9 +230,25 @@ export async function getDispatchBoardData(organizationId: string, timezone: str
   const activeStateTripIds = (tripsResult.data ?? [])
     .filter((row) => ACTIVE_STATES.has(row.state))
     .map((row) => row.id);
-  const locationsByTrip = await getLatestLocationsByTrip(organizationId, activeStateTripIds);
+  const allTripIds = (tripsResult.data ?? []).map((row) => row.id);
 
-  const trips = (tripsResult.data ?? []).map((row) => mapTripRow(row, locationsByTrip));
+  const [locationsByTrip, exceptionsResult] = await Promise.all([
+    getLatestLocationsByTrip(organizationId, activeStateTripIds),
+    allTripIds.length > 0
+      ? supabase
+          .from("trip_exceptions")
+          .select("trip_id")
+          .eq("organization_id", organizationId)
+          .eq("status", "open")
+          .in("trip_id", allTripIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (exceptionsResult.error) {
+    throw new Error(`Failed to load dispatch open exceptions: ${exceptionsResult.error.message}`);
+  }
+  const openExceptionTripIds = new Set((exceptionsResult.data ?? []).map((row) => row.trip_id));
+
+  const trips = (tripsResult.data ?? []).map((row) => mapTripRow(row, locationsByTrip, openExceptionTripIds));
   const unassignedTrips = trips.filter((trip) => trip.state === "scheduled" && trip.driverId === null);
   const assignedTrips = trips.filter((trip) => trip.driverId !== null);
 

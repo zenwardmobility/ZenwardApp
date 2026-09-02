@@ -142,6 +142,20 @@ Full field-level rationale: [new-trip-data-map.md](../product/new-trip-data-map.
 
 Full field-level rationale: [driver-location-architecture.md](../product/driver-location-architecture.md), [live-dispatch-location-data-map.md](../product/live-dispatch-location-data-map.md).
 
+## Trip Assurance & operational exceptions components — P1-E3-S8
+
+| Component | Status | Change |
+|---|---|---|
+| `Dialog` | **New (design-system primitive)** | The project's first modal — built on the native `<dialog>` element (`showModal()`), not a new UI library, per work item §53's caution against introducing a heavyweight dependency for one modal. Real focus trap and top-layer stacking come from the platform, not custom JS; ESC/backdrop-click both close via the native `close`/`cancel` events, keeping React state and DOM state from drifting apart. |
+| `ReportIssueDialog` | **New** | Issue Type (Select, 7-value restrained list) + Description (Textarea, required). Replaces the previously honestly-disabled "Report Issue" button on Trip Detail (deferred since P1-E3-S6). |
+| `ResolveExceptionDialog` | **New** | Optional resolution-note Textarea. Replaces the previously honestly-disabled "Resolve" affordance. |
+| `TripExceptionsPanel` | **Extended → `"use client"`** | Was a static, always-empty-looking panel; now shows real open exceptions with a working per-row "Resolve" action and a working "Report Issue" action, and a calm, explicit empty state ("No open exceptions") when none exist — no redesign of the surrounding Trip Detail screen. |
+| Today's Operations "Needs Attention" table | **Rewritten** | Was narrow (unassigned-only). Now a real attention queue: one row per Trip needing attention, its single deterministically-prioritized primary reason (Open issue / Needs assignment / Location needs update / Location unavailable) as a `StatusBadge`, and a real destination action (Assign → Dispatch for `NEEDS_ASSIGNMENT`, Open Trip → Trip Detail otherwise) — never a generic "Review" link. |
+| `AssignmentGrid` | **Extended again** | A small warning-tone dot marker (non-color-only — also carries an aria-label suffix, "— has an open issue") now appears on a Trip block with an open exception, alongside the existing freshness indicator from P1-E3-S7A. |
+| `StatusBadge` | Reused, no code change | Every active assurance condition maps to the same existing amber "warning" tone (`assuranceStatusCategory()`) — no new visual tier added, per the calm/clinical mandate (ZD-174). |
+
+Full field-level rationale: [trip-assurance-model.md](../product/trip-assurance-model.md), [trip-assurance-data-map.md](../product/trip-assurance-data-map.md).
+
 ## Explicitly not building generically
 
 Per work item §35's own caution: no generic "Card" or "ListItem" abstraction is proposed merely for reuse. `DispatchQueueCard`, `DriverCapacityCard`, `TripRouteTimeline`, etc. are each named for what they specifically show, following the existing codebase's own pattern (`DriverTripCard`, not a generic `Card`).

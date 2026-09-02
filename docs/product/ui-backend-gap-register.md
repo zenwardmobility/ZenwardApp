@@ -69,9 +69,10 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Resolution (Dispatch Board, P1-E3-S5):** Built exactly as the original recommendation anticipated — `DriverCapacityPanel` shows real Driver names and an "On Trip" badge only when a genuine active-state assignment exists right now; no badge at all otherwise. AVAILABLE/BREAK/CONFLICT pills and the "Potential timing conflict"/"BREAK UNTIL..." grid annotations from the reference are not built (ZD-140). Still fully open as its own future work item.
 - **Reconfirmed still open (P1-E3-S7A):** Driver location tracking was built this phase, deliberately kept separate from this gap — a Driver having a fresh recorded location does NOT mean "Available" (work item §35 of P1-E3-S7A). `AssignmentGrid`'s new freshness indicator shows recency of a real Trip-execution location signal only, never an availability status; `DriverCapacityPanel` itself is unchanged.
 
-### GAP-7 — TripException Driver-facing status view
+### GAP-7 — TripException Driver-facing status view — **STILL OPEN after P1-E3-S8**
 
-- **Finding:** Reconfirms ZD-096's own deferral (P1-E2-S3) — the existing `trip_exceptions_select_assigned_driver` policy is retained but no projection surfaces it to Driver UI. No reference in this batch showed a Driver-facing exception LIST (only "Report Issue," a write action, which is already backend-ready via direct INSERT).
+- **Finding:** Reconfirms ZD-096's own deferral (P1-E2-S3) — the existing `trip_exceptions_select_assigned_driver` policy is retained but no projection surfaces it to Driver UI. No reference in this batch showed a Driver-facing exception LIST (only "Report Issue," a write action).
+- **P1-E3-S8 update:** The Operations-facing side of this gap is now fully closed — "Report Issue" and "Resolve" are both real, working actions on Trip Detail, backed by `report_trip_exception`/`resolve_trip_exception` (superseding the old "backend-ready via direct INSERT" note; the write path is now the controlled RPC pair, not a raw INSERT — see `mutation-authorization.md`). The Driver-facing exception LIST itself remains unbuilt — a Driver can report an issue through `report_trip_exception` but still cannot see the status of an exception (their own or Operations-created) anywhere in the Driver UI. Not addressed this phase; work item explicitly scoped Trip Assurance to Operations surfaces only ("Driver should not see confusing internal Operations terms").
 - **Severity:** Low.
 - **Blocks:** Nothing in this reference set.
 

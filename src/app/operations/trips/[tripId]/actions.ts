@@ -6,6 +6,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { mapTripDetailError, type TripDetailErrorCode } from "@/lib/operations/trip-detail-errors";
+import { mapTripExceptionError, type TripExceptionErrorCode } from "@/lib/operations/trip-exception-errors";
 
 export interface TripDetailActionState {
   status: "idle" | "success" | "error";
@@ -145,5 +146,101 @@ export async function addNoteAction(
   }
 
   await revalidateTripDetailRoutes(tripId);
+  return { status: "success" };
+}
+
+export interface TripExceptionActionState {
+  status: "idle" | "success" | "error";
+  errorCode?: TripExceptionErrorCode;
+}
+
+const EXCEPTION_TYPES = new Set([
+  "driver_issue",
+  "vehicle_issue",
+  "passenger_not_ready",
+  "pickup_issue",
+  "facility_delay",
+  "route_issue",
+  "other",
+]);
+
+/**
+ * Report Issue — the real `report_trip_exception` RPC only, never a
+ * direct `trip_exceptions` INSERT (work item §19/§24 of P1-E3-S8; see
+ * that migration's own header for why the pre-existing direct-INSERT
+ * policy was not narrow enough for the Operations population — it did
+ * not force `created_by`/`status`, unlike the Driver policy). Re-derives
+ * Operations authorization fresh on every call, exactly like every other
+ * action in this file.
+ */
+export async function reportExceptionAction(
+  _prevState: TripExceptionActionState,
+  formData: FormData,
+): Promise<TripExceptionActionState> {
+  const tripId = formData.get("tripId");
+  const exceptionType = formData.get("exceptionType");
+  const description = formData.get("description");
+
+  if (typeof tripId !== "string" || tripId.length === 0) {
+    return { status: "error", errorCode: "NOT_FOUND" };
+  }
+  if (typeof exceptionType !== "string" || !EXCEPTION_TYPES.has(exceptionType)) {
+    return { status: "error", errorCode: "INVALID_INPUT" };
+  }
+  if (typeof description !== "string" || description.trim().length === 0) {
+    return { status: "error", errorCode: "INVALID_INPUT" };
+  }
+
+  const pathname = await getCurrentPathname(`/operations/trips/${tripId}`);
+  await requireOperationsAccess(pathname);
+
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("report_trip_exception", {
+    p_trip_id: tripId,
+    p_exception_type: exceptionType,
+    p_description: description.trim(),
+  });
+
+  if (error) {
+    return { status: "error", errorCode: mapTripExceptionError(error.code) };
+  }
+
+  await revalidateTripDetailRoutes(tripId);
+  revalidatePath("/operations/dispatch");
+  return { status: "success" };
+}
+
+/**
+ * Resolve — the real `resolve_trip_exception` RPC only. Idempotent
+ * (a stale/duplicate resolve attempt is a safe no-op, see the RPC's own
+ * comment for why — never a corrupted double-transition).
+ */
+export async function resolveExceptionAction(
+  _prevState: TripExceptionActionState,
+  formData: FormData,
+): Promise<TripExceptionActionState> {
+  const tripId = formData.get("tripId");
+  const exceptionId = formData.get("exceptionId");
+  const resolutionNote = formData.get("resolutionNote");
+
+  if (typeof tripId !== "string" || tripId.length === 0 || typeof exceptionId !== "string" || exceptionId.length === 0) {
+    return { status: "error", errorCode: "NOT_FOUND" };
+  }
+
+  const pathname = await getCurrentPathname(`/operations/trips/${tripId}`);
+  await requireOperationsAccess(pathname);
+
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.rpc("resolve_trip_exception", {
+    p_exception_id: exceptionId,
+    p_resolution_note: typeof resolutionNote === "string" && resolutionNote.trim().length > 0 ? resolutionNote.trim() : undefined,
+  });
+
+  if (error) {
+    return { status: "error", errorCode: mapTripExceptionError(error.code) };
+  }
+
+  await revalidateTripDetailRoutes(tripId);
+  revalidatePath("/operations/dispatch");
   return { status: "success" };
 }

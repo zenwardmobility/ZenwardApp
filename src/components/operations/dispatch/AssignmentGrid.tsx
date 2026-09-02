@@ -152,8 +152,16 @@ export function AssignmentGrid({ driverRows, timezone, onReassign }: AssignmentG
                         onClick={() => onReassign(trip)}
                         className="absolute top-1/2 -translate-y-1/2 rounded-sm border border-border-subtle bg-surface-elevated px-2 py-1.5 text-left shadow-sm transition-colors hover:border-brand-interactive-teal focus-visible:border-brand-interactive-teal"
                         style={{ left, width: GRID_BLOCK_WIDTH_PX }}
-                        aria-label={`Reassign ${trip.passengerName}'s trip at ${formatOperationsTime(trip.scheduledPickupAt, timezone)}, currently assigned to ${row.driver.displayName}`}
+                        aria-label={`Reassign ${trip.passengerName}'s trip at ${formatOperationsTime(trip.scheduledPickupAt, timezone)}, currently assigned to ${row.driver.displayName}${trip.hasOpenException ? " — has an open issue" : ""}`}
                       >
+                        {/* P1-E3-S8 — a small, restrained open-exception marker (work item §31: "small attention marker... use restraint"). Never color-only (aria-label above already states it in words). */}
+                        {trip.hasOpenException && (
+                          <span
+                            className="absolute -right-1 -top-1 size-2.5 rounded-full border border-surface-elevated bg-warning-strong"
+                            aria-hidden
+                            title="Open issue reported"
+                          />
+                        )}
                         <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>
                           {trip.passengerName}
                         </p>

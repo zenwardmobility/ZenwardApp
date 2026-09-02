@@ -1,0 +1,507 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S8 — Trip Assurance & Operational Exceptions
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: e6c8377 "Implement Driver location and live
+                       Dispatch tracking" (contains the real P1-E3-S7A
+                       diff)
+Date/time:            2026-09-02
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK STATE
+--------------------------------------------------------------------
+`git status --short` was clean at the start of this phase. The most
+recent commit, e6c8377 "Implement Driver location and live Dispatch
+tracking," was confirmed via `git show --stat` to genuinely contain the
+P1-E3-S7A diff (driver_location_updates migration, DriverLocationTracker,
+Dispatch freshness integration, S7A completion report, ZD-161-ZD-168).
+Authoritative baseline confirmed before any new code: 240 SQL
+assertions, 32 RLS adversarial scenarios, 0 failures (per the S7A
+report's own final confirming run).
+
+--------------------------------------------------------------------
+2. PRODUCT FRAMING
+--------------------------------------------------------------------
+Trip Assurance is the first product-differentiation layer built this
+project — the operational substrate a future "ZENWARD TRIP ASSURANCE"
+commercial concept could rest on, but no such surface (scoring,
+marketing claims, facility-facing SLA dashboard) is built or implied
+this phase. It answers one question for a Dispatcher: "which Trips need
+my attention right now, and why?" — nothing more. No AI language, no
+predictive/forecasted claims, no Facility Portal, no billing, no route
+optimization were introduced (work item's own explicit non-goals).
+
+--------------------------------------------------------------------
+3. ARCHITECTURE DECISION — DERIVED, NOT PERSISTED
+--------------------------------------------------------------------
+Trip Assurance is computed at read time, never written to `trips.state`
+or any new column (ZD-169). One pure function,
+`evaluateTripAssurance(facts: TripAssuranceFacts, now: Date):
+TripAssuranceCondition` in `src/lib/operations/trip-assurance.ts`, takes
+a narrow, explicit fact object (Trip lifecycle state, whether an active
+assignment exists, the assignment-scoped latest location if any,
+open-exception count) and one centralized `now` — never `new Date()`
+scattered through components, never a raw DB row passed in directly.
+This keeps the vocabulary trivially re-evaluable and structurally
+incapable of drifting out of sync with the facts it explains.
+
+--------------------------------------------------------------------
+4. ASSURANCE VOCABULARY (ZD-170)
+--------------------------------------------------------------------
+Six codes, evaluated in one fixed, deterministic priority order (a real
+ranked `if` chain, never row/array order):
+  1. TERMINAL              — Trip already in a terminal state
+                              (completed/cancelled/no_show) — excluded
+                              from active attention regardless of any
+                              other condition.
+  2. OPEN_EXCEPTION         — >=1 real, persisted `open` trip_exceptions
+                              row exists for this Trip.
+  3. NEEDS_ASSIGNMENT       — `state == 'scheduled'` and no active
+                              TripAssignment (unchanged derivation from
+                              prior phases).
+  4. LOCATION_UNAVAILABLE / — only evaluated for Trips in one of the 5
+     LOCATION_STALE           `ELIGIBLE_LOCATION_TRACKING_STATES`
+                               (reused from S7A) AND with an active
+                               assignment; reuses `classifyLocationFreshness`
+                               and its established thresholds verbatim
+                               (no threshold duplication).
+  5. ON_TRACK               — none of the above apply. Copy is
+                              deliberately conservative ("No current
+                              issues"), never overclaiming reliability.
+No numeric score exists anywhere (no "Trip Assurance Score 84/100," no
+"Reliability 92%") — every condition carries a code, a human label, a
+human explanation, and its source facts; nothing opaque.
+
+--------------------------------------------------------------------
+5. NO INVENTED LATENESS (ZD-171)
+--------------------------------------------------------------------
+No lateness/ETA condition was implemented this phase. No comparison
+against `scheduled_pickup_at` drives any assurance code. The work item
+requires a formally-approved, business-defined threshold rule before
+any lateness condition is built — none was established, so none was
+invented. This is a deliberate omission, not an oversight.
+
+--------------------------------------------------------------------
+6. EXCEPTION AUTHORIZATION — WHY TWO RPCs, NOT DIRECT WRITES (ZD-172)
+--------------------------------------------------------------------
+The pre-existing `trip_exceptions` RLS policies (present since
+P1-E2-S1, deferred at P1-E3-S6) were inspected before building against
+them:
+  - `trip_exceptions_insert_assigned_driver` — already narrow and safe
+    (org match, `is_driver_assigned_to_trip`, `created_by`/`status`
+    forced) — reusable as-is.
+  - `trip_exceptions_insert_operations` — org-scoped but did NOT force
+    `created_by`/`status`, an impersonation/fabricated-history risk.
+  - `trip_exceptions_update_operations` — org-scoped but had NO column
+    restriction at all — a raw UPDATE could rewrite any field on a
+    resolved historical row or silently reopen it.
+Conclusion: rather than split the write path across two mechanisms for
+one logical action, both actor populations (Operations AND the Trip's
+own ever-assigned Driver) now go through the same controlled RPC pair.
+The old direct policies were deliberately NOT revoked (narrowing them
+correctly would require rebuilding the same restriction the RPCs
+already provide) — documented, not silently left as a forgotten gap
+(see rls-model.md, mutation-authorization.md).
+
+--------------------------------------------------------------------
+7. report_trip_exception (CREATE)
+--------------------------------------------------------------------
+`report_trip_exception(p_trip_id uuid, p_exception_type text default
+null, p_description text default null) returns trip_exception_result`.
+SECURITY DEFINER. Callable by Operations (organization_admin/dispatcher,
+any Trip in their org) OR the Trip's own ever-assigned Driver. Forces
+`created_by = auth.uid()` and `status = 'open'` structurally (not by
+convention) for both actor types. Validates description non-blank and
+<=2000 chars if provided. Exception type is a restrained 7-value
+application-layer list (driver_issue, vehicle_issue,
+passenger_not_ready, pickup_issue, facility_delay, route_issue, other)
+— not database-enforced (the column's own schema comment says taxonomy
+is not yet finalized), but the UI only ever offers these 7. Writes one
+`trip_events` row (`exception_flagged`) — a CHECK-constraint value
+allow-listed since the very first schema migration but unused until
+this phase. No AuditEvent (see §9).
+
+--------------------------------------------------------------------
+8. resolve_trip_exception (RESOLVE)
+--------------------------------------------------------------------
+`resolve_trip_exception(p_exception_id uuid, p_resolution_note text
+default null) returns trip_exception_result`. SECURITY DEFINER.
+Operations-only (organization_admin/dispatcher) — Driver never resolves,
+matching the schema's own original comment. ZW002 (not_found, no
+existence oracle) if the exception does not exist or the caller has no
+org role over it. Idempotent no-op (ZD-173): a second resolve of an
+already-resolved exception returns the real, already-persisted
+resolution untouched (`changed=false`) rather than raising a conflict —
+deliberately looser than `reassign_trip`'s fail-closed staleness
+contract (P1-E3-S5B), because two resolutions of the same exception can
+never disagree about the operationally relevant fact ("is this
+handled?"), unlike a reassignment's driver/vehicle choice. Never
+deletes — history is preserved. Writes one `trip_events` row
+(`exception_resolved`) only on a real resolve.
+
+--------------------------------------------------------------------
+9. NO AUDITEVENT FOR EXCEPTIONS
+--------------------------------------------------------------------
+Neither RPC writes `audit_events`. Reporting/resolving an operational
+exception does not "materially change responsibility or reach a
+terminal disposition" of the Trip itself (ZD-087's own literal test) —
+it is an operational flag, not an administrative mutation of who owns
+or how a Trip concludes. Matches the already-established precedent that
+`trip_notes` (Add Note) also writes no AuditEvent.
+
+--------------------------------------------------------------------
+10. TODAY'S OPERATIONS — REAL ATTENTION QUEUE
+--------------------------------------------------------------------
+`getTodaysOperationsData` (todays-operations.ts) now runs a second query
+phase, scoped to exactly the candidate Trip id set already resolved by
+the first phase (never a broader per-org scan — the same two-phase
+discipline established in dispatch-board.ts, S7A): open `trip_exceptions`
+(id/trip_id/exception_type/created_at only — list-surface read
+minimization) and `getLatestLocationsByTrip` for the eligible-tracking
+subset. `evaluateTripAssurance` is run once per candidate Trip against
+one shared `now`. `attentionItems` are sorted by a real rank map
+(`PRIORITY_RANK`: OPEN_EXCEPTION:0, NEEDS_ASSIGNMENT:1,
+LOCATION_STALE:2, LOCATION_UNAVAILABLE:3) then by `scheduledPickupAt` —
+never database/array insertion order. Each row shows Passenger/Trip,
+the single primary reason, current state/assignment context, and a real
+destination action ("Assign" -> Dispatch for NEEDS_ASSIGNMENT, "Open
+Trip" -> Trip Detail otherwise) — never a generic "Review" link. One
+Trip, one row (deduplication verified — see §16).
+
+--------------------------------------------------------------------
+11. TRIP DETAIL — EXCEPTIONS PANEL UPGRADE
+--------------------------------------------------------------------
+`TripExceptionsPanel` is now `"use client"`, receives `tripId`, and
+shows: a calm empty state ("No open exceptions") when none exist; a
+clear list of open exceptions when present, each with a working
+"Resolve" action opening `ResolveExceptionDialog`; a working "Report
+Issue" button (previously honestly disabled since S6/S6A) opening
+`ReportIssueDialog`. No redesign of the surrounding Trip Detail screen.
+
+--------------------------------------------------------------------
+12. DISPATCH INTEGRATION — RESTRAINED (ZD-175)
+--------------------------------------------------------------------
+`DispatchTrip.hasOpenException: boolean` — one new parallel-scoped query
+in `getDispatchBoardData` (open exceptions for all board Trip ids).
+`AssignmentGrid` renders one small warning-tone dot marker
+(`absolute -right-1 -top-1 size-2.5 rounded-full`) on a Trip block with
+an open exception, plus an aria-label suffix ("— has an open issue") —
+never color-only. No other Dispatch layout change. Realtime remains
+deferred (ZD-176, reusing ZD-165's "security beats animation"
+reasoning) — the existing 20s `DispatchLiveRefresh` polling now also
+carries the new marker on every refresh.
+
+--------------------------------------------------------------------
+13. VISUAL DIRECTION — CALM, CLINICAL (ZD-174)
+--------------------------------------------------------------------
+`assuranceStatusCategory()` maps every active condition (OPEN_EXCEPTION,
+NEEDS_ASSIGNMENT, LOCATION_STALE, LOCATION_UNAVAILABLE) to the SAME
+existing amber "warning" `StatusBadge` tone — no new red/critical tier,
+no per-condition color escalation. Natural-language copy ("Open issue,"
+"Needs assignment," "Location needs update," "Location unavailable,"
+"No current issues") is used everywhere in the UI — no raw internal
+codes (OPEN_EXCEPTION, LOCATION_STALE) are ever exposed to a user.
+Visually confirmed via screenshots showing all four active condition
+types simultaneously rendered with a uniform, non-alarming tone (§17).
+
+--------------------------------------------------------------------
+14. SQL TEST SUITE — trip_exception_tests.sql (16 assertions, real PASS)
+--------------------------------------------------------------------
+EXC-A through EXC-M cover: Operations create (org-scoped), Driver create
+(ever-assigned), foreign-org create denial (no existence oracle),
+description validation (blank/oversized), Operations-only resolve,
+Driver resolve denial, foreign-org resolve denial (EXC-L), idempotent
+no-op resolve (real second-resolve verified to preserve the first
+resolution untouched), never-deletes verification, and a dedicated
+atomicity proof (EXC-M/EXC-M-DB) — a temporary trigger forces a
+mid-transaction failure inside `trip_events` INSERT and proves the
+earlier `trip_exceptions` INSERT rolls back too, no partial write
+persisted.
+
+--------------------------------------------------------------------
+15. APPLICATION-LEVEL TEST SCENARIOS (ALL REAL BROWSER + REAL DB)
+--------------------------------------------------------------------
+- Exception E2E (6/6 PASS): Report Issue via the real Trip Detail UI ->
+  real DB row -> Today's Operations attention queue shows "Open issue"
+  -> Resolve via the real UI -> calm empty state -> DB shows
+  resolved+history preserved -> attention queue clears.
+- Attention matrix (6/6 PASS): 5 deterministic seeded Trip types (needs-
+  assignment, fresh-healthy, stale-location, open-exception, terminal)
+  each render (or correctly do NOT render) in the attention queue with
+  the correct reason; terminal Trips correctly excluded; deduplication
+  verified via a real DOM-row-scoped count (exactly one row per Trip,
+  never duplicated across its multiple simultaneous conditions).
+- Assurance dynamics (6/6 PASS):
+  - SCENARIO1 (reassignment): a fresh location under the FORMER
+    assignment does NOT satisfy the new assignment after reassignment —
+    the Trip correctly reads LOCATION_UNAVAILABLE until the new Driver
+    posts, proving assignment-scoped merge discipline extends correctly
+    to the derived assurance layer.
+  - SCENARIO2 (location recovery): a Trip with no location posted reads
+    LOCATION_UNAVAILABLE; after a REAL fresh post through the real
+    Driver UI (DriverLocationTracker, real geolocation override), the
+    Trip clears from the attention queue.
+  - SCENARIO3 (priority + resolve): a Trip with BOTH an open exception
+    AND a stale location shows only "Open issue" (never both) —
+    deterministic priority confirmed live, not just at the unit level;
+    after resolving the exception through the real UI, the
+    previously-hidden secondary condition ("Location needs update")
+    correctly becomes the new visible primary reason.
+- Full regression smoke (13/13 PASS, work item §68): New Trip, Today's
+  Operations, Dispatch, Trip Detail all load; assign_trip and
+  reassign_trip both exercised through the real Dispatch UI (Select-
+  driven, not a fabricated click) with real DB verification of the
+  resulting active assignment; Cancel Trip and Record No-Show both
+  exercised through the real Trip Detail dialogs (required-field
+  textareas genuinely filled, not bypassed) with real DB state
+  verification; Driver Today/Trips/Active Trip all load; the full
+  6-step Driver lifecycle (Start to Pickup -> I'VE ARRIVED -> Passenger
+  Onboard -> Start to Destination -> I'VE ARRIVED -> Complete Trip) was
+  walked through the real Driver UI to a real `completed` state.
+
+--------------------------------------------------------------------
+16. DEDUPLICATION VERIFICATION
+--------------------------------------------------------------------
+Confirmed via real DOM row-scoped queries (`querySelectorAll("table
+tbody tr")`, counting actual `<tr>` elements pairing a Trip's own
+identifying text with its own single primary reason) — not page-wide
+substring counting, which double-counts legitimate separate appearances
+across the Attention table and the Upcoming Trips table. Exactly one
+attention-queue row exists per Trip needing attention, in every tested
+scenario, including the deliberately dual-condition SCENARIO3 fixture.
+
+--------------------------------------------------------------------
+17. VISUAL QA
+--------------------------------------------------------------------
+Today's Operations — docs/design/qa/trip-assurance/todays-operations/ —
+5 widths (768x1024, 1024x768, 1280x800, 1440x900, 1600x1000), captured
+with all 4 active condition types simultaneously present via the
+deterministic MATRIX fixture set. Priority ordering, uniform warning
+tone, and real summary counts all visually confirmed correct.
+
+Trip Detail — docs/design/qa/trip-assurance/trip-detail/ — no-exception,
+open-exception, and after-resolution states, each at 1440x900 and
+1024x768 (6 screenshots total). The open-exception state shows a real
+amber exception chip in the Trip Exceptions panel; the after-resolution
+state shows the calm empty state restored.
+
+Dispatch — docs/design/qa/trip-assurance/dispatch/ — captured at
+1440x900 and 1280x800 (a real visual element, the open-exception
+marker, was added this phase, so capturing was the more defensible
+choice over documenting non-materiality). The marker's presence was
+independently confirmed via a real aria-label DOM check, not visual
+inspection alone.
+
+--------------------------------------------------------------------
+18. ACCESSIBILITY VERIFICATION
+--------------------------------------------------------------------
+Verified live via real CDP-driven DOM inspection against
+ReportIssueDialog and ResolveExceptionDialog:
+- Both dialogs have an accessible label (`aria-labelledby`, via the
+  shared `Dialog` primitive's own `titleId`).
+- Focus moves inside the dialog on open (native `showModal()` focus
+  trap — confirmed via `document.activeElement`).
+- Decorative icons inside dialogs are `aria-hidden` (confirmed: 2/2 in
+  ReportIssueDialog).
+- Both dialogs expose explicit, labelled action buttons (never an
+  ambiguous icon-only control).
+- Submitting a dialog with a required field empty does not silently
+  proceed (native HTML5 `required` validation blocks submission).
+- ESC genuinely closes the dialog — verified with a REAL low-level CDP
+  key event (`Input.dispatchKeyEvent`), after an initial synthetic
+  `document.dispatchEvent(new KeyboardEvent(...))` test falsely FAILED
+  (a synthetic DOM KeyboardEvent does not trigger a native `<dialog>`'s
+  built-in ESC handling in a real browser — a test-script artifact,
+  not an app bug; re-verified with genuine key input, PASS).
+- Exception status (open/resolved) is conveyed via text ("Resolved,"
+  "No open exceptions"), never color alone.
+- The Dispatch open-exception marker is announced via a real
+  `aria-label`, not color-only.
+12/12 accessibility assertions PASS on the final run.
+
+--------------------------------------------------------------------
+19. SECURITY REVIEW
+--------------------------------------------------------------------
+- No RLS policy was broadened. The pre-existing `trip_exceptions` direct
+  policies remain exactly as narrow (or not) as before — the
+  application simply no longer relies on the two that weren't narrow
+  enough.
+- No new Driver base-table read widening: no canonical Passenger
+  SELECT, no broad Trip SELECT, no broad DriverLocation SELECT was
+  added or needed.
+- Every assurance input query is organization-scoped; foreign data
+  cannot influence a result (unchanged from S7A's own established
+  posture, reused verbatim).
+- Exception list reads are minimized (id/trip_id/exception_type/
+  created_at only) — full description is fetched only on Trip Detail.
+- PlatformAdminGrant still implies no tenant operational access
+  (untouched this phase).
+- Tenant isolation for the new RPCs verified directly at the SQL layer
+  (EXC-L: foreign-org resolve correctly denied with ZW002, no existence
+  oracle) and is structurally identical to every prior RPC's own
+  `has_org_role`/`is_driver_assigned_to_trip` pattern.
+
+--------------------------------------------------------------------
+20. FINAL SQL REGRESSION (fresh reset, raw output, this run)
+--------------------------------------------------------------------
+A genuine `supabase db reset` was run immediately before this final
+confirming pass (not reused from mid-phase testing). All 20 SQL test
+files were executed against the fresh database and their raw NOTICE
+output counted directly — not copied forward from any prior phase's own
+reported number (work item's own explicit "do not repeat the S4-S6
+copy-forward counting mistake"):
+
+  constraint_tests.sql:                    13
+  create_trip_atomicity_tests.sql:          2
+  create_trip_privilege_tests.sql:          5
+  create_trip_tests.sql:                   20
+  driver_location_tests.sql:               20
+  driver_read_authorization_tests.sql:     17
+  driver_read_history_tests.sql:            8
+  driver_read_minimization_tests.sql:      13
+  driver_read_privilege_tests.sql:          8
+  function_privilege_tests.sql:             7
+  mutation_assignment_tests.sql:           19
+  mutation_atomicity_tests.sql:             2
+  mutation_authorization_tests.sql:         4
+  mutation_idempotent_authorization_tests.sql: 6
+  mutation_lifecycle_tests.sql:            24
+  mutation_privilege_tests.sql:             7
+  organization_timezone_tests.sql:         13
+  rls_adversarial_tests.sql:               32
+  security_definer_exposure_tests.sql:     20
+  trip_exception_tests.sql:                16
+  -------------------------------------------
+  TOTAL:                                  256
+
+0 FAIL verdicts, 0 fatal psql ERROR lines across the entire run. The
+RLS adversarial count (32) matches the P1-E3-S7B-established
+authoritative baseline exactly. `trip_exception_tests.sql` is entirely
+new this phase (16/16 real PASS). The genuine two-process concurrency
+test (`mutation_concurrency_test.sh`) was re-run fresh: PASS (Session B
+blocked ~1.82s on the Trip row lock, then correctly observed Session A's
+committed assignment and rejected with `assignment_conflict` —
+unaffected by this phase's changes, confirmed not merely assumed).
+
+--------------------------------------------------------------------
+21. HOUSEKEEPING
+--------------------------------------------------------------------
+`npx tsc --noEmit`: clean, 0 errors. `npm run lint`: 0 errors (2
+pre-existing unused-variable warnings in a since-deleted `.tmp-qa` test
+script, not shipped code). `npm run build`: succeeded, all 24 routes
+compiled. `.tmp-qa/` deleted. Dev server and headless Chrome test
+processes stopped. A final fresh `supabase db reset` was run to leave a
+clean, deterministic seeded state for the next phase.
+
+--------------------------------------------------------------------
+22. WHAT WAS NOT BUILT (DELIBERATELY, PER SCOPE)
+--------------------------------------------------------------------
+- No lateness/ETA condition (§5 above).
+- No Driver-facing exception status view (GAP-7 remains open — Driver
+  can report an issue but still cannot see any exception's status).
+- No Realtime subscription for assurance or the attention queue (§12).
+- No embedded map, no third-party map SDK.
+- No Facility Portal, no billing, no broker integration, no route
+  optimization, no native Driver app, no public Web intake — none were
+  begun, per the work item's explicit final prohibition.
+- No automated TripException retention/archival policy (none was asked
+  for this phase; TripException rows are operational, not high-volume
+  telemetry like locations, so no retention policy was drafted).
+
+--------------------------------------------------------------------
+23. FILES CHANGED THIS PHASE
+--------------------------------------------------------------------
+New:
+  supabase/migrations/20260902150000_trip_exception_mutations.sql
+  supabase/tests/trip_exception_tests.sql
+  src/lib/operations/trip-assurance.ts
+  src/lib/operations/trip-exception-errors.ts
+  src/components/operations/trip-detail/ReportIssueDialog.tsx
+  src/components/operations/trip-detail/ResolveExceptionDialog.tsx
+  docs/product/trip-assurance-model.md
+  docs/product/trip-assurance-data-map.md
+  docs/design/qa/trip-assurance/ (todays-operations/, trip-detail/,
+    dispatch/)
+  docs/reports/P1-E3-S8-trip-assurance-operational-exceptions-report.txt
+    (this file)
+
+Modified:
+  src/lib/operations/todays-operations.ts
+  src/lib/operations/dispatch-board.ts
+  src/lib/operations/presentation.ts
+  src/lib/supabase/database.types.ts
+  src/app/operations/page.tsx
+  src/app/operations/trips/[tripId]/actions.ts
+  src/app/operations/trips/[tripId]/page.tsx
+  src/components/operations/trip-detail/TripExceptionsPanel.tsx
+  src/components/operations/dispatch/AssignmentGrid.tsx
+  docs/data/mutation-api.md
+  docs/design/component-inventory.md
+  docs/product/application-implementation-plan.md
+  docs/product/decision-register.md (ZD-169 through ZD-176)
+  docs/product/ui-backend-gap-register.md
+  docs/security/mutation-authorization.md
+  docs/security/rls-model.md
+
+--------------------------------------------------------------------
+24. NEXT RECOMMENDED PHASE
+--------------------------------------------------------------------
+P1-E3-S9 — Commercial Pilot Readiness & Operator Onboarding, per this
+work item's own stated expectation. Dispatch Board drag-and-drop
+(ZD-138, ready since P1-E3-S7) remains fully available whenever
+prioritized instead.
+====================================================================
+TRIP ASSURANCE FUNCTIONAL GATE:
+READY
+
+TRIP ASSURANCE VISUAL GATE:
+READY
+
+TRIP ASSURANCE SECURITY GATE:
+READY
+
+TRIP ASSURANCE IMPLEMENTATION GATE:
+READY
+
+ASSURANCE MODEL:
+PASS
+
+EXCEPTION CREATE:
+PASS
+
+EXCEPTION RESOLVE:
+PASS
+
+ASSIGNMENT-SCOPED LOCATION:
+PASS
+
+TENANT ISOLATION:
+PASS
+
+DRIVER PRIVILEGE WIDENING:
+NONE
+
+AUTHORITATIVE SQL ASSERTION COUNT:
+256
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S9 — Commercial Pilot Readiness & Operator Onboarding
+
+REPORT FILE:
+docs/reports/P1-E3-S8-trip-assurance-operational-exceptions-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; no remote
+Supabase was linked; no Facility Portal, billing, broker integration,
+route optimization, native Driver app, or public Web intake was begun.
+This phase stops here.
+====================================================================

@@ -1,0 +1,399 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S8A1 — Git Lineage & Checkpoint Integrity Audit
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Date/time:            2026-09-02
+Scope:                AUDIT ONLY — no product code modified, nothing
+                       committed, nothing pushed, no repair performed.
+====================================================================
+
+--------------------------------------------------------------------
+1. REPOSITORY ROOT
+--------------------------------------------------------------------
+`pwd`                          -> /Users/datamatics/ZenWard
+`git rev-parse --show-toplevel` -> /Users/datamatics/ZenWard
+Both agree. This session operated in the correct, single repository the
+entire time — no evidence of an accidental second worktree or clone.
+
+--------------------------------------------------------------------
+2. BRANCH
+--------------------------------------------------------------------
+`git branch --show-current` -> main
+
+--------------------------------------------------------------------
+3. ACTUAL HEAD SHA
+--------------------------------------------------------------------
+`git rev-parse HEAD` -> e6c83770ebdfaf53d7f70204ac6239bbecf1c1b3
+(short form: e6c8377)
+
+--------------------------------------------------------------------
+4. ACTUAL HEAD MESSAGE
+--------------------------------------------------------------------
+"Implement Driver location and live Dispatch tracking" — this is the
+real, current, single most-recent commit on `main`. It is the SAME
+commit P1-E3-S8's own completion report correctly cited as its pre-work
+HEAD.
+
+--------------------------------------------------------------------
+5. GIT STATUS
+--------------------------------------------------------------------
+`git status --short` — 16 modified files, 13 untracked files (full list
+below in §14). No staged changes, no merge conflicts, no detached-HEAD
+warning, no "ahead/behind" anomaly beyond the expected one (see §7 —
+`origin/main` sits one commit behind local `main`, at 9960da3, because
+e6c8377 has not been pushed, exactly as every phase's own "Do NOT push"
+instruction has required throughout this project).
+
+--------------------------------------------------------------------
+6. GIT GRAPH
+--------------------------------------------------------------------
+`git log --oneline --decorate --graph -20`:
+
+  * e6c8377 (HEAD -> main) Implement Driver location and live Dispatch tracking
+  * 9960da3 (origin/main) Implement Operations Trip Detail
+  * bf8f3f1 Implement Operations Trip Detail
+  * 46c2c81 Implement and harden Dispatch Board
+  * 6357a47 Implement Today's Operations dashboard
+  * 7f0eb9d Implement Driver trip workflow
+  * a3ac9ca Implement Driver Today and operational timezone foundation
+  * 1f529eb Implement secure authentication and role routing
+  * 81fed9b Implement controlled internal trip creation
+  * 7bbdb18 Implement secure driver read models
+  * f8633a2 Implement secure transactional trip mutations
+  * 79f4f76 Implement Supabase schema, RLS, and security hardening
+  * 9e96741 Initial commit: Zenward Mobility product foundation
+
+A single, perfectly linear chain — no merge commits, no branches, no
+forks, no orphaned commits. `6357a47` IS present in this history, but
+FOUR commits behind the actual HEAD (`46c2c81` -> `bf8f3f1` -> `9960da3`
+-> `e6c8377` all postdate it). It was never the repository's actual HEAD
+at any point during or after P1-E3-S8A's own work session.
+
+--------------------------------------------------------------------
+7. REFLOG SUMMARY
+--------------------------------------------------------------------
+`git reflog -20` shows exactly 13 entries, HEAD@{0} through HEAD@{12},
+and EVERY SINGLE ONE is a plain `commit` action:
+
+  e6c8377 HEAD@{0}:  commit: Implement Driver location and live Dispatch tracking
+  9960da3 HEAD@{1}:  commit: Implement Operations Trip Detail
+  bf8f3f1 HEAD@{2}:  commit: Implement Operations Trip Detail
+  46c2c81 HEAD@{3}:  commit: Implement and harden Dispatch Board
+  6357a47 HEAD@{4}:  commit: Implement Today's Operations dashboard
+  7f0eb9d HEAD@{5}:  commit: Implement Driver trip workflow
+  a3ac9ca HEAD@{6}:  commit: Implement Driver Today and operational timezone foundation
+  1f529eb HEAD@{7}:  commit: Implement secure authentication and role routing
+  81fed9b HEAD@{8}:  commit: Implement controlled internal trip creation
+  7bbdb18 HEAD@{9}:  commit: Implement secure driver read models
+  f8633a2 HEAD@{10}: commit: Implement secure transactional trip mutations
+  79f4f76 HEAD@{11}: commit: Implement Supabase schema, RLS, and security hardening
+  9e96741 HEAD@{12}: commit (initial): Initial commit: Zenward Mobility product foundation
+
+There is NO `reset`, NO `rebase`, NO `checkout` (to a different ref), NO
+`cherry-pick`, NO `commit --amend`, and NO forced-update entry anywhere
+in this repository's ENTIRE reflog history. This is the single strongest
+piece of evidence in this audit: the reflog is the authoritative,
+tamper-evident record of every way HEAD has ever moved in this
+repository, and it shows nothing but a clean, monotonic sequence of
+ordinary commits from the very first one onward.
+
+--------------------------------------------------------------------
+8. S5 MILESTONE STATUS — INTACT, COMMITTED
+--------------------------------------------------------------------
+Commit `46c2c81` "Implement and harden Dispatch Board" (author: maaklin,
+2026-09-02 02:58:43 +0100). `git show --stat` confirms genuine content,
+not a message-only/empty commit: `docs/reports/P1-E3-S5-completion-
+report.txt` (1031 lines), `docs/reports/P1-E3-S5A-reassignment-
+concurrency-report.txt` (428 lines), `docs/reports/P1-E3-S5B-strict-
+stale-precondition-report.txt` (327 lines), the full Dispatch Board
+component set (`AssignmentDialog.tsx`, `AssignmentGrid.tsx`,
+`DispatchBoardClient.tsx`, `DriverCapacityPanel.tsx`,
+`NeedsAssignmentQueue.tsx`), `dispatch-board.ts`, the reassignment
+concurrency hardening migration, and 8 real QA screenshots under
+`docs/design/qa/dispatch-board/`. `git ls-tree -r HEAD` confirms
+`AssignmentGrid.tsx`/`AssignmentDialog.tsx` are present in the current
+HEAD tree.
+
+--------------------------------------------------------------------
+9. S6 MILESTONE STATUS — INTACT, COMMITTED
+--------------------------------------------------------------------
+Commit `bf8f3f1` "Implement Operations Trip Detail" (author: maaklin,
+2026-09-02 06:25:00 +0100). Commit MESSAGE BODY (not just subject line)
+explicitly states "P1-E3-S6: builds the canonical Operations Trip Detail
+screen..." and "P1-E3-S6A: audits every visible Trip Detail action..."
+and cites "221/221 SQL regression, 34/34 Trip Detail functional tests."
+`git show --stat` confirms real content: Trip Detail QA screenshots
+(cancel/no-show dialogs, scheduled/in-progress states at 5 widths),
+consistent with both S6 and S6A's own completion reports (both present
+in this repository's `docs/reports/`, per §7 of the file listing above).
+`git ls-tree -r HEAD` confirms `TripExceptionsPanel.tsx` is present in
+HEAD (its S6-era version — later modified, not created, by the S8
+working-tree diff; see §14).
+
+--------------------------------------------------------------------
+10. S7 MILESTONE STATUS — INTACT, COMMITTED (message is a stale
+    duplicate; content is not)
+--------------------------------------------------------------------
+Commit `9960da3` "Implement Operations Trip Detail" — the SAME commit
+SUBJECT LINE as `bf8f3f1` (§9), with no message body at all. This
+duplicate subject is a known, previously-investigated artifact (the
+git-authoring tooling used by this project's own commit process reused
+a stale message) — but `git show --stat`/`git show --name-status` prove
+the actual DIFF is entirely different, genuine S7/S7B content: `docs/
+reports/P1-E3-S7-completion-report.txt` (1043 lines), `docs/reports/
+P1-E3-S7B-sql-baseline-audit-report.txt` (270 lines), `docs/product/
+new-trip-data-map.md`, `src/lib/operations/local-time.ts`, `src/lib/
+operations/new-trip.ts`/`new-trip-options.ts`/`new-trip-errors.ts`,
+the full New Trip component set (`NewTripForm.tsx`,
+`AddPassengerDialog.tsx`, `FormSection.tsx`), and 8 New Trip QA
+screenshots — 27 files changed, 2643 insertions total. `git ls-tree -r
+HEAD` confirms `NewTripForm.tsx`/`local-time.ts` are present in HEAD.
+The commit MESSAGE is misleading in isolation; the commit CONTENT is
+correct and verified. (This exact discrepancy was already identified
+and documented once before, in the pre-work verification for P1-E3-S7A
+— this audit independently re-confirms the same finding via the same
+method, `git show --stat`, not by trusting the earlier finding.)
+
+--------------------------------------------------------------------
+11. S7A MILESTONE STATUS — INTACT, COMMITTED (= current HEAD)
+--------------------------------------------------------------------
+Commit `e6c8377` "Implement Driver location and live Dispatch tracking"
+— this IS the current repository HEAD (§3/§4). Full, accurate,
+non-duplicate commit message describing `driver_location_updates`,
+`driver_record_location`, `DriverLocationTracker`, Dispatch freshness
+integration, and citing "240/240 SQL assertions (20 new)." `git show
+--stat` confirms real content: `docs/reports/P1-E3-S7A-driver-location-
+live-dispatch-report.txt`, the driver-location migration, 10 driver-
+location/live-dispatch QA screenshots, `docs/data/mutation-api.md` and
+`docs/data/schema.md` updates. `git ls-tree -r HEAD` confirms
+`DriverLocationTracker.tsx` and the S7A migration
+(`20260902140000_driver_location_tracking.sql`) are both present in
+HEAD.
+
+--------------------------------------------------------------------
+12. S8 STATUS — GENUINE, UNCOMMITTED (as explicitly instructed)
+--------------------------------------------------------------------
+No commit for P1-E3-S8 exists anywhere in `git log` or `git reflog`.
+`git ls-tree -r HEAD` confirms `src/lib/operations/trip-assurance.ts`,
+`src/components/operations/trip-detail/ReportIssueDialog.tsx`, and
+`supabase/migrations/20260902150000_trip_exception_mutations.sql` are
+ALL ABSENT from HEAD. All three exist on disk in the current working
+tree (confirmed by direct file-existence check). This is the CORRECT,
+EXPECTED state: P1-E3-S8's own work item explicitly instructed "Do NOT
+commit," and every phase since (S8A, this audit) has correctly continued
+to treat the tree as intentionally dirty, never silently committing on
+S8's behalf.
+
+--------------------------------------------------------------------
+13. S8A STATUS — GENUINE, UNCOMMITTED (as explicitly instructed)
+--------------------------------------------------------------------
+No commit for P1-E3-S8A exists anywhere in `git log` or `git reflog`
+either. `supabase/migrations/20260902160000_exception_mutation_boundary_
+hardening.sql` is absent from `git ls-tree -r HEAD`, present on disk.
+Same correct, expected, explicitly-instructed state as S8.
+
+--------------------------------------------------------------------
+14. WORKING-TREE ATTRIBUTION
+--------------------------------------------------------------------
+`git diff --stat` / `git diff --name-status` (tracked-file changes
+against HEAD) show exactly 16 modified files:
+
+  M  docs/data/mutation-api.md
+  M  docs/design/component-inventory.md
+  M  docs/product/application-implementation-plan.md
+  M  docs/product/decision-register.md
+  M  docs/product/ui-backend-gap-register.md
+  M  docs/security/mutation-authorization.md
+  M  docs/security/rls-model.md
+  M  src/app/operations/page.tsx
+  M  src/app/operations/trips/[tripId]/actions.ts
+  M  src/app/operations/trips/[tripId]/page.tsx
+  M  src/components/operations/dispatch/AssignmentGrid.tsx
+  M  src/components/operations/trip-detail/TripExceptionsPanel.tsx
+  M  src/lib/operations/dispatch-board.ts
+  M  src/lib/operations/presentation.ts
+  M  src/lib/operations/todays-operations.ts
+  M  src/lib/supabase/database.types.ts
+
+Plus 13 untracked files:
+
+  ?? docs/design/qa/trip-assurance/
+  ?? docs/product/trip-assurance-data-map.md
+  ?? docs/product/trip-assurance-model.md
+  ?? docs/reports/P1-E3-S8-trip-assurance-operational-exceptions-report.txt
+  ?? docs/reports/P1-E3-S8A-exception-mutation-boundary-report.txt
+  ?? src/components/operations/trip-detail/ReportIssueDialog.tsx
+  ?? src/components/operations/trip-detail/ResolveExceptionDialog.tsx
+  ?? src/lib/operations/trip-assurance.ts
+  ?? src/lib/operations/trip-exception-errors.ts
+  ?? supabase/migrations/20260902150000_trip_exception_mutations.sql
+  ?? supabase/migrations/20260902160000_exception_mutation_boundary_hardening.sql
+  ?? supabase/tests/exception_mutation_boundary_tests.sql
+  ?? supabase/tests/trip_exception_tests.sql
+
+Every one of these 29 paths corresponds exactly, file-for-file, to the
+"FILES CHANGED"/"FILES MODIFIED" sections already declared in P1-E3-S8's
+own completion report (§23) and P1-E3-S8A's own completion report (§43).
+None of them touch any file that belongs to an earlier, already-
+committed phase's OWN creation (no `AssignmentDialog.tsx`, no
+`NewTripForm.tsx`, no `local-time.ts`, no `DriverLocationTracker.tsx` —
+all already safely in HEAD per §8-§11). The 6 files this diff modifies
+that ALSO existed before this phase (`AssignmentGrid.tsx`,
+`TripExceptionsPanel.tsx`, `dispatch-board.ts`, `database.types.ts`,
+plus 2 doc files) are modified, not recreated — consistent with S8/S8A
+genuinely extending, not duplicating, earlier committed work.
+
+**Conclusion: the working-tree diff is 100% attributable to P1-E3-S8 +
+P1-E3-S8A. No earlier "supposedly committed" phase is present only as an
+uncommitted change — every phase through S7A is genuinely, verifiably
+committed (§8-§11).**
+
+--------------------------------------------------------------------
+15. EARLIER PHASES: COMMITTED, NOT MERELY WORKING-TREE
+--------------------------------------------------------------------
+Directly answered by §8-§14 above: S5/S5A/S5B, S6/S6A, S7/S7B, and S7A
+are ALL genuinely present as real, content-verified commits in `git
+log`/`git reflog`, not as uncommitted working-tree state mistaken for
+commits. There is no discrepancy here of any kind.
+
+--------------------------------------------------------------------
+16. ROOT CAUSE OF THE HEAD CONTRADICTION
+--------------------------------------------------------------------
+**Root cause: A — the P1-E3-S8A completion report's own "Git HEAD before
+work" metadata line was factually wrong; the repository's actual
+lineage is, and was, correct throughout.**
+
+Evidence ruling out the other candidate causes:
+  - **B (stale/reset HEAD, retained working-tree diff):** Ruled out.
+    The reflog (§7) contains zero `reset` entries of any kind, ever, in
+    this repository's entire history. If HEAD had ever been reset to
+    6357a47 and then moved back, the reflog would show it — Git's reflog
+    records every ref update, including resets, and cannot be silently
+    skipped by ordinary use. It shows none.
+  - **C (repository reset/rebased/checked out backward):** Ruled out
+    for the identical reason — no `rebase`, `checkout` (to a different
+    ref), or forced-update entry exists in the reflog. The commit graph
+    itself (§6) is also perfectly linear with no rewritten history
+    (rebasing would produce different commit SHAs than the ones this
+    audit — and every prior phase's own report — has consistently
+    referenced by identical hash across sessions).
+  - **D (another repository/worktree used accidentally):** Ruled out.
+    `pwd` and `git rev-parse --show-toplevel` agree exactly (§1); there
+    is only one `.git` directory in play, and its content (§8-§11)
+    correctly contains every phase's own real, previously-verified work.
+  - **E (some other cause):** No other anomaly was found in any command
+    run for this audit.
+
+The actual explanation: P1-E3-S8A's own report-writing step recorded the
+wrong commit SHA/message in its header — `6357a47` "Implement Today's
+Operations dashboard" is a real commit, but it is FOUR commits behind
+the true pre-work HEAD (`e6c8377`), and was never the repository's
+actual HEAD during or before S8A's own work session. No git command run
+during S8A's actual work (confirmed by the reflog having no entries
+between `e6c8377`'s own commit and now) would have produced 6357a47 as a
+result — it was a transcription/authoring mistake in the report text
+itself, not a symptom of any real repository operation. This is the same
+CLASS of error — a report-metadata mistake, not a code or security
+defect — as the P1-E3-S7B "33 vs 32 assertion count" finding earlier in
+this project's own history: a documented artifact of report-writing,
+independently caught and corrected by a later, dedicated audit phase,
+exactly as intended by this project's own recurring "trust nothing,
+verify from raw evidence" discipline.
+
+--------------------------------------------------------------------
+17. WHETHER ANY REPOSITORY RECOVERY IS REQUIRED
+--------------------------------------------------------------------
+**No.** The repository's actual state is correct, complete, and
+uncorrupted. There is nothing to recover, restore, reset, or repair at
+the Git level. The only defect found is a single incorrect metadata line
+inside one already-written report file
+(`docs/reports/P1-E3-S8A-exception-mutation-boundary-report.txt`, its
+own §1/header "Git HEAD before work" field) — a documentation
+correction, not a repository operation, and this audit's own explicit
+instructions prohibit performing even that correction here (no product
+code or history was modified; this finding is reported for the user's
+own decision, not acted on).
+
+--------------------------------------------------------------------
+18. EXACT SAFE NEXT ACTION
+--------------------------------------------------------------------
+No Git action is needed or recommended. If the user wants the S8A
+report's own header text corrected to read "Git HEAD before work: e6c8377
+'Implement Driver location and live Dispatch tracking'" (matching
+reality and matching S8's own report), that is a simple, low-risk text
+edit to one file — but per this audit's own explicit scope ("AUDIT
+ONLY"), it was not made here and awaits explicit instruction. Beyond
+that, the repository is safe to checkpoint (commit) the S8 + S8A diff
+whenever the user is ready — nothing found in this audit changes that
+readiness; see the verdict block below.
+
+--------------------------------------------------------------------
+19. BLOCKERS
+--------------------------------------------------------------------
+None. The one finding (§16-§18) is a documentation correction, not a
+blocker to any subsequent phase.
+
+--------------------------------------------------------------------
+SECURITY / PRODUCT STATE SANITY (work item §8)
+--------------------------------------------------------------------
+Confirmed present in the CURRENT working tree (HEAD + uncommitted S8/S8A
+changes combined — i.e., what is actually on disk right now), by direct
+file-existence check, without modifying any of them:
+  - Secure Driver location implementation: `src/components/driver/
+    DriverLocationTracker.tsx`, `supabase/migrations/
+    20260902140000_driver_location_tracking.sql` — present (committed,
+    HEAD).
+  - Trip Assurance implementation: `src/lib/operations/
+    trip-assurance.ts` — present (working tree, uncommitted).
+  - Exception RPC boundary hardening: `supabase/migrations/
+    20260902160000_exception_mutation_boundary_hardening.sql` — present
+    (working tree, uncommitted).
+  - New Trip: `src/app/operations/trips/new/page.tsx`,
+    `src/components/operations/new-trip/NewTripForm.tsx` — present
+    (committed, HEAD).
+  - Trip Detail: `src/app/operations/trips/[tripId]/page.tsx` — present
+    (committed base + uncommitted S8 modification).
+  - Dispatch Board: `src/app/operations/dispatch/page.tsx` — present
+    (committed, HEAD).
+  - Driver workflow: `src/app/driver/trips/[tripId]/page.tsx` — present
+    (committed, HEAD).
+All 10 phase completion reports (S5 through S8A) are present in
+`docs/reports/`. Nothing was modified during this check.
+====================================================================
+GIT LINEAGE INTEGRITY:
+PASS
+
+S5-S7A HISTORY:
+INTACT
+
+S8 WORKING TREE:
+ATTRIBUTABLE
+
+S8A WORKING TREE:
+ATTRIBUTABLE
+
+REPOSITORY RECOVERY REQUIRED:
+NO
+
+SAFE TO CHECKPOINT S8 + S8A:
+YES
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E3-S8B — Full Product UI/UX Design Convergence
+
+REPORT FILE:
+docs/reports/P1-E3-S8A1-git-lineage-integrity-audit.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: this was an audit-only phase. No product
+code was modified. No `git reset`/`rebase`/`cherry-pick`/`commit`/
+`checkout`/`restore`/`clean` was run. Nothing was committed or pushed.
+UI/UX convergence was not begun. This phase stops here.
+====================================================================

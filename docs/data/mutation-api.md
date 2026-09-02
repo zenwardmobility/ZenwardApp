@@ -178,6 +178,28 @@ Not an RPC — Operations reads `driver_location_updates` directly via a plain R
 
 ---
 
+## Trip exceptions (P1-E3-S8)
+
+Both functions returns `trip_exception_result` (shared, mirrors `driver_location_result`'s own precedent of one shape for a related pair).
+
+### `report_trip_exception(p_trip_id uuid, p_exception_type text default null, p_description text default null)`
+
+Callable by Organization Admin/Dispatcher (any Trip in their org) OR the Trip's own **currently**-assigned Driver. **As of P1-E3-S8A**, the Driver check is `_lock_driver_active_assignment` (the same WRITE-scope, active-assignment-only primitive `driver_record_location` uses) — tightened from the original `is_driver_assigned_to_trip` READ-scope "ever assigned" check, which would have let a reassigned-away or post-terminal Driver keep reporting. A Driver who is reassigned away, or whose Trip reaches a terminal state, is denied immediately in the same session — no separate terminal-state branch is needed, since every terminal transition (`driver_complete_trip`/`cancel_trip`/`record_no_show`) already closes the active assignment in the same transaction (see `mutation-authorization.md`'s own S8A section for the full reasoning, including why a separate check would either be dead code or an existence-oracle leak). Always forces `created_by = auth.uid()` and `status = 'open'`. `p_description`, if given, must be non-blank and ≤2000 chars (`ZW006` otherwise) — otherwise both parameters are genuinely optional, matching the column's own real nullability.
+
+**Writes:** one `trip_exceptions` INSERT; one `trip_events` row (`exception_flagged`, `metadata.exception_id`). No `audit_events` row (does not materially change Trip responsibility or reach a terminal disposition — same test ZD-087 already established, matching `trip_notes`' identical precedent).
+
+### `resolve_trip_exception(p_exception_id uuid, p_resolution_note text default null)`
+
+Organization Admin/Dispatcher only — Driver never resolves (matches the schema's own original comment: "only Dispatcher/Organization Admin resolve — Driver never during MVP"). `ZW002` if the exception doesn't exist or the caller has no org role over it (no existence oracle). **Idempotent no-op** if already resolved: returns `changed: false` and the REAL, already-persisted resolution (whoever resolved it first) — a stale/duplicate resolve attempt's own `p_resolution_note` is never applied, deliberately different from `reassign_trip`'s fail-closed staleness contract (P1-E3-S5B) — see that function's own comment for the reasoning (two resolutions of the same exception never disagree about the operationally relevant fact, unlike a reassignment's driver/vehicle choice). Never deletes the row — full history preserved.
+
+**Writes (on a real resolve only):** `trip_exceptions.status`/`resolved_by`/`resolved_at`/`resolution_note` UPDATE; one `trip_events` row (`exception_resolved`). No `audit_events` row (same reasoning as above). No write of any kind on the idempotent no-op path.
+
+### Direct table access — retired (P1-E3-S8A)
+
+`report_trip_exception`/`resolve_trip_exception` are now the ONLY way any normal actor writes `trip_exceptions`. The three pre-existing direct RLS INSERT/UPDATE policies (`trip_exceptions_insert_operations`, `trip_exceptions_insert_assigned_driver`, `trip_exceptions_update_operations`) are dropped, and `INSERT`/`UPDATE` are revoked from `authenticated` on the table entirely (`supabase/migrations/20260902160000_exception_mutation_boundary_hardening.sql`) — the same treatment `trips` (ZD-101) and `trip_assignments` (ZD-092) already received once their own controlled RPCs existed. DELETE was never granted to any client role. Proven directly, not merely argued: `supabase/tests/exception_mutation_boundary_tests.sql` covers direct INSERT/UPDATE/DELETE denial, forged `created_by`, forged pre-resolved `status`, reopening a resolved row, and historical-field rewriting, for both Operations and Driver actors, same-org and foreign-org. SELECT is completely unaffected — both read policies remain exactly as they were.
+
+---
+
 ## Locking, atomicity, and concurrency
 
 - **Lock order (ZD-086):** every function locks `trips` first, then the active `trip_assignments` row if relevant — never the reverse. This is what makes concurrent calls deadlock-free by construction.
@@ -199,6 +221,8 @@ Not an RPC — Operations reads `driver_location_updates` directly via a plain R
 | `supabase/tests/create_trip_atomicity_tests.sql` | 2 | Forced-failure rollback (Trip + TripEvent + AuditEvent + conditional Request update) |
 | `supabase/tests/mutation_concurrency_test.sh` | 1 | Genuine two-process concurrency (timing-based proof) |
 | `supabase/tests/driver_location_tests.sql` | 20 | `driver_record_location` full authorization chain (eligible write, wrong Driver, foreign-org, inactive Membership/Driver, reassignment revocation, terminal-state revocation, pre-dispatch `scheduled` denial, coordinate/accuracy validation, anon denial), movement (second update → new authoritative latest), Operations own-org/foreign-org SELECT, Driver zero-read confirmation |
+| `supabase/tests/trip_exception_tests.sql` | 16 | `report_trip_exception`/`resolve_trip_exception`: Operations + Driver report, anon denial, foreign-org denial, never-assigned-Driver denial, invalid-input validation, inactive-Membership denial, Driver-cannot-resolve denial, real resolve, idempotent stale-resolution no-op (with resolution-note preservation proof), nonexistent-id denial, foreign-org resolve denial, forced-failure atomicity (trip_events trigger, proves the earlier trip_exceptions INSERT rolls back too) |
+| `supabase/tests/exception_mutation_boundary_tests.sql` | 20 | P1-E3-S8A: direct INSERT/UPDATE/DELETE bypass denial (Operations + Driver + foreign-org), forged `created_by`, forged pre-resolved `status`, reopen-a-resolved-row denial (+ DB confirmation), historical-field-rewrite denial (+ DB confirmation), reassignment revocation (former Driver denied same-session, new Driver allowed), terminal revocation (via the real Driver lifecycle RPC walk, not a direct state edit), live role-revocation (dispatcher→driver mid-session resolve denial) |
 | Real HTTP (`rpc_probe.js`/`create_trip_probe.js` pattern, see completion reports) | 18 | PostgREST/GoTrue cross-validation of one representative RPC per family, plus create_trip's full authorization matrix |
 
 All run against `supabase db reset` fresh-seeded data; see each file's header for exact run instructions.

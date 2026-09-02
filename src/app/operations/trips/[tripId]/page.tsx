@@ -161,7 +161,7 @@ export default async function TripDetailPage({ params }: { params: Promise<{ tri
             eligibleForAssignmentAction={!trip.isTerminal}
             hasActiveAssignment={trip.activeAssignmentId !== null}
           />
-          <TripExceptionsPanel openExceptions={openExceptions} timezone={timezone} />
+          <TripExceptionsPanel tripId={trip.id} openExceptions={openExceptions} timezone={timezone} />
           <TripNotesPanel tripId={trip.id} notes={notes} timezone={timezone} />
         </div>
       </div>

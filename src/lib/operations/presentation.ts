@@ -114,3 +114,18 @@ export function humanizeExceptionType(exceptionType: string): string {
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }
+
+/**
+ * `TripAssuranceCode` → `StatusBadge` visual category (P1-E3-S8, work
+ * item §60). Deliberately uniform "warning" tone for every active
+ * attention condition — never escalating a category to "critical"/red
+ * merely because it's an OPEN_EXCEPTION, which would start turning this
+ * screen into an alarm panel (work item §59/§60's own explicit caution).
+ * Severity is communicated by the real label/explanation text, never by
+ * color alone or by color intensity.
+ */
+export function assuranceStatusCategory(code: string): "warning" | "positive" | "neutral" {
+  if (code === "ON_TRACK") return "positive";
+  if (code === "TERMINAL") return "neutral";
+  return "warning";
+}

@@ -1073,6 +1073,30 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      report_trip_exception: {
+        Args: {
+          p_description?: string
+          p_exception_type?: string
+          p_trip_id: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["trip_exception_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_exception_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      resolve_trip_exception: {
+        Args: { p_exception_id: string; p_resolution_note?: string }
+        Returns: Database["public"]["CompositeTypes"]["trip_exception_result"]
+        SetofOptions: {
+          from: "*"
+          to: "trip_exception_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
     }
     Enums: {
       [_ in never]: never
@@ -1140,6 +1164,20 @@ export type Database = {
         organization_id: string | null
         state: string | null
         created: boolean | null
+      }
+      trip_exception_result: {
+        exception_id: string | null
+        trip_id: string | null
+        organization_id: string | null
+        exception_type: string | null
+        description: string | null
+        status: string | null
+        created_by: string | null
+        resolved_by: string | null
+        resolved_at: string | null
+        resolution_note: string | null
+        created_at: string | null
+        changed: boolean | null
       }
       trip_transition_result: {
         trip_id: string | null

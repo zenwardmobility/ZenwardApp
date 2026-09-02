@@ -2057,6 +2057,126 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Engineering
 - **Review Trigger:** None anticipated — this is the correct, standard handling for the W3C Geolocation API's own error model.
 
-No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited.
+### ZD-169 — Trip Assurance is a derived read-time layer, never a `trips.state` value
+
+- **Date:** 2026-09-02
+- **Category:** Architecture / Product
+- **Decision:** Trip Assurance conditions (`ON_TRACK`, `NEEDS_ASSIGNMENT`, `LOCATION_STALE`, `LOCATION_UNAVAILABLE`, `OPEN_EXCEPTION`, `TERMINAL`) are computed at read time by one pure function, `evaluateTripAssurance(facts, now)` in `src/lib/operations/trip-assurance.ts`, from existing persisted facts (Trip state, active assignment, latest assignment-scoped location, open-exception count). None of these values are ever written to `trips.state` or any other column — no schema change was needed or made for the vocabulary itself.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** Work item §4-§6 explicitly forbids inventing new lifecycle states for assurance/attention purposes (naming the exact rejected values: `at_risk`/`running_late`/`needs_attention`/`on_track`/`awaiting_confirmation`) — assurance is a lens over real operational facts, not a new fact. A derived function keeps the model trivially re-evaluable (no migration to add/rename a condition) and impossible to let drift out of sync with the underlying rows it explains.
+- **Affected Product Areas:** `src/lib/operations/trip-assurance.ts`, `src/lib/operations/todays-operations.ts`
+- **Dependencies:** ZD-161 (append-only location history, no denormalized pointer — the same "derive, don't duplicate" reasoning)
+- **Owner:** Product / Engineering
+- **Review Trigger:** A future phase requiring assurance state to be queried at the database layer (e.g. for a scheduled digest) — at which point a read-only SQL view mirroring this same derivation, not a new persisted column, is the first option to evaluate.
+
+### ZD-170 — A small, deterministically-prioritized assurance vocabulary; no numeric score
+
+- **Date:** 2026-09-02
+- **Category:** Product / UX
+- **Decision:** Exactly six assurance codes exist, evaluated in one fixed priority order per Trip — `TERMINAL` → `OPEN_EXCEPTION` → `NEEDS_ASSIGNMENT` → `LOCATION_UNAVAILABLE`/`LOCATION_STALE` → `ON_TRACK` — implemented as a real ranked `if` chain in `evaluateTripAssurance`, not database row order or array insertion order. No numeric score (e.g. "Trip Assurance Score 84/100") exists anywhere in the model.
+- **Status:** CONFIRMED — implemented and verified (SCENARIO3 of `test-assurance-dynamics.mjs`: a Trip with both an open exception and a stale location deterministically shows only "Open issue," never both, and the location condition surfaces only after the exception is resolved).
+- **Reason:** Work item §9-§11 explicitly requires deterministic priority ("decide based on product meaning, do not randomly select the first database row") and explicitly forbids opaque scoring ("no opaque score... Do NOT invent: Trip Assurance Score 84/100 or Reliability 92% without validated methodology"). An open, actionable exception is judged the most operationally urgent fact about a Trip; a Trip already in a terminal state is excluded from attention entirely regardless of any other condition.
+- **Affected Product Areas:** `src/lib/operations/trip-assurance.ts` (`PRIORITY_RANK` in `todays-operations.ts` mirrors the same order for queue sorting)
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** A future phase with a validated, business-approved scoring methodology — not before.
+
+### ZD-171 — No frontend clock-based lateness this phase
+
+- **Date:** 2026-09-02
+- **Category:** Product
+- **Decision:** No lateness/ETA condition was implemented. The assurance vocabulary has no `running_late`/`at_risk` code, and no comparison against `scheduled_pickup_at` drives any condition.
+- **Status:** CONFIRMED — implemented (by omission).
+- **Reason:** Work item §7-§8 is explicit: lateness requires a formally-approved, business-defined threshold rule first ("avoid frontend clock-based lateness entirely unless formally approved"), and no such rule was established this phase. Inventing an arbitrary threshold (e.g. "15 minutes past scheduled pickup") would be exactly the kind of unvalidated, invented business rule the work item warns against.
+- **Affected Product Areas:** `src/lib/operations/trip-assurance.ts` (absence)
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** A future phase where Product formally defines a lateness rule with real operational input (e.g. from pilot-operator feedback).
+
+### ZD-172 — Exception create/resolve unified behind two controlled RPCs, replacing direct-write reliance without revoking the underlying policies — SUPERSEDED by ZD-177
+
+- **Date:** 2026-09-02
+- **Category:** Security / Architecture
+- **Decision:** `report_trip_exception`/`resolve_trip_exception` (both `SECURITY DEFINER`) are the only paths the application now writes through. The pre-existing direct RLS INSERT/UPDATE policies on `trip_exceptions` were inspected, found not narrow enough for safe direct reuse by Operations (see `mutation-authorization.md`), and ~~deliberately left in place rather than revoked, since correctly narrowing them would require rebuilding the same column-restriction logic the RPCs already provide~~ **SUPERSEDED same-day by ZD-177 (P1-E3-S8A): leaving them in place was itself the gap — "the application doesn't call it" is not a security boundary. The policies were retired the same day this was written.**
+- **Status:** CONFIRMED — implemented, 16/16 new SQL assertions PASS (`trip_exception_tests.sql`), including a dedicated atomicity proof (EXC-M/EXC-M-DB) and cross-org denial (EXC-L).
+- **Reason:** Matches this project's own established "prefer the path that is easiest to prove safe" convention (first stated in P1-E3-S7A), applied here to a case where the alternative would have split one logical action (report/resolve) across two different enforcement mechanisms for two different actor populations.
+- **Affected Product Areas:** `supabase/migrations/20260902150000_trip_exception_mutations.sql`, `src/app/operations/trips/[tripId]/actions.ts`
+- **Dependencies:** None
+- **Owner:** Security / Engineering
+- **Review Trigger:** ~~A future phase revisiting the `trip_exceptions` RLS surface directly (e.g. to actually narrow or revoke the now-superseded direct policies).~~ **Resolved by ZD-177, same day.**
+
+### ZD-173 — Idempotent no-op resolve is a deliberate, documented exception to the fail-closed staleness precedent
+
+- **Date:** 2026-09-02
+- **Category:** Architecture
+- **Decision:** `resolve_trip_exception` returns the real, already-persisted resolution unchanged (`changed=false`) when called against an already-resolved exception, rather than raising a conflict error.
+- **Status:** CONFIRMED — implemented and tested (SCENARIO3 of `test-assurance-dynamics.mjs` exercises a real resolve through the UI; the SQL suite's own EXC-series covers the no-op path directly at the RPC layer).
+- **Reason:** This is intentionally different from `reassign_trip`'s fail-closed staleness contract (P1-E3-S5B) — there, a stale caller could silently clobber a different newer decision (a different Driver/Vehicle). Here, two resolutions of the same exception can never disagree about the operationally relevant fact ("is this handled?"), so discarding the second (redundant) caller's own resolution note is more useful than raising a conflict a Dispatcher would have no meaningful way to act on.
+- **Affected Product Areas:** `supabase/migrations/20260902150000_trip_exception_mutations.sql`
+- **Dependencies:** ZD-093 (the general "idempotency is actor-scoped, not relationship-scoped" precedent this decision narrows for one specific action)
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated.
+
+### ZD-174 — Uniform warning tone for every active assurance condition; never escalating to a "critical"/red treatment
+
+- **Date:** 2026-09-02
+- **Category:** Design
+- **Decision:** `assuranceStatusCategory()` maps every non-terminal, non-on-track condition (`OPEN_EXCEPTION`, `NEEDS_ASSIGNMENT`, `LOCATION_STALE`, `LOCATION_UNAVAILABLE`) to the same single "warning" visual category — the existing amber `StatusBadge` tone already used elsewhere in the product, not a new red/critical tier.
+- **Status:** CONFIRMED — implemented, visually confirmed via `docs/design/qa/trip-assurance/todays-operations/` screenshots at 5 widths (768-1600px) showing all four active condition types rendered with the identical uniform amber tone.
+- **Reason:** Work item §63-§66 explicitly rejects a "risk dashboard"/"alarm system"/"AI monitoring center" aesthetic ("do not turn every issue bright red... typography/iconography/copy over color alone"). An open exception and a stale location are both real operational facts a Dispatcher should notice, but neither is dramatized above the other by color; natural-language copy ("Open issue," "Location needs update") and deterministic ordering, not color intensity, carry the actual urgency signal.
+- **Affected Product Areas:** `src/lib/operations/presentation.ts`, `src/app/operations/page.tsx`
+- **Dependencies:** None
+- **Owner:** Design
+- **Review Trigger:** A future phase with a validated business need to visually distinguish condition severity beyond ordering.
+
+### ZD-175 — Dispatch gains a small, restrained open-exception marker only; no redesign
+
+- **Date:** 2026-09-02
+- **Category:** Design
+- **Decision:** The Dispatch Board's assignment grid gains one small warning-tone dot marker (`absolute -right-1 -top-1 size-2.5 rounded-full`) on a Trip block when `hasOpenException` is true, plus an aria-label suffix ("— has an open issue"). No other Dispatch layout change was made for Trip Assurance.
+- **Status:** CONFIRMED — implemented, visually confirmed at 1440x900 and 1280x800 (`docs/design/qa/trip-assurance/dispatch/`), and confirmed present via a real `aria-label` DOM check (not color-only).
+- **Reason:** Work item §67 requires Dispatch integration "only where materially useful, with restraint (small marker/indicator, not clutter)." A Dispatcher scanning the board benefits from knowing a Trip has an open issue without a redesign of a screen this phase did not otherwise need to touch.
+- **Affected Product Areas:** `src/lib/operations/dispatch-board.ts`, `src/components/operations/dispatch/AssignmentGrid.tsx`
+- **Dependencies:** None
+- **Owner:** Design / Engineering
+- **Review Trigger:** None anticipated.
+
+### ZD-176 — Realtime remains deferred for Trip Assurance; the same restrained-polling fallback is reused, not re-litigated
+
+- **Date:** 2026-09-02
+- **Category:** Security / Architecture
+- **Decision:** No new Realtime subscription was added for Trip Assurance or the Today's Operations attention queue. Today's Operations is a standard server-rendered page (no client polling loop was added to it this phase); Dispatch continues to use the existing `DispatchLiveRefresh` 20-second `router.refresh()` polling from P1-E3-S7A (ZD-165), now also carrying the open-exception marker on each refresh.
+- **Status:** CONFIRMED — no new code; a deliberate non-change.
+- **Reason:** Work item §75 explicitly reiterates ZD-165's reasoning for this phase: Realtime remains deferred "unless a compelling, safely-tested reason exists" — none was established this phase, and no new adversarial Realtime testing was performed. "Security beats animation" applies identically here.
+- **Affected Product Areas:** None (no new component)
+- **Dependencies:** ZD-165 (identical reasoning, restated for this phase's own scope rather than silently assumed to carry forward)
+- **Owner:** Security / Engineering
+- **Review Trigger:** Same as ZD-165 — a future phase specifically budgeted to adversarially prove Realtime's RLS-safety.
+
+### ZD-177 — Direct `trip_exceptions` INSERT/UPDATE retired; RPCs are the sole write path (supersedes ZD-172)
+
+- **Date:** 2026-09-02
+- **Category:** Security / Architecture
+- **Decision:** The three direct RLS policies `trip_exceptions_insert_operations`, `trip_exceptions_insert_assigned_driver`, `trip_exceptions_update_operations` are dropped, and `INSERT`/`UPDATE` are revoked from `authenticated` on `trip_exceptions` entirely. `report_trip_exception`/`resolve_trip_exception` are now structurally the only way any normal actor writes this table — not merely the application's own preferred convention.
+- **Status:** CONFIRMED — implemented, proven directly by a dedicated bypass test suite (`exception_mutation_boundary_tests.sql`, 20/20 new assertions PASS): direct INSERT/UPDATE/DELETE all denied for both Operations and Driver actors, same-org and foreign-org; forged `created_by`; forged pre-resolved `status`; reopening a resolved row; rewriting historical fields (`description`/`exception_type`/`created_by`) — all denied, each with an independent DB-state confirmation that the original data was genuinely untouched. DELETE was verified to have never been granted to any client role by any migration.
+- **Reason:** ZD-172 (same day, earlier in this phase sequence) reasoned that leaving the direct policies in place was acceptable because "no exploit was found in production use, only a theoretical gap identified by inspection." On reflection this was the wrong bar: a legitimately authenticated Operations user could still bypass both RPCs via a raw PostgREST/Supabase-client write, and "the UI doesn't call it" is not a database-enforced security boundary. This decision closes that gap the same way ZD-092 (`trip_assignments`) and ZD-101 (`trips`) closed the identical class of gap once their own controlled RPCs existed — drop the superseded policy, revoke the underlying grant, don't rely on RLS alone when the privilege itself can be removed more cleanly.
+- **Affected Product Areas:** `supabase/migrations/20260902160000_exception_mutation_boundary_hardening.sql`
+- **Dependencies:** Supersedes ZD-172's "left in place" reasoning; same pattern as ZD-092, ZD-101
+- **Owner:** Security
+- **Review Trigger:** None anticipated — this closes the gap ZD-172 itself flagged as open.
+
+### ZD-178 — Driver exception-reporting tightened from "ever assigned" to "currently assigned"; no separate terminal check added
+
+- **Date:** 2026-09-02
+- **Category:** Security / Architecture
+- **Decision:** `report_trip_exception`'s Driver authorization check changed from `is_driver_assigned_to_trip` (READ-scope, "ever had an assignment — active or historical") to `_lock_driver_active_assignment` (WRITE-scope, "currently has an active, non-ended assignment") — the identical primitive `driver_record_location` already uses (P1-E3-S7A). No separate, explicit "Trip is not terminal" branch was added, even though the work item requested one as a distinct requirement: every path that brings a Trip to a terminal state (`driver_complete_trip`, `cancel_trip`, `record_no_show`) already closes that Trip's active `trip_assignments` row in the same transaction as the state change (verified directly by reading all three functions' own bodies before deciding this), so requiring a currently-active assignment is already structurally sufficient to exclude every terminal Trip for Driver reporting.
+- **Status:** CONFIRMED — implemented and proven: `DRV-2` (reassignment revocation, same session, no re-login), `DRV-5-TERMINAL` (a Trip walked to a REAL `completed` state via the actual Driver lifecycle RPCs, not a direct state edit, then the same Driver's next report attempt denied) both PASS. A live application-level version of the same reassignment scenario (real Dispatch UI reassignment, then a denied/allowed `report_trip_exception` call at the real authenticated RPC boundary) also PASS (`test-s8a-regression.mjs`, S8A-E2E series).
+- **Reason:** A second, separate terminal-state check was considered and explicitly rejected, not merely omitted: placed AFTER the assignment check, it would be unreachable dead code (no terminal Trip can have an active assignment, by the invariant just verified); placed BEFORE it, it would leak a foreign-org Trip's terminal/non-terminal status to a caller who has proven no relationship to it yet — reintroducing exactly the existence-oracle leak this project's own `ZW002`-everywhere convention exists to prevent. The black-box behavior the work item actually requires (allowed while non-terminal and currently assigned; denied once terminal or reassigned) is fully satisfied by the assignment check alone.
+- **Affected Product Areas:** `supabase/migrations/20260902160000_exception_mutation_boundary_hardening.sql`
+- **Dependencies:** ZD-162 (the original `_lock_driver_active_assignment` decision, P1-E3-S7A) — reused verbatim, not reimplemented
+- **Owner:** Security
+- **Review Trigger:** A future phase that decouples "Trip terminal" from "assignment closed" (none currently planned — every terminal-reaching RPC closes the assignment by design, and changing that would itself be a significant, separately-reviewed lifecycle-model change).
+
+No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

@@ -1,0 +1,559 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S8A — Exception Mutation Boundary Hardening
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 6357a47 "Implement Today's Operations dashboard"
+                       (P1-E3-S8's own diff was, and remains, UNCOMMITTED
+                       — explicitly permitted by this phase's own
+                       instructions, which do NOT require a clean tree)
+Date/time:            2026-09-02
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------
+`git status --short` showed the full, uncommitted P1-E3-S8 diff (Trip
+Assurance evaluator, TripException RPCs, upgraded Today's Operations/
+Trip Detail/Dispatch, S8's own completion report and doc updates) — the
+same set this phase's own instructions explicitly said to expect and
+NOT require clean. Verified against the S8 completion report's own
+"FILES CHANGED THIS PHASE" section (§23) before proceeding: the diff
+matched exactly, confirming S8's own uncommitted work was genuine and
+untouched, not accidentally partial.
+
+--------------------------------------------------------------------
+2. DIRECT POLICIES/GRANTS FOUND
+--------------------------------------------------------------------
+Inspected `supabase/migrations/20260830131700_rls_policies.sql` (the
+original schema migration, predating S8 by the entire project) directly:
+
+  grant select, insert, update on public.trip_exceptions to authenticated;
+
+  trip_exceptions_select_operations       (SELECT, Operations, org-scoped)
+  trip_exceptions_select_assigned_driver  (SELECT, Driver, ever-assigned)
+  trip_exceptions_insert_operations       (INSERT, Operations, org-scoped
+                                            only — no created_by/status
+                                            enforcement)
+  trip_exceptions_insert_assigned_driver  (INSERT, Driver, ever-assigned
+                                            — already narrow: org match,
+                                            is_driver_assigned_to_trip,
+                                            created_by=auth.uid(),
+                                            status='open' all forced)
+  trip_exceptions_update_operations       (UPDATE, Operations, org-scoped
+                                            only — NO column restriction
+                                            at all)
+
+DELETE was never granted to `authenticated` by any migration (grep-
+verified across the full migration history) — already denied by
+omission before this phase, not newly revoked here.
+
+--------------------------------------------------------------------
+3. WHY THE EXISTING STATE WAS UNSAFE
+--------------------------------------------------------------------
+S8's own completion report (§6) had already identified, but not closed,
+this exact gap: a legitimately authenticated Operations user could
+bypass `report_trip_exception`/`resolve_trip_exception` entirely via a
+raw PostgREST/Supabase-client table write, because the underlying direct
+policies were left in place. Concretely:
+  - `trip_exceptions_insert_operations` let an Operations actor set
+    `created_by` to ANY user id (impersonation) and `status` to
+    `'resolved'` directly (fabricated pre-resolved history).
+  - `trip_exceptions_update_operations` had no column restriction: an
+    Operations actor could rewrite `exception_type`/`description`/
+    `created_by` on a resolved historical row, or set `status='open'`
+    to silently reopen it.
+"The UI doesn't call the direct mutation" is not a database-enforced
+security boundary — this is the exact principle this phase closes the
+gap against.
+
+--------------------------------------------------------------------
+4. INSERT BOUNDARY — BEFORE
+--------------------------------------------------------------------
+Two policies (`trip_exceptions_insert_operations`,
+`trip_exceptions_insert_assigned_driver`) plus a table-level `insert`
+grant to `authenticated`. Operations population unconstrained on
+`created_by`/`status`; Driver population already narrow but reachable
+directly, in parallel with the RPC.
+
+--------------------------------------------------------------------
+5. INSERT BOUNDARY — AFTER
+--------------------------------------------------------------------
+Both policies dropped. `insert` revoked from `authenticated` on the
+table entirely. `report_trip_exception` (SECURITY DEFINER) is the sole
+INSERT path for any actor, Operations or Driver.
+
+--------------------------------------------------------------------
+6. UPDATE BOUNDARY — BEFORE
+--------------------------------------------------------------------
+One policy (`trip_exceptions_update_operations`), org-scoped only, no
+column restriction — could rewrite any field on any row in the caller's
+org, resolved or not.
+
+--------------------------------------------------------------------
+7. UPDATE BOUNDARY — AFTER
+--------------------------------------------------------------------
+Policy dropped. `update` revoked from `authenticated` on the table
+entirely. `resolve_trip_exception` (SECURITY DEFINER) is the sole UPDATE
+path, and its own column set is narrow by construction (`status`,
+`resolved_by`, `resolved_at`, `resolution_note` only — never
+`exception_type`/`description`/`created_by`/`created_at`).
+
+--------------------------------------------------------------------
+8. DELETE BOUNDARY
+--------------------------------------------------------------------
+Never granted to `authenticated` by any migration, before or after this
+phase. Verified explicitly (not left an unstated assumption) via a
+direct bypass test (BND-C) and a foreign-org variant (BND-I-DELETE) —
+both DENIED with `insufficient_privilege`.
+
+--------------------------------------------------------------------
+9. DRIVER DIRECT-WRITE DECISION
+--------------------------------------------------------------------
+Retired. `trip_exceptions_insert_assigned_driver` — even though it was
+already independently narrow and safe — is dropped along with the two
+Operations policies, so that ALL normal TripException creation goes
+through the identical controlled RPC, for every actor type. Two
+mutation surfaces for one logical action (Operations via RPC, Driver via
+RLS) was rejected as an unnecessary maintenance/reasoning burden with no
+compensating benefit, per work item §6's own stated preference.
+
+--------------------------------------------------------------------
+10. DRIVER AUTHORIZATION — BEFORE
+--------------------------------------------------------------------
+`is_driver_assigned_to_trip(p_trip_id)` — a READ-scope check (built in
+P1-E2-S1 for read-access purposes) meaning "has this Driver EVER had an
+assignment on this Trip, active or historical." A reassigned-away or
+post-terminal Driver could still successfully call
+`report_trip_exception`.
+
+--------------------------------------------------------------------
+11. DRIVER AUTHORIZATION — AFTER
+--------------------------------------------------------------------
+`_lock_driver_active_assignment(p_trip_id, p_organization_id)` — the
+same WRITE-scope, currently-active-assignment-only primitive
+`driver_record_location` already uses (P1-E3-S7A). Returns a
+null-fielded row (checked via `.id is null`) if the calling user has no
+active `trip_assignments` row on this Trip in this org — covering wrong
+org, no Driver row, inactive Driver/Membership (`current_driver_id`'s
+own ZD-100 correction, inherited transitively), never assigned, and
+reassigned-away, all collapsing to the identical `ZW002`, no existence
+oracle.
+
+--------------------------------------------------------------------
+12. CURRENT-ASSIGNMENT REQUIREMENT — TERMINAL-STATE REASONING
+--------------------------------------------------------------------
+No separate explicit "Trip is not terminal" branch was added. Verified
+directly by reading `driver_complete_trip`, `cancel_trip`, and
+`record_no_show`'s own bodies (`20260831100200_controlled_trip_
+mutations.sql`): all three close the Trip's active `trip_assignments`
+row (`ended_at = now()`) in the SAME transaction as the terminal state
+change. Requiring a currently-active assignment is therefore already
+structurally sufficient to exclude every terminal Trip. A separate check
+was considered and rejected: placed after the assignment check it would
+be unreachable dead code; placed before it, it would leak a foreign-org
+Trip's terminal/non-terminal status to a caller with no proven
+relationship to it — an existence-oracle leak, the exact class of defect
+this codebase's `ZW002`-everywhere convention exists to prevent. See
+ZD-178 for the full decision record.
+
+--------------------------------------------------------------------
+13. REASSIGNMENT REVOCATION
+--------------------------------------------------------------------
+Proven twice, independently:
+  - SQL layer (`DRV-1`/`DRV-2`/`DRV-3` in `exception_mutation_boundary_
+    tests.sql`): Driver A1 reports successfully on a Trip they're
+    actively assigned to; the Trip is reassigned to Driver A2 via the
+    REAL `reassign_trip` RPC; Driver A1's next report attempt, same
+    session, no re-login, is DENIED (ZW002); Driver A2's report attempt
+    succeeds.
+  - Application layer (`test-s8a-regression.mjs`, S8A-E2E series): the
+    reassignment step is driven through the REAL Dispatch UI (a real
+    click + Select-driven driver choice + Confirm Reassignment submit,
+    not a database shortcut), independently confirmed via a direct DB
+    query that the active assignment genuinely moved to Driver A2; the
+    former Driver's subsequent `report_trip_exception` call at the real
+    authenticated RPC boundary is DENIED; the new Driver's call is
+    ALLOWED.
+Both PASS.
+
+--------------------------------------------------------------------
+14. TERMINAL REVOCATION
+--------------------------------------------------------------------
+`DRV-4`/`DRV-5-TERMINAL`: Driver A1 reports successfully while Trip E3
+is still `en_route_to_pickup`. The Trip is then walked to a REAL
+`completed` state via the actual Driver lifecycle RPCs
+(`driver_arrive_at_pickup` -> `driver_mark_passenger_onboard` ->
+`driver_start_to_destination` -> `driver_arrive_at_destination` ->
+`driver_complete_trip`) — not a direct state edit, so the test proves
+the real, structurally-guaranteed mechanism (assignment closure), not a
+contrived scenario. The same Driver's next report attempt, same session,
+is DENIED (ZW002). PASS.
+
+--------------------------------------------------------------------
+15. OPERATIONS CREATE TEST
+--------------------------------------------------------------------
+Re-confirmed via the existing `trip_exception_tests.sql` (re-run
+unmodified against this phase's hardened schema, 16/16 still PASS,
+including EXC-A: Operations dispatcher reports successfully,
+`created_by`/`status` correctly forced) — this phase did not change
+Operations' own create path, so no new test was needed; re-running the
+existing suite confirmed no regression.
+
+--------------------------------------------------------------------
+16. OPERATIONS RESOLVE TEST
+--------------------------------------------------------------------
+Same re-confirmation: EXC-H/EXC-I/EXC-J/EXC-K/EXC-L (Driver-cannot-
+resolve denial, real resolve, idempotent no-op, nonexistent-id denial,
+foreign-org denial) all still PASS unmodified.
+
+--------------------------------------------------------------------
+17. DRIVER CURRENT-ASSIGNMENT TEST
+--------------------------------------------------------------------
+`DRV-1`: currently-assigned Driver A1 reports successfully via the real
+RPC. PASS (see §13/§14 for the full reassignment/terminal series built
+around this baseline).
+
+--------------------------------------------------------------------
+18. FORMER DRIVER DENIAL
+--------------------------------------------------------------------
+`DRV-2` (SQL) and the S8A-E2E series (application layer, real Dispatch
+UI reassignment) both DENY the former Driver's next attempt. PASS, both
+layers.
+
+--------------------------------------------------------------------
+19. NEW DRIVER ALLOWANCE
+--------------------------------------------------------------------
+`DRV-3` (SQL) and the S8A-E2E series (application layer) both ALLOW the
+newly-assigned Driver's report. PASS, both layers.
+
+--------------------------------------------------------------------
+20. DIRECT OPERATIONS INSERT DENIAL
+--------------------------------------------------------------------
+`BND-A`: an authenticated Org A dispatcher's direct
+`insert into trip_exceptions ...` is DENIED —
+`insufficient_privilege: permission denied for table trip_exceptions`.
+PASS.
+
+--------------------------------------------------------------------
+21. DIRECT OPERATIONS UPDATE DENIAL
+--------------------------------------------------------------------
+`BND-B`: an authenticated Org A dispatcher's direct
+`update trip_exceptions set description = ...` is DENIED — same
+`insufficient_privilege`. PASS.
+
+--------------------------------------------------------------------
+22. DIRECT OPERATIONS DELETE DENIAL
+--------------------------------------------------------------------
+`BND-C`: an authenticated Org A dispatcher's direct
+`delete from trip_exceptions ...` is DENIED — same
+`insufficient_privilege` (DELETE was never granted at all). PASS.
+
+--------------------------------------------------------------------
+23. FORGED created_by DENIAL
+--------------------------------------------------------------------
+`BND-E`: an Operations actor's direct INSERT attempt setting
+`created_by` to a different user's UUID (impersonating Driver A1) is
+DENIED at the same table-privilege layer — the forged value never even
+reaches an authorization check, because the privilege itself does not
+exist. PASS.
+
+--------------------------------------------------------------------
+24. FORGED resolved-STATUS DENIAL
+--------------------------------------------------------------------
+`BND-F`: an Operations actor's direct INSERT attempt with
+`status = 'resolved'`, `resolved_by`, `resolved_at` pre-set (fabricating
+a never-open exception) is DENIED, same mechanism. Only
+`report_trip_exception` may create a row, and it always creates
+`status = 'open'` (a Postgres literal in the function body, not a
+parameter — structurally unreachable for a caller to override). PASS.
+
+--------------------------------------------------------------------
+25. REOPEN DENIAL
+--------------------------------------------------------------------
+A real exception was genuinely resolved through `resolve_trip_exception`
+first. `BND-G`: a direct `update ... set status = 'open'` against that
+resolved row is DENIED. `BND-G-DB`: independently re-queried — the
+persisted row is confirmed still `resolved` after the denied attempt.
+PASS, both the denial and the DB-state confirmation.
+
+--------------------------------------------------------------------
+26. HISTORICAL REWRITE DENIAL
+--------------------------------------------------------------------
+`BND-H`: a direct `update` attempting to rewrite `description`,
+`exception_type`, and `created_by` on the same resolved row is DENIED.
+`BND-H-DB`: independently re-queried — all three fields confirmed
+genuinely unchanged, matching the original values from the RPC-created
+row exactly. PASS, both the denial and the DB-state confirmation.
+
+--------------------------------------------------------------------
+27. FOREIGN-ORG DENIAL
+--------------------------------------------------------------------
+`BND-I-INSERT`/`BND-I-UPDATE`/`BND-I-DELETE`: an Org B dispatcher's
+direct INSERT/UPDATE/DELETE attempts against an Org A exception row are
+all DENIED — compounding, since the table privilege itself is absent
+regardless of org. `report_trip_exception`/`resolve_trip_exception`
+themselves were already proven foreign-org-safe in S8 (EXC-D, EXC-L,
+re-confirmed unmodified this phase). PASS.
+
+--------------------------------------------------------------------
+28. INACTIVE MEMBERSHIP
+--------------------------------------------------------------------
+Re-confirmed via the existing `trip_exception_tests.sql` EXC-G (toggle-
+and-restore an Org A dispatcher's Membership to `inactive`, attempt
+report, DENIED ZW002, live-checked — unmodified by this phase, re-run
+unmodified, still PASS).
+
+--------------------------------------------------------------------
+29. ROLE-CHANGE REVOCATION
+--------------------------------------------------------------------
+`OPS-1`: an Org A dispatcher reports an exception (still a dispatcher at
+that point), then has their Membership `role` changed directly to
+`'driver'` (simulating a real role change mid-session). The SAME user's
+next `resolve_trip_exception` attempt on that same exception, same
+session, is DENIED (ZW002) — resolve authority is lost immediately, live-
+checked, no re-login needed. Role restored to `dispatcher` afterward
+(toggle-and-restore convention). PASS.
+
+--------------------------------------------------------------------
+30. IDEMPOTENT RESOLVE PRESERVATION
+--------------------------------------------------------------------
+Unchanged this phase — `resolve_trip_exception`'s idempotent no-op
+contract (`changed=false`, returns the REAL first resolution untouched)
+was not touched by the boundary hardening, since direct UPDATE is now
+revoked entirely (removing the only OTHER path that could have
+reintroduced a writable-history bug). Re-confirmed via EXC-J
+(unmodified, re-run, still PASS).
+
+--------------------------------------------------------------------
+31. TripEvent PRESERVATION
+--------------------------------------------------------------------
+Unchanged. `report_trip_exception` still writes exactly one
+`exception_flagged` `trip_events` row per real create;
+`resolve_trip_exception` still writes exactly one `exception_resolved`
+row per real resolve, none on the idempotent no-op path. No duplication
+introduced by this phase's changes (verified via EXC-A-DB/EXC-I-DB,
+unmodified, re-run, still PASS).
+
+--------------------------------------------------------------------
+32. AuditEvent DECISION
+--------------------------------------------------------------------
+No AuditEvent writes were added. Neither RPC's own body changed in this
+respect — reporting/resolving an exception still does not "materially
+change responsibility or reach a terminal disposition" of the Trip
+itself (ZD-087's own test, unchanged). No new product requirement this
+phase materially required one.
+
+--------------------------------------------------------------------
+33. PREVIOUS SQL BASELINE
+--------------------------------------------------------------------
+256 assertions (P1-E3-S8's own final confirming run, fresh reset, raw-
+counted).
+
+--------------------------------------------------------------------
+34. NEW ASSERTIONS
+--------------------------------------------------------------------
+20 — all in the new `supabase/tests/exception_mutation_boundary_tests.sql`
+(BND-A through BND-I with 3 sub-assertions, BND-G-DB, BND-H-DB, DRV-1
+through DRV-5-TERMINAL, OPS-1-SETUP, OPS-1).
+
+--------------------------------------------------------------------
+35. AUTHORITATIVE SQL TOTAL
+--------------------------------------------------------------------
+276 (256 + 20). Counted directly from raw NOTICE output of a fresh
+`supabase db reset` + full 21-file suite run — twice, identically, as
+the final confirming pass (not copied forward from the mid-phase run).
+0 FAIL verdicts, 0 fatal psql ERROR lines, both runs.
+
+Per-file breakdown (final run):
+  constraint_tests.sql:                        13
+  create_trip_atomicity_tests.sql:               2
+  create_trip_privilege_tests.sql:               5
+  create_trip_tests.sql:                        20
+  driver_location_tests.sql:                    20
+  driver_read_authorization_tests.sql:          17
+  driver_read_history_tests.sql:                 8
+  driver_read_minimization_tests.sql:           13
+  driver_read_privilege_tests.sql:               8
+  exception_mutation_boundary_tests.sql (NEW):  20
+  function_privilege_tests.sql:                  7
+  mutation_assignment_tests.sql:                19
+  mutation_atomicity_tests.sql:                  2
+  mutation_authorization_tests.sql:              4
+  mutation_idempotent_authorization_tests.sql:   6
+  mutation_lifecycle_tests.sql:                 24
+  mutation_privilege_tests.sql:                  7
+  organization_timezone_tests.sql:              13
+  rls_adversarial_tests.sql:                    32
+  security_definer_exposure_tests.sql:          20
+  trip_exception_tests.sql:                     16
+  ------------------------------------------------
+  TOTAL:                                       276
+
+--------------------------------------------------------------------
+36. RLS ADVERSARIAL COUNT
+--------------------------------------------------------------------
+32/32 — unchanged from the P1-E3-S7B-established authoritative baseline,
+re-confirmed via this phase's own fresh reset. No regression.
+
+Also specifically re-confirmed clean (work item §26):
+  - Driver-Passenger isolation: `driver_read_minimization_tests.sql`
+    (13/13) and `driver_read_privilege_tests.sql` (8/8) unchanged.
+  - Driver Trip read boundary: `driver_read_authorization_tests.sql`
+    (17/17) unchanged.
+  - TripAssignment write restriction: `mutation_assignment_tests.sql`
+    (19/19) unchanged — direct-table regression case still covered.
+  - Driver Location isolation: `driver_location_tests.sql` (20/20)
+    unchanged, including TEST LOC-Q (Driver zero-read on
+    driver_location_updates).
+  - Exception tenant isolation: `trip_exception_tests.sql` (16/16, EXC-D/
+    EXC-L) plus this phase's own `BND-I-*`/`DRV-2` series.
+  - Normal actor AuditEvent restrictions:
+    `security_definer_exposure_tests.sql` (20/20) unchanged.
+
+--------------------------------------------------------------------
+37. CONCURRENCY REGRESSION
+--------------------------------------------------------------------
+`mutation_concurrency_test.sh` re-run fresh against this phase's final
+reset: PASS (Session B blocked ~1.83s on the Trip row lock, then
+correctly observed Session A's committed assignment and rejected with
+`assignment_conflict`) — unaffected by this phase's changes (which touch
+only `trip_exceptions`, never `trip_assignments`' own lock discipline).
+
+--------------------------------------------------------------------
+38. APPLICATION REGRESSION
+--------------------------------------------------------------------
+15/15 PASS (`test-s8a-regression.mjs`, real browser + real DB, run twice
+identically as the final confirming pass): Today's Operations loads;
+Report Issue via real Trip Detail UI still creates a real open exception
+via the RPC (independently DB-confirmed, correct `created_by`); Resolve
+via real Trip Detail UI still works; Dispatch's open-exception marker
+still renders (aria-label confirmed); the real Driver-reassignment E2E
+(§13/§24, real Dispatch UI reassignment + real authenticated RPC
+boundary for the Driver steps, since no Driver-facing "Report Issue" UI
+exists yet — GAP-7, confirmed still open); assign_trip, Cancel Trip,
+Record No-Show, the full 6-step Driver lifecycle to a real `completed`
+state, and a real Driver location post — all still work identically to
+before this phase's hardening.
+
+--------------------------------------------------------------------
+39. GENERATED TYPES
+--------------------------------------------------------------------
+Regenerated (`npx supabase gen types typescript --local`) and diffed
+against the current `database.types.ts` — zero difference. Expected:
+neither RPC's parameter list or return type changed, only their
+function bodies (Driver authorization check) and the underlying table's
+grants (which generated types do not encode) — no file update needed or
+made.
+
+--------------------------------------------------------------------
+40. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit`: clean, 0 errors.
+
+--------------------------------------------------------------------
+41. LINT
+--------------------------------------------------------------------
+`npm run lint`: clean, 0 errors, 0 warnings.
+
+--------------------------------------------------------------------
+42. BUILD
+--------------------------------------------------------------------
+`npm run build`: succeeded, all 24 routes compiled, no new warnings.
+
+--------------------------------------------------------------------
+43. FILES MODIFIED THIS PHASE
+--------------------------------------------------------------------
+New:
+  supabase/migrations/20260902160000_exception_mutation_boundary_hardening.sql
+  supabase/tests/exception_mutation_boundary_tests.sql
+  docs/reports/P1-E3-S8A-exception-mutation-boundary-report.txt (this
+    file)
+
+Modified:
+  docs/data/mutation-api.md
+  docs/security/rls-model.md
+  docs/security/mutation-authorization.md
+  docs/product/trip-assurance-data-map.md
+  docs/product/decision-register.md (ZD-172 amended/superseded;
+    ZD-177, ZD-178 added)
+
+No application/UI code (`src/`) was modified this phase — the hardened
+contract did not require any (Operations' own create/resolve paths and
+their existing app-side error mapping were unaffected; the Driver
+authorization tightening has no UI surface to update, since none exists
+yet for Driver exception reporting). `database.types.ts` unchanged (see
+§39). `docs/product/trip-assurance-model.md` was reviewed and required
+no change (no Driver-authorization-specific language exists there to
+update — it defers those details to `trip-assurance-data-map.md` and
+`mutation-api.md`, both updated).
+
+--------------------------------------------------------------------
+44. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+45. GATE VERDICT
+--------------------------------------------------------------------
+All four gates READY (see bottom block). No security regression found
+anywhere in the existing test suite; every new bypass/authorization test
+introduced by this phase PASSED on first implementation (no fix cycle
+was needed for the migration itself — only test-script assumption
+corrections, e.g. the `org-a-admin` vs `org-a-dispatcher` auth-id mix-up
+in the application smoke test, not an app defect).
+
+--------------------------------------------------------------------
+NEXT RECOMMENDED PHASE
+--------------------------------------------------------------------
+P1-E3-S8B — Full Product UI/UX Design Convergence, per this work item's
+own stated expectation.
+====================================================================
+EXCEPTION MUTATION BOUNDARY GATE:
+READY
+
+DIRECT AUTHENTICATED TRIP_EXCEPTION INSERT:
+DENIED
+
+DIRECT AUTHENTICATED TRIP_EXCEPTION UPDATE:
+DENIED
+
+DIRECT AUTHENTICATED TRIP_EXCEPTION DELETE:
+DENIED
+
+FORMER DRIVER EXCEPTION CREATE:
+DENIED
+
+CURRENT DRIVER EXCEPTION CREATE:
+PASS
+
+TERMINAL DRIVER EXCEPTION CREATE:
+DENIED
+
+TENANT ISOLATION:
+PASS
+
+RLS REGRESSION:
+NONE
+
+AUTHORITATIVE SQL ASSERTION COUNT:
+276
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S8B — Full Product UI/UX Design Convergence
+
+REPORT FILE:
+docs/reports/P1-E3-S8A-exception-mutation-boundary-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; no remote
+Supabase was linked; UI/UX convergence was not begun. This phase stops
+here.
+====================================================================
