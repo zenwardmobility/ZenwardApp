@@ -69,11 +69,12 @@ reset role;
 -- Formerly assigned Driver after reassignment -> DENY (revocation, §30);
 -- new Driver gains access immediately, no JWT refresh.
 do $$
-declare v_ar public.trip_assignment_result;
+declare v_ar public.trip_assignment_result; v_expected uuid;
 begin
+  select id into v_expected from public.trip_assignments where trip_id = '91000000-0000-0000-0000-0000000000a3' and ended_at is null;
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2'; -- dispatcher
-  v_ar := public.reassign_trip('91000000-0000-0000-0000-0000000000a3', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign A3 to Driver A2');
+  v_ar := public.reassign_trip('91000000-0000-0000-0000-0000000000a3', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign A3 to Driver A2', v_expected);
   reset role;
   if not v_ar.changed then
     raise notice 'TEST DETAIL-3-setup: FAIL (reassignment did not happen)';

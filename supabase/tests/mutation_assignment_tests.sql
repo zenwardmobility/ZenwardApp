@@ -251,51 +251,155 @@ end $$;
 reset role;
 
 -- =============================================================================
--- C11/C12. reassign_trip positive path + idempotent retry (Trip C5,
--- currently Driver A1 + Van A1).
+-- C11-C12c. P1-E3-S5B — the required 4-case reassign_trip precondition
+-- matrix (work item §7), all against Trip C5's own continuing timeline
+-- (starts as Driver A1 + Van A1). p_expected_assignment_id is now checked
+-- BEFORE the idempotent driver/vehicle match (P1-E3-S5B) — a stale
+-- expected id is ALWAYS assignment_conflict, even when the requested
+-- driver/vehicle happen to already equal the CURRENT (not the caller's
+-- expected) assignment.
+--
+--   C11  = CASE A (valid real reassignment): expected=X, current=X,
+--          requested a different driver -> changed=true. X -> Y.
+--   C12  = CASE B (valid idempotent retry): expected=Y, current=Y,
+--          requested driver == Y's driver -> changed=false.
+--   (a second dispatcher reassigns Y -> Z, a real, different driver)
+--   C12b = CASE C (stale, different target): expected=Y (now stale,
+--          current is Z), requested a driver DIFFERENT from Z's ->
+--          assignment_conflict.
+--   C12c = CASE D (stale, same target — the previously-missing
+--          guarantee): expected=Y (still stale), requested EXACTLY Z's
+--          own driver -> assignment_conflict, NOT a silent changed=false,
+--          even though the request "coincidentally" matches the current
+--          state.
 -- =============================================================================
 do $$
-declare v_r public.trip_assignment_result; v_old_closed int; v_audit int;
+declare v_r public.trip_assignment_result; v_old_closed int; v_audit int; v_expected uuid;
 begin
+  select id into v_expected from public.trip_assignments
+    where trip_id = '90000000-0000-0000-0000-0000000000c5' and ended_at is null;
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
-  v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c5', '30000000-0000-0000-0000-0000000000a2', null, 'Fictional: original driver called in sick');
+  v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c5', '30000000-0000-0000-0000-0000000000a2', null, 'Fictional: original driver called in sick', v_expected);
   reset role;
   select count(*) into v_old_closed from public.trip_assignments
     where trip_id = '90000000-0000-0000-0000-0000000000c5' and driver_id = '30000000-0000-0000-0000-0000000000a1' and ended_at is not null;
   select count(*) into v_audit from public.audit_events where entity_id = '90000000-0000-0000-0000-0000000000c5' and action = 'driver_reassigned';
   if v_r.changed and v_r.driver_id = '30000000-0000-0000-0000-0000000000a2' and v_old_closed = 1 and v_audit = 1 then
-    raise notice 'TEST C11: PASS (reassign_trip closes old row, creates new one, writes AuditEvent)';
+    raise notice 'TEST C11 (CASE A, valid real reassignment): PASS (reassign_trip closes old row, creates new one, writes AuditEvent)';
   else
-    raise notice 'TEST C11: FAIL (changed=%, driver_id=%, old_closed=%, audit=%)', v_r.changed, v_r.driver_id, v_old_closed, v_audit;
+    raise notice 'TEST C11 (CASE A): FAIL (changed=%, driver_id=%, old_closed=%, audit=%)', v_r.changed, v_r.driver_id, v_old_closed, v_audit;
   end if;
 end $$;
 
 do $$
-declare v_r public.trip_assignment_result; v_active_count int;
+declare v_r public.trip_assignment_result; v_active_count int; v_y_id uuid;
 begin
+  -- Y = the assignment C11 just created (Driver A2). Passing Y's own real
+  -- id as expected — this is the genuine idempotent case: caller reviewed
+  -- Y and is requesting exactly what Y already represents.
+  select id into v_y_id from public.trip_assignments
+    where trip_id = '90000000-0000-0000-0000-0000000000c5' and ended_at is null;
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
-  v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c5', '30000000-0000-0000-0000-0000000000a2', null);
+  v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c5', '30000000-0000-0000-0000-0000000000a2', null, null, v_y_id);
   reset role;
   select count(*) into v_active_count from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000c5' and ended_at is null;
   if v_r.changed = false and v_active_count = 1 then
-    raise notice 'TEST C12: PASS (identical reassign_trip retry is a safe no-op, exactly 1 active row remains)';
+    raise notice 'TEST C12 (CASE B, valid idempotent retry): PASS (expected id matches current Y, requested driver matches Y -> safe no-op, exactly 1 active row remains)';
   else
-    raise notice 'TEST C12: FAIL (changed=%, active_count=%)', v_r.changed, v_active_count;
+    raise notice 'TEST C12 (CASE B): FAIL (changed=%, active_count=%)', v_r.changed, v_active_count;
   end if;
 end $$;
 
--- =============================================================================
--- C13. reassign_trip driver/vehicle validation: cross-org vehicle.
--- =============================================================================
+-- A second dispatcher reassigns Y -> Z for real (Driver A1 again) — sets
+-- up the "stale" precondition for CASE C/D below. Y's own id (captured
+-- above as v_y_id) is now itself stale from this point forward.
 do $$
-declare v_r public.trip_assignment_result;
+declare v_r public.trip_assignment_result; v_y_id uuid;
 begin
+  select id into v_y_id from public.trip_assignments
+    where trip_id = '90000000-0000-0000-0000-0000000000c5' and ended_at is null;
+  set local role authenticated;
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
+  v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c5', '30000000-0000-0000-0000-0000000000a1', null, 'test setup: second dispatcher reassigns Y -> Z', v_y_id);
+  reset role;
+  if not (v_r.changed and v_r.driver_id = '30000000-0000-0000-0000-0000000000a1') then
+    raise notice 'TEST C12-setup (Y->Z): FAIL (changed=%, driver_id=%)', v_r.changed, v_r.driver_id;
+  end if;
+end $$;
+
+do $$
+declare v_r public.trip_assignment_result; v_active_count int; v_active_driver uuid; v_stale_y_id uuid;
+begin
+  -- v_stale_y_id: Y's id, now superseded by Z (set up above). Requesting
+  -- Driver A2 here — DIFFERENT from Z's own driver (A1).
+  select id into v_stale_y_id from public.trip_assignments
+    where trip_id = '90000000-0000-0000-0000-0000000000c5' and driver_id = '30000000-0000-0000-0000-0000000000a2' and ended_at is not null;
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
   begin
-    v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c6', '30000000-0000-0000-0000-0000000000a1', '50000000-0000-0000-0000-0000000000b1');
+    v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c5', '30000000-0000-0000-0000-0000000000a2', null, null, v_stale_y_id);
+    raise notice 'TEST C12b (CASE C, stale different target): FAIL (expected rejection, got success changed=%)', v_r.changed;
+  exception when sqlstate 'ZW005' then
+    reset role;
+    select count(*) into v_active_count from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000c5' and ended_at is null;
+    select driver_id into v_active_driver from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000c5' and ended_at is null;
+    if v_active_count = 1 and v_active_driver = '30000000-0000-0000-0000-0000000000a1' then
+      raise notice 'TEST C12b (CASE C, stale different target): PASS (stale expected Y correctly rejected as assignment_conflict; current Z (Driver A1) unchanged)';
+    else
+      raise notice 'TEST C12b (CASE C): FAIL (rejected correctly, but state corrupted: active_count=%, driver=%)', v_active_count, v_active_driver;
+    end if;
+  when others then
+    raise notice 'TEST C12b (CASE C): FAIL (wrong error % %)', sqlstate, sqlerrm;
+  end;
+end $$;
+reset role;
+
+do $$
+declare v_r public.trip_assignment_result; v_active_count int; v_active_driver uuid; v_stale_y_id uuid;
+begin
+  -- CASE D — the previously-missing guarantee: same stale expected id
+  -- (Y), but this time requesting Z's OWN current driver (A1) — a
+  -- "coincidental" match with the real current state that P1-E3-S5A's
+  -- original check-idempotency-first ordering would have silently
+  -- accepted as changed=false. Must still be rejected.
+  select id into v_stale_y_id from public.trip_assignments
+    where trip_id = '90000000-0000-0000-0000-0000000000c5' and driver_id = '30000000-0000-0000-0000-0000000000a2' and ended_at is not null;
+  set local role authenticated;
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
+  begin
+    v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c5', '30000000-0000-0000-0000-0000000000a1', null, null, v_stale_y_id);
+    raise notice 'TEST C12c (CASE D, stale SAME target — critical): FAIL (expected rejection, got success changed=%)', v_r.changed;
+  exception when sqlstate 'ZW005' then
+    reset role;
+    select count(*) into v_active_count from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000c5' and ended_at is null;
+    select driver_id into v_active_driver from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000c5' and ended_at is null;
+    if v_active_count = 1 and v_active_driver = '30000000-0000-0000-0000-0000000000a1' then
+      raise notice 'TEST C12c (CASE D, stale SAME target — critical): PASS (stale expected Y correctly rejected as assignment_conflict even though requested driver A1 coincidentally equals current Z''s driver — never silently converted to changed=false)';
+    else
+      raise notice 'TEST C12c (CASE D): FAIL (rejected correctly, but state corrupted: active_count=%, driver=%)', v_active_count, v_active_driver;
+    end if;
+  when others then
+    raise notice 'TEST C12c (CASE D): FAIL (wrong error % %)', sqlstate, sqlerrm;
+  end;
+end $$;
+reset role;
+
+-- =============================================================================
+-- C13. reassign_trip driver/vehicle validation: cross-org vehicle. Passes
+-- the correct (real, not stale) expected_assignment_id so the P1-E3-S5A
+-- precondition itself does not mask the ZW006 this test actually targets.
+-- =============================================================================
+do $$
+declare v_r public.trip_assignment_result; v_expected uuid;
+begin
+  select id into v_expected from public.trip_assignments
+    where trip_id = '90000000-0000-0000-0000-0000000000c6' and ended_at is null;
+  set local role authenticated;
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
+  begin
+    v_r := public.reassign_trip('90000000-0000-0000-0000-0000000000c6', '30000000-0000-0000-0000-0000000000a1', '50000000-0000-0000-0000-0000000000b1', null, v_expected);
     raise notice 'TEST C13: FAIL (expected rejection, got success)';
   exception when sqlstate 'ZW006' then
     raise notice 'TEST C13: PASS (cross-org vehicle correctly rejected as invalid_input)';
@@ -376,6 +480,42 @@ begin
   else
     raise notice 'TEST C16: FAIL (insert_denied=%, update_denied=%)', v_insert_denied, v_update_denied;
   end if;
+end $$;
+reset role;
+
+-- =============================================================================
+-- C17. P1-E3-S5A — reassign_trip's new optimistic-concurrency precondition.
+-- Trip C8 is currently assigned to Driver A1 (unmutated by C15/C16, both of
+-- which are denied before ever writing). A caller supplying a WRONG/stale
+-- p_expected_assignment_id (a fabricated uuid, never the real active row)
+-- and a genuinely different requested Driver (A2, not A1) must be rejected
+-- — this is exactly the "Dispatcher A submits a stale decision" scenario,
+-- at the RPC layer directly (the real cross-session application version of
+-- this same scenario is covered separately, through the actual UI).
+-- =============================================================================
+do $$
+declare v_r public.trip_assignment_result; v_active_count int; v_active_driver uuid;
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2';
+  begin
+    v_r := public.reassign_trip(
+      '90000000-0000-0000-0000-0000000000c8', '30000000-0000-0000-0000-0000000000a2',
+      null, null, 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+    );
+    raise notice 'TEST C17: FAIL (expected rejection, got success)';
+  exception when sqlstate 'ZW005' then
+    reset role;
+    select count(*) into v_active_count from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000c8' and ended_at is null;
+    select driver_id into v_active_driver from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000c8' and ended_at is null;
+    if v_active_count = 1 and v_active_driver = '30000000-0000-0000-0000-0000000000a1' then
+      raise notice 'TEST C17: PASS (stale/wrong expected_assignment_id correctly rejected as assignment_conflict; exactly 1 active row remains, still Driver A1, no stale overwrite)';
+    else
+      raise notice 'TEST C17: FAIL (rejected correctly, but state corrupted: active_count=%, driver=%)', v_active_count, v_active_driver;
+    end if;
+  when others then
+    raise notice 'TEST C17: FAIL (wrong error % %)', sqlstate, sqlerrm;
+  end;
 end $$;
 reset role;
 

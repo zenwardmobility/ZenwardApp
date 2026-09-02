@@ -20,7 +20,7 @@ Every rejection is a Postgres exception with a custom SQLSTATE, surfaced by Post
 | `ZW002` | `not_found` — resource does not exist, OR the caller has no legitimate visibility into it under RLS. Cross-tenant and nonexistent are deliberately indistinguishable (no existence oracle) | 400 |
 | `ZW003` | `stale_state` — the Trip's actual current state does not match what this call requires (either the caller's `expected_current_state` or the function's own fixed from-state) | 400 |
 | `ZW004` | `illegal_transition` — the requested change is not a legal edge from the Trip's current state, independent of any `expected_current_state` mismatch (e.g. cancelling an already-`completed` Trip, or (re)assigning past `arrived_at_pickup`) | 400 |
-| `ZW005` | `assignment_conflict` — a `trip_assignments` precondition failed (an active assignment already exists with a different driver/vehicle when calling `assign_trip`; no active assignment exists when calling `reassign_trip`) | 400 |
+| `ZW005` | `assignment_conflict` — a `trip_assignments` precondition failed: an active assignment already exists with a different driver/vehicle when calling `assign_trip`; no active assignment exists when calling `reassign_trip`; OR (P1-E3-S5A) `reassign_trip`'s `p_expected_assignment_id` no longer matches the currently-active assignment — the Dispatcher's decision is based on a since-superseded assignment | 400 |
 | `ZW006` | `invalid_input` — malformed or missing parameter (blank/oversized reason, unknown or inactive driver/vehicle, null required id) | 400 |
 
 Every anon (unauthenticated) call is rejected before any of this logic runs — no function below grants `EXECUTE` to `anon` or `PUBLIC`, so an anonymous call fails at the privilege layer with a standard Postgres `insufficient_privilege` (42501), not one of the six codes above.
@@ -134,13 +134,18 @@ Requires **no existing active** `trip_assignments` row on the Trip.
 
 **Writes (on real creation):** `trip_assignments` INSERT; one `trip_events` row (`driver_assigned`, `metadata.driver_id`/`vehicle_id`); one `audit_events` row (`driver_assigned`).
 
-### `reassign_trip(p_trip_id uuid, p_driver_id uuid, p_vehicle_id uuid default null, p_reason text default null)`
+### `reassign_trip(p_trip_id uuid, p_driver_id uuid, p_vehicle_id uuid default null, p_reason text default null, p_expected_assignment_id uuid default null)`
 
-Requires an **existing active** `trip_assignments` row (`ZW005` if none — use `assign_trip` instead).
-- Requested driver+vehicle exactly match the current active assignment → idempotent no-op (`changed: false`), no write.
-- Otherwise → validates the new driver/vehicle → closes the old row (`ended_at`, `end_reason` = `p_reason` or `'reassigned'`) → inserts a new active row. Never edits `driver_id`/`vehicle_id` in place on the existing row (ZD-051 — reassignment is always close-and-insert).
+Requires an **existing active** `trip_assignments` row (`ZW005` if none — use `assign_trip` instead). As of **P1-E3-S5B**, the check order is:
+1. **`p_expected_assignment_id` must equal the active assignment's own `id`** (checked FIRST, under the same row lock) → `ZW005 assignment_conflict` on ANY mismatch — including a `null`/omitted value (no way to skip this by omitting the parameter), and including the case where the requested driver/vehicle happen to already equal the CURRENT assignment's own driver/vehicle. A stale expected assignment is always rejected; it is never silently treated as a no-op just because the request happens to coincide with reality.
+2. Only once `p_expected_assignment_id` is confirmed current: requested driver+vehicle exactly match the (now-confirmed-current) active assignment → idempotent no-op (`changed: false`), no write.
+3. Otherwise (a real change, with a confirmed-current expected id) → validates the new driver/vehicle → closes the old row (`ended_at`, `end_reason` = `p_reason` or `'reassigned'`) → inserts a new active row. Never edits `driver_id`/`vehicle_id` in place on the existing row (ZD-051 — reassignment is always close-and-insert).
 
 `p_reason` is optional context, not a precondition — a reassignment with no reason given is legal (unlike `cancel_trip`/`record_no_show`, where a reason is required).
+
+**`p_expected_assignment_id` (optimistic-concurrency precondition, P1-E3-S5A/ZD-145, ordering corrected P1-E3-S5B/ZD-146):** added after P1-E3-S5's own live-application testing showed a real, if transactionally-safe, gap: without it, a Dispatcher whose form was based on a since-superseded assignment could silently overwrite a different Dispatcher's newer decision. The caller (the Dispatch UI) always supplies the `trip_assignments.id` it loaded — never shown to the Dispatcher, purely a hidden precondition value.
+
+P1-E3-S5A's original implementation checked the idempotent driver/vehicle match BEFORE `p_expected_assignment_id` — this let a stale expected id slip through as a silent success whenever the request happened to already match the CURRENT (not the caller's expected) assignment. P1-E3-S5B corrected the order: `p_expected_assignment_id` is now the FIRST thing checked once an active assignment is confirmed to exist, before anything else, including the idempotent-match check. **This means a genuine caller-side retry (e.g. a dropped HTTP response) that still carries the pre-call expected id will now also be rejected as `assignment_conflict`, even though it is the caller's own prior change** — a deliberate, explicit product decision (P1-E3-S5B): staleness is staleness, regardless of who caused the current state or why the caller's own expectation is out of date. This is intentionally narrower than the general `p_expected_current_state` retry-safety guarantee the `driver_*` transition RPCs provide (ZD-093, a different mechanism checking Trip *state*, not an assignment *id* — unaffected by this change). In practice the Dispatch UI always re-fetches a fresh expected id on every dialog open, so this narrower guarantee has little real-world cost for this specific application.
 
 **Writes (on real reassignment):** `trip_assignments` UPDATE (close old) + INSERT (new); one `trip_events` row (`driver_reassigned`, `metadata` with previous and new driver/vehicle); one `audit_events` row (`driver_reassigned`, `reason`, before/after assignment).
 

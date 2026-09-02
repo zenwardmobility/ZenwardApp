@@ -42,7 +42,7 @@ begin
     'driver_mark_passenger_onboard(uuid,text)','driver_start_to_destination(uuid,text)',
     'driver_arrive_at_destination(uuid,text)','driver_complete_trip(uuid,text)',
     'cancel_trip(uuid,text)','record_no_show(uuid,text)',
-    'assign_trip(uuid,uuid,uuid)','reassign_trip(uuid,uuid,uuid,text)'
+    'assign_trip(uuid,uuid,uuid)','reassign_trip(uuid,uuid,uuid,text,uuid)'
   ]) as fn
   where not has_function_privilege('authenticated', ('public.' || fn)::regprocedure, 'EXECUTE');
 
@@ -52,7 +52,7 @@ begin
     'driver_mark_passenger_onboard(uuid,text)','driver_start_to_destination(uuid,text)',
     'driver_arrive_at_destination(uuid,text)','driver_complete_trip(uuid,text)',
     'cancel_trip(uuid,text)','record_no_show(uuid,text)',
-    'assign_trip(uuid,uuid,uuid)','reassign_trip(uuid,uuid,uuid,text)'
+    'assign_trip(uuid,uuid,uuid)','reassign_trip(uuid,uuid,uuid,text,uuid)'
   ]) as fn
   where has_function_privilege('anon', ('public.' || fn)::regprocedure, 'EXECUTE')
      or has_function_privilege('public', ('public.' || fn)::regprocedure, 'EXECUTE');

@@ -108,6 +108,15 @@ body {
   border-radius: var(--radius-xs);
 }
 
+/* Dialog backdrop (src/components/ui/Dialog.tsx, P1-E3-S5) — the native
+   `<dialog>` element's own `::backdrop` is fully transparent by default in
+   every browser; this is the one explicit rule needed to actually dim the
+   page behind an open dialog. Plain CSS, not a Tailwind arbitrary variant,
+   since `::backdrop` support in Tailwind v4 utilities isn't relied on. */
+dialog::backdrop {
+  background: rgb(15 23 42 / 0.45);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -1,7 +1,7 @@
 # Zenward Platform — Component Inventory
 
-**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today, P1-E3-S3 — Driver Trips & Active Trip Experience, and P1-E3-S4 — Operations Application Shell & Today's Operations (components below actually built/refined)
-**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History; P1-E3-S4 implemented the real Today's Operations screen and refined the Operations shell — see "Driver components — P1-E3-S2", "Driver components — P1-E3-S3", and "Operations components — P1-E3-S4" below.
+**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S2 — Driver Application Shell & Driver Today, P1-E3-S3 — Driver Trips & Active Trip Experience, P1-E3-S4 — Operations Application Shell & Today's Operations, and P1-E3-S5 — Dispatch Board (components below actually built/refined)
+**Status:** P1-E3-S0 itself was planning/documentation only. P1-E3-S2 implemented Driver Today and the shared Driver shell; P1-E3-S3 implemented Driver Trips, Trip Detail/Active Trip, and Driver History; P1-E3-S4 implemented the real Today's Operations screen and refined the Operations shell; P1-E3-S5 implemented the real Dispatch Board — see "Driver components — P1-E3-S2", "Driver components — P1-E3-S3", "Operations components — P1-E3-S4", and "Dispatch components — P1-E3-S5" below.
 **Last updated:** 2026-09-01
 
 Reconciles the Stitch references (docs/design/stitch/references/) against the component library that **already exists** in `src/components/` (built during P0-E2-S3/S3A) rather than proposing an inventory from scratch. Confirmed by direct inspection: the existing `TRIP_STATUS_MAP`/`DRIVER_STATUS_MAP` in `TripStatus.tsx`/`DriverStatus.tsx` already anticipate the exact labels seen in these references (`Requested`, `Pending Confirmation`, `Needs Assignment`, `Available`, `On Trip`, `Break`, `Unavailable`) — the primitive layer is well-aligned; this phase's job is identifying the screen/feature-level composition still needed on top of it.
@@ -34,9 +34,9 @@ Reconciles the Stitch references (docs/design/stitch/references/) against the co
 |---|---|---|---|---|
 | `MetricCard` (vs. `SummaryStrip` item) | 01's summary items are closer to a horizontal stat row than discrete cards — **confirm which pattern before building**; `SummaryStrip` may already suffice. Flagged for design review, not a confirmed new component. | 01, 03 | — | Existing `SummaryStrip` may cover this — verify before adding |
 | `TripListTable` (a `DataTable` composition, not a new primitive) | Named column configuration for the two distinct table shapes on 01 (Needs Attention vs. Upcoming Trips have different columns) | 01 | Desktop only | `DataTable` |
-| `DispatchAssignmentGrid` | Time-axis × driver-row grid with spatially-positioned trip blocks | 03 | Desktop/tablet only — no mobile equivalent is implied or required | New — no existing primitive covers a 2D time/resource grid |
-| `DispatchQueueCard` | Needs-assignment queue card (passenger, time, route, status, Assign/Review action) | 03 | Desktop | Composes `StatusBadge`, `Button` |
-| `DriverCapacityCard` | Driver photo/initials, status pill, current/next assignment line | 03 | Desktop | Composes `Avatar`, `DriverStatus` |
+| ~~`DispatchAssignmentGrid`~~ | **Built P1-E3-S5** as `AssignmentGrid` — see "Dispatch components" below | 03 | Desktop/tablet only — no mobile equivalent is implied or required | Built without a new generic primitive; composes `Panel`/`EmptyState` |
+| ~~`DispatchQueueCard`~~ | **Built P1-E3-S5** inline within `NeedsAssignmentQueue` (no separate card component — one usage, not worth abstracting yet) | 03 | Desktop | Composes `Panel`, `TripStatus`, `Button` |
+| ~~`DriverCapacityCard`~~ | **Built P1-E3-S5** inline within `DriverCapacityPanel` | 03 | Desktop | Composes `Avatar`, `StatusBadge` (not `DriverStatus` — see Dispatch components note on why) |
 | `TripRouteTimeline` | Two-stop pickup/destination with connecting line, inline note, per-stop action buttons | 02 (Operations variant, richer than `DriverRoute`) | Desktop | Distinct from `DriverRoute` — Operations variant carries more per-stop detail (call-passenger note, appointment badges) |
 | `TripCurrentStatusCard` | Right-rail status summary (state, driver link, last update, next action) | 02 | Desktop | Composes `StatusBadge`, `DefinitionList` |
 | `TripNoteList` | Timestamped note list + add-note affordance | 02 | Desktop (Driver's note surface is simpler — see `DriverInstruction`, already covers the read-only display case) | New list component; write action ("Add Note") is a direct-table INSERT per the data-action map, not an RPC — no special mutation-layer dependency |
@@ -87,6 +87,20 @@ Full field-level rationale: [driver-trips-data-map.md](../product/driver-trips-d
 | `TripStatus`, `DataTable`, `Panel`, `SectionHeader`, `EmptyState`, `StatusBadge` | Reused unchanged | Every label `operationsTripStatusLabel`/the literal `"Needs Assignment"` produces was already anticipated by `TRIP_STATUS_MAP` before this phase's code was written (confirmed at the top of this document) — no new status-badge component needed. |
 
 Full field-level rationale: [todays-operations-data-map.md](../product/todays-operations-data-map.md).
+
+## Dispatch components — P1-E3-S5
+
+| Component | Status | Change |
+|---|---|---|
+| `Dialog` (`src/components/ui/Dialog.tsx`) | **New shared primitive** | The first Dialog/Modal in the design system — built on the native `<dialog>` element (`showModal()`, native focus trap, ESC via the `close` event) rather than a new UI library (work item §53). Backdrop dimming is one explicit `dialog::backdrop` rule in `globals.css` (native backdrops are transparent by default). Reusable by any future modal need, not Dispatch-specific. |
+| `NeedsAssignmentQueue` | **New** | The left-column card queue — real Needs-Assignment Trips only (no Running Late/Pending Confirmation, matching Today's Operations' ZD-130 precedent). Composes `Panel`/`TripStatus`/`Button`, not a new card primitive (single usage). |
+| `AssignmentGrid` | **New** | The center "Today's Assignments" time-axis grid — one row per active Driver, Trip blocks positioned by real `scheduled_pickup_at` via `src/lib/operations/dispatch-grid.ts`'s pure positioning math. Click a block to open the reassignment dialog — no drag-and-drop (ZD-138). |
+| `DriverCapacityPanel` | **New** | The right-column rail — real `On Trip` badge only (`StatusBadge`, not the existing `DriverStatus` component: `DriverStatus`'s own `DRIVER_STATUS_MAP` still encodes the full illustrative Available/On Trip/Break/Unavailable set from the original Stitch-ingestion mockup pass, which this phase deliberately does NOT build against real data — reusing it here would risk a future edit to that map silently reintroducing a fabricated status through this screen). |
+| `AssignmentDialog` | **New** | The one Assign/Reassign form, built on `Dialog` — real `<form>` + Server Action (`useActionState`), mirrors `DriverLifecycleAction`'s established pattern exactly. Mounted only while active (keyed by trip id + mode) so its action state is always fresh. |
+| `DispatchBoardClient` | **New** | Client orchestrator — holds only which dialog is open; every other value is server-fetched (work item §40, no `useEffect` fetch-after-mount). |
+| `TripStatus`, `Panel`, `EmptyState`, `Avatar`, `Select`, `Textarea`, `Button` | Reused unchanged | No new status-badge or form-field primitive was needed — every label `operationsTripStatusLabel` produces was already anticipated by `TRIP_STATUS_MAP` before this phase. |
+
+Full field-level rationale: [dispatch-board-data-map.md](../product/dispatch-board-data-map.md).
 
 ## Explicitly not building generically
 

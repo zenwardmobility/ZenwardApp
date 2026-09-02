@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { Plus } from "@phosphor-icons/react/dist/ssr";
+import { Plus, CaretLeft, CaretRight, Gear } from "@phosphor-icons/react/dist/ssr";
 import { OperationsShell } from "@/components/operations/OperationsShell";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { Button } from "@/components/ui/Button";
@@ -10,6 +10,8 @@ import { LinkButton } from "@/components/ui/LinkButton";
 import { formatOperationsLongDate } from "@/lib/operations/presentation";
 import type { AppHeaderProps } from "@/components/operations/AppHeader";
 import type { OrganizationContext } from "@/lib/auth/types";
+import { cn } from "@/lib/cn";
+import { typography } from "@/design/typography";
 
 const SECTION_LABELS: { prefix: string; label: string }[] = [
   { prefix: "/operations/trips", label: "Trips" },
@@ -64,40 +66,94 @@ export interface OperationsLayoutClientProps {
  * actually needs to come from the page itself. A future route that DOES
  * need page-driven header content is a real reason to revisit this.
  */
+/** Same `hidden lg:block` wrapper fix as ZD-135 — SearchInput's own `className` only reaches its inner `<input>`. Reused as-is by both the Overview and Dispatch headers rather than duplicated inline twice. */
+function HeaderSearch() {
+  return (
+    <div className="hidden lg:block">
+      <SearchInput
+        label="Search trips, passengers, drivers"
+        placeholder="Search trips, passengers, drivers…"
+        className="w-64"
+        disabled
+        title="Search is not wired up yet."
+      />
+    </div>
+  );
+}
+
 function buildHeaderProps(pathname: string, organization: OrganizationContext, avatarName: string): AppHeaderProps {
-  if (pathname !== "/operations") {
-    return { contextLabel: getContextLabel(pathname), avatarName };
+  if (pathname === "/operations") {
+    return {
+      title: "Today's Operations",
+      description: formatOperationsLongDate(new Date(), organization.organizationTimezone),
+      avatarName,
+      actions: (
+        <>
+          <HeaderSearch />
+          <Button variant="outline" size="md" disabled title="Export is not available yet (see ui-backend-gap-register.md GAP-9).">
+            Export Day Sheet
+          </Button>
+          <LinkButton href="/operations/trips/new" size="md" leadingIcon={<Plus className="size-4" aria-hidden />}>
+            New Trip
+          </LinkButton>
+        </>
+      ),
+    };
   }
 
-  return {
-    title: "Today's Operations",
-    description: formatOperationsLongDate(new Date(), organization.organizationTimezone),
-    avatarName,
-    actions: (
-      <>
-        {/* SearchInput forwards `className` only to its inner <input>, not
-            its wrapping <div> (which also renders the icon) — `hidden` has
-            to live on an outer wrapper, or the icon alone stays visible as
-            a tiny floating box below the `lg` breakpoint (found during this
-            phase's own 768px visual QA, see decision-register.md ZD-129). */}
-        <div className="hidden lg:block">
-          <SearchInput
-            label="Search trips, passengers, drivers"
-            placeholder="Search trips, passengers, drivers…"
-            className="w-64"
+  if (pathname === "/operations/dispatch") {
+    return {
+      title: "Dispatch",
+      description: formatOperationsLongDate(new Date(), organization.organizationTimezone),
+      avatarName,
+      actions: (
+        <>
+          {/* Day navigator — real, visible, disabled (matching the Export
+              Day Sheet / ZD-134 treatment): the board only ever queries the
+              organization's own "today" (work item's own day-scoping),
+              there is no other-day query built this phase, so a live
+              navigator would be a fake affordance. "Today" is a static
+              label, not a button. */}
+          <div className="hidden items-center gap-1 rounded-sm border border-border-strong px-1 py-1 md:flex">
+            <Button
+              variant="text"
+              size="sm"
+              disabled
+              aria-label="Previous day (not available yet)"
+              title="Day navigation is not available yet — the board shows today only."
+            >
+              <CaretLeft className="size-4" aria-hidden />
+            </Button>
+            <span className={cn(typography.bodySmall, "px-1 font-medium text-text-secondary")}>Today</span>
+            <Button
+              variant="text"
+              size="sm"
+              disabled
+              aria-label="Next day (not available yet)"
+              title="Day navigation is not available yet — the board shows today only."
+            >
+              <CaretRight className="size-4" aria-hidden />
+            </Button>
+          </div>
+          <HeaderSearch />
+          <Button
+            variant="outline"
+            size="md"
             disabled
-            title="Search is not wired up yet — this phase builds the overview screen only."
-          />
-        </div>
-        <Button variant="outline" size="md" disabled title="Export is not available yet (see ui-backend-gap-register.md GAP-9).">
-          Export Day Sheet
-        </Button>
-        <LinkButton href="/operations/trips/new" size="md" leadingIcon={<Plus className="size-4" aria-hidden />}>
-          New Trip
-        </LinkButton>
-      </>
-    ),
-  };
+            leadingIcon={<Gear className="size-4" aria-hidden />}
+            title="Dispatch Settings has no defined behavior yet."
+          >
+            Dispatch Settings
+          </Button>
+          <LinkButton href="/operations/trips/new" size="md" leadingIcon={<Plus className="size-4" aria-hidden />}>
+            New Trip
+          </LinkButton>
+        </>
+      ),
+    };
+  }
+
+  return { contextLabel: getContextLabel(pathname), avatarName };
 }
 
 export function OperationsLayoutClient({ organization, dispatcherDisplayName, children }: OperationsLayoutClientProps) {

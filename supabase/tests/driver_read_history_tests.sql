@@ -29,11 +29,12 @@ insert into public.trip_assignments (organization_id, trip_id, driver_id, assign
 
 -- Advance D1: reassign Driver A1 away (ended_at set, end_reason='reassigned', Trip NOT terminal).
 do $$
-declare v_ar public.trip_assignment_result;
+declare v_ar public.trip_assignment_result; v_expected uuid;
 begin
+  select id into v_expected from public.trip_assignments where trip_id = '91000000-0000-0000-0000-0000000000d1' and ended_at is null;
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2'; -- dispatcher
-  v_ar := public.reassign_trip('91000000-0000-0000-0000-0000000000d1', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign D1 to Driver A2');
+  v_ar := public.reassign_trip('91000000-0000-0000-0000-0000000000d1', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign D1 to Driver A2', v_expected);
   reset role;
 end $$;
 

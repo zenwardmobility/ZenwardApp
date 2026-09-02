@@ -1655,6 +1655,144 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Engineering
 - **Review Trigger:** Any future caller conditionally hiding a `SearchInput` (or any other component whose `className` prop is documented/observed to reach only an inner element, not its wrapper) — wrap it, don't rely on the prop reaching the outermost box.
 
-No decisions have been REJECTED or SUPERSEDED as of this update.
+### ZD-136 — Grid blocks are fixed-width, positioned only by start time — no fabricated duration
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Data integrity
+- **Decision:** Every Trip block in the "Today's Assignments" time-axis grid (`src/lib/operations/dispatch-grid.ts`, `AssignmentGrid`) renders at the same fixed pixel width, positioned only by its real `scheduled_pickup_at` — never stretched proportional to a duration.
+- **Status:** CONFIRMED — implemented and visually verified (docs/design/qa/dispatch-board/).
+- **Reason:** `trips` has no duration or expected-dropoff field — confirmed directly against `database.types.ts` (`scheduled_pickup_at`/`appointment_at` only). The reference's own blocks have visible width suggesting duration, but inventing one would be fabricated data on a screen this project has otherwise been careful never to do that on. A fixed-width, start-time-anchored block is an honest simplification of the visual, not a structural deviation (layout/column-structure/hierarchy are all preserved).
+- **Affected Product Areas:** `src/lib/operations/dispatch-grid.ts`, `src/components/operations/dispatch/AssignmentGrid.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering / Product
+- **Review Trigger:** A future schema addition of a real Trip duration/expected-dropoff field — revisit proportional block sizing then, not before.
+
+### ZD-137 — Grid time window is a fixed 6 AM–8 PM org-local span, not dynamically computed
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** The grid always shows 6:00 AM–8:00 PM (org-local), regardless of what today's actual Trip times are — never a per-day dynamically-sized window.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** A fixed window is simple, deterministic, and trivially testable (`gridHourLabels()`/`gridBlockLeftPx()` are pure functions with no dependency on the day's actual data); a dynamically-sized window would need arbitrary padding/clamping rules invented from nothing, for a real usability benefit that hasn't been asked for. The reference's own header shows a fixed-looking "08:00 AM - 03:00 PM" label, consistent with a bounded, not computed, window being an acceptable pattern here.
+- **Affected Product Areas:** `src/lib/operations/dispatch-grid.ts`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** Real usage showing trips regularly falling outside 6 AM–8 PM (clamped to the nearest edge today, not lost) — widen the constants then.
+
+### ZD-138 — No drag-and-drop; a deliberate click → dialog → confirm flow instead
+
+- **Date:** 2026-09-01
+- **Category:** Product / Accessibility
+- **Decision:** Assignment and reassignment are both driven by clicking a card/block to open `AssignmentDialog`, choosing a Driver (and optionally a Vehicle) from real `<select>` options, and clicking an explicit, clearly-labeled submit button. No drag-and-drop was built.
+- **Status:** CONFIRMED — implemented and verified (real E2E application tests, `docs/reports/P1-E3-S5-completion-report.txt`).
+- **Reason:** The reference's spatial grid visually suggests drag-and-drop, but no interaction contract confirms it (stitch-reference-index.md: "implied, not confirmed"), and the work item's own default is to prefer a deliberate flow over reflexively building drag-and-drop. Drag-and-drop would add real accessibility complexity (keyboard operability, screen-reader announcement of a spatial drop target), mutation ambiguity (what exactly does dropping a block onto a different driver's row at a different time mean — reassign only, or also reschedule?), and accidental-assignment risk on touch/tablet — none of which a click-then-confirm flow has.
+- **Affected Product Areas:** `src/components/operations/dispatch/AssignmentGrid.tsx`, `src/components/operations/dispatch/NeedsAssignmentQueue.tsx`, `src/components/operations/dispatch/AssignmentDialog.tsx`
+- **Dependencies:** None
+- **Owner:** Product / Engineering
+- **Review Trigger:** A future, deliberately-scoped drag-and-drop work item with its own accessibility design — not assumed or half-built here.
+
+### ZD-139 — The Dialog primitive is built on the native `<dialog>` element, not a new UI library
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `src/components/ui/Dialog.tsx` — the design system's first Dialog/Modal — wraps the native `<dialog>` element (`showModal()`/`close()`, the native `close` event, native focus trapping) rather than a third-party modal library.
+- **Status:** CONFIRMED — implemented; keyboard/focus behavior verified (see completion report Accessibility section).
+- **Reason:** Work item §53 explicitly asks not to introduce a heavyweight UI library solely for one modal, and no Dialog/Modal primitive existed before this phase to reuse. `<dialog>` gives real focus trapping, ESC handling, and top-layer stacking for free in every supported browser, at the cost of one explicit `dialog::backdrop` CSS rule (native backdrops are transparent by default) — the smallest correct implementation, not a compromise.
+- **Affected Product Areas:** `src/components/ui/Dialog.tsx`, `src/app/globals.css`, `src/components/operations/dispatch/AssignmentDialog.tsx`
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** A future need this primitive doesn't cover (e.g. a non-modal popover, a multi-step wizard) — extend or add alongside it, not necessarily replace it.
+
+### ZD-140 — Driver Capacity shows real "On Trip" only; `StatusBadge` directly, not the existing `DriverStatus` component
+
+- **Date:** 2026-09-01
+- **Category:** Product / Data integrity
+- **Decision:** `DriverCapacityPanel` renders `<StatusBadge label="On Trip" category="active">` directly, computed from a real active-state assignment — never the existing `DriverStatus` component (`src/components/ui/DriverStatus.tsx`), and never a status badge at all when a Driver has nothing in progress right now.
+- **Status:** CONFIRMED — implemented and verified (functional matrix explicitly asserts AVAILABLE/CONFLICT/BREAK never appear).
+- **Reason:** `DriverStatus`'s own `DRIVER_STATUS_MAP` still encodes the full illustrative Available/On Trip/Break/Unavailable set from the original P1-E3-S0 Stitch-ingestion mockup pass — a real component, but built against sample labels, not live data. Reusing it here would risk a future unrelated edit to that map (e.g. a color/wording tweak) silently reintroducing a fabricated status onto a real screen through a component neither this phase's code nor its author would think to re-check. GAP-6 (Driver Availability has no schema representation) applies here exactly as it did on Today's Operations (ZD-130).
+- **Affected Product Areas:** `src/components/operations/dispatch/DriverCapacityPanel.tsx`
+- **Dependencies:** GAP-6 (ui-backend-gap-register.md)
+- **Owner:** Product / Engineering
+- **Review Trigger:** A real Driver Availability schema landing — `DriverCapacityPanel` gets its own deliberate update then, not a reflexive switch back to `DriverStatus`.
+
+### ZD-141 — Dispatch's Trip query IS bounded to today's window, unlike Today's Operations' unbounded Active Trips list
+
+- **Date:** 2026-09-01
+- **Category:** Architecture
+- **Decision:** `getDispatchBoardData()` filters every Trip by today's `scheduled_pickup_at` window, including in-progress ones — a deliberate difference from Today's Operations' Active Trips panel (ZD-131), which is explicitly NOT bounded to today.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** The center grid is inherently a TODAY time axis — an in-progress Trip whose `scheduled_pickup_at` fell outside today's window has no meaningful horizontal position on it, unlike a flat list (Today's Operations' Active Trips), which has no such spatial constraint. This is a genuine architectural difference between a list and a time-grid, not an inconsistency between the two screens' otherwise-identical day-bounds helper (`organizationDayBoundsUtc`, reused unchanged from `src/lib/operations/day-bounds.ts`).
+- **Affected Product Areas:** `src/lib/operations/dispatch-board.ts`
+- **Dependencies:** ZD-131
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated.
+
+### ZD-142 — Stale reassignment's real "last-write-wins" behavior is documented, not routed around — **SUPERSEDED by ZD-145 (P1-E3-S5A)**
+
+- **Date:** 2026-09-01
+- **Category:** Product / Security
+- **Decision:** `reassign_trip` has no "expected current driver" precondition (confirmed by reading its actual SQL) — a dispatcher's reassignment succeeds against whatever assignment is currently active, even if their own UI was stale when they chose a replacement driver. This phase does not add a client-side or RPC-level check to force a rejection in this case.
+- **Status:** **SUPERSEDED — 2026-09-01, same day, by ZD-145.** P1-E3-S5's own real, live-application concurrency testing (which THIS decision was written to document honestly) was the direct evidence that motivated hardening `reassign_trip` in the very next phase, P1-E3-S5A. "Transactionally safe" (still true) was correctly distinguished from "operationally desirable" (found NOT to be) — the work item that opened P1-E3-S5A said so explicitly. This decision's own text remains below, UNCHANGED, as an honest record of what was true and why it was accepted at the time — not rewritten to look as though the gap was anticipated. **As of P1-E3-S5A, a stale reassignment is DENIED, not accepted as "last write wins" — see ZD-145.**
+- **Reason (as originally recorded — no longer the current behavior):** This is the RPC's real, intentional contract (`docs/security/mutation-authorization.md`: ops actions authorize by live-checked org-level role, not personal/instance-specific state — any currently-authorized Dispatcher may legitimately act on a Trip's current state regardless of who acted on it last). It is also provably safe: exactly one active assignment always exists (the atomic close-then-insert, backed by the row lock and the partial unique index), so a "stale" reassignment cannot corrupt data — it just means the latest human decision is what takes effect, which is correct behavior for a live operational tool, not a bug to paper over with an invented precondition the RPC's own author didn't build.
+- **Affected Product Areas:** `src/app/operations/dispatch/actions.ts`, `src/components/operations/dispatch/AssignmentDialog.tsx`
+- **Dependencies:** None
+- **Owner:** Product / Security
+- **Review Trigger:** (Original, now moot) A genuine future product requirement for reassignment to be conditioned on an expected prior driver — resolved by ZD-145, the very next phase.
+
+### ZD-143 — 3-column layout activates at `xl` (1280px), not ~1024px — revised after real visual QA
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Visual fidelity
+- **Decision:** The Dispatch Board's 3-column grid (`grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_280px]`) activates at Tailwind's `xl` breakpoint (1280px), stacking to a single column below it. `application-route-map.md`'s original pre-implementation note framed ~1024px as "the intended minimum Operations width" for this screen.
+- **Status:** CONFIRMED — implemented; verified via real screenshots at all 5 required widths (docs/design/qa/dispatch-board/).
+- **Reason:** That note was a planning-stage estimate, made before any real layout existed to measure. Building the actual grid and capturing real 1024px/1280px screenshots showed three genuinely useful columns do not fit in 1024px of width even with narrow (280px) side rails — the center grid would be reduced to showing well under an hour of the day. A single-column stack (queue, then a horizontally-scrollable grid, then capacity rail — all full-width) reads cleanly and loses no information (the grid already requires horizontal scroll to see the full day even at 1440/1600) at 1024/768, while 1280 and above get the full 3-column reference composition. This is an informed revision based on the finished implementation, not a shortcut.
+- **Affected Product Areas:** `src/components/operations/dispatch/DispatchBoardClient.tsx`, `docs/product/application-route-map.md` (its ~1024px note is now superseded by this entry for this specific screen)
+- **Dependencies:** None
+- **Owner:** Engineering / Design
+- **Review Trigger:** A future redesign of the grid's own column widths that changes how much fits at 1024 — re-measure before changing the breakpoint again.
+
+### ZD-144 — Day navigator and "Dispatch Settings" are real, visible, disabled controls — not omitted, not faked
+
+- **Date:** 2026-09-01
+- **Category:** Product
+- **Decision:** The header's ‹ Today › day navigator and "Dispatch Settings" button are both rendered, real, and `disabled`, each with a `title` explaining why — extending the same treatment ZD-134 established for Today's Operations' Search/Export Day Sheet.
+- **Status:** CONFIRMED — implemented.
+- **Reason:** Both are prominent, expected controls in the reference whose total absence would itself look like a bug on an otherwise-complete header. The board only ever queries the organization's own "today" (no other-day query was built this phase), and "Dispatch Settings" has no defined behavior anywhere in this project — disabling, rather than hiding or faking function, communicates "not yet wired" honestly.
+- **Affected Product Areas:** `src/components/operations/OperationsLayoutClient.tsx`
+- **Dependencies:** ZD-134
+- **Owner:** Product
+- **Review Trigger:** A dedicated future multi-day Dispatch view, or a defined "Dispatch Settings" feature — neither designed here.
+
+### ZD-145 — `reassign_trip` gains an explicit `p_expected_assignment_id` optimistic-concurrency precondition — supersedes ZD-142 — **AMENDED by ZD-146 (P1-E3-S5B, same day)**
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Security / Product
+- **Decision:** `reassign_trip`'s signature gains a 5th parameter, `p_expected_assignment_id uuid default null` (appended, matching the work item's own preferred shape). For a REAL (non-idempotent) reassignment, the RPC verifies — under the same row lock already held for every other check — that this value equals the currently-active assignment's own `id`; a mismatch (including a `null`/omitted value) fails closed with the existing `ZW005 assignment_conflict` category, never a new error code. The Dispatch UI's `AssignmentDialog` always supplies the real active assignment id it loaded, as a hidden form field never shown to the Dispatcher.
+- **Status:** CONFIRMED, ordering AMENDED same day by ZD-146 — implemented (`supabase/migrations/20260901120000_reassignment_concurrency_hardening.sql`, edited in place by P1-E3-S5B, never having been deployed) and verified end-to-end through the real running application: a genuine two-independent-session stale-reassignment attempt is DENIED (previously succeeded — see ZD-142, which this entry supersedes). **The bullet below on check ordering, as originally written, has been struck through and corrected — it described the P1-E3-S5A-only behavior, which P1-E3-S5B (same day) found to be itself contradictory to the product's own stale-precondition rule; see ZD-146 for why and what changed.**
+- **Reason:** P1-E3-S5's own real concurrency testing found a transactionally-safe but operationally undesirable gap (ZD-142): nothing tied a reassignment to the SPECIFIC assignment a Dispatcher actually reviewed, so a stale decision could silently overwrite a different Dispatcher's newer one. The fix follows the exact same "expected current state" optimistic-concurrency pattern already established for the six `driver_*` lifecycle-transition RPCs (`p_expected_current_state`, P1-E3-S3) — extending a proven, already-idiomatic pattern in this codebase to `reassign_trip`, rather than inventing a new mechanism.
+  - ~~**The idempotent-match check still runs FIRST, before the id check, and succeeds regardless of it.**~~ **CORRECTED by ZD-146: the id check now runs FIRST, before the idempotent-match check — the reverse of what this bullet originally said.** The original reasoning (preserving a dropped-response retry's safety) was real, but produced a bug: it meant a stale expected id could be silently accepted as `changed:false` whenever the request happened to already match the CURRENT (not the caller's expected) assignment — exactly the "stale expected assignment treated as an idempotent success" outcome this whole decision exists to prevent. See ZD-146.
+  - **The old 4-argument function was explicitly dropped, not left alongside the new one.** `CREATE OR REPLACE FUNCTION` cannot safely add a parameter without a default ahead of already-defaulted ones in a single step here, and leaving the old signature independently callable would have been exactly the "second competing reassignment RPC" the originating work item explicitly said to avoid. (Unaffected by ZD-146 — still true.)
+  - Every existing SQL test file that called `reassign_trip` for a real (non-idempotent) reassignment was updated to fetch and pass the correct `p_expected_assignment_id` — not to route around the new check, but because those tests' own intent (a real, successful reassignment) genuinely requires it now. (The specific test named here, `mutation_assignment_tests.sql` C12, was itself testing the now-corrected behavior and was rewritten by ZD-146 into the required 4-case matrix — see below.)
+- **Affected Product Areas:** `supabase/migrations/20260901120000_reassignment_concurrency_hardening.sql`, `src/app/operations/dispatch/actions.ts`, `src/components/operations/dispatch/AssignmentDialog.tsx`, `src/lib/operations/dispatch-board.ts` (new `activeAssignmentId` field), `docs/data/mutation-api.md`, six `supabase/tests/*.sql` files
+- **Dependencies:** ZD-142 (superseded), ZD-093 (a different, unaffected retry-safety mechanism — see ZD-146), ZD-051 (append-only reassignment), the P1-E3-S3 `p_expected_current_state` pattern (precedent followed)
+- **Owner:** Engineering / Security / Product
+- **Review Trigger:** Superseded by ZD-146's own review trigger, below.
+
+### ZD-146 — `reassign_trip`'s stale-precondition check is moved BEFORE the idempotent driver/vehicle match — closes the gap ZD-145 itself left open
+
+- **Date:** 2026-09-01
+- **Category:** Architecture / Security / Product
+- **Decision:** Within `reassign_trip`, once an active assignment is confirmed to exist, `p_expected_assignment_id` is now verified against it FIRST — before the idempotent driver/vehicle match is evaluated at all, reversing P1-E3-S5A's original order. A stale expected id is now `ZW005 assignment_conflict` unconditionally, even when the requested driver/vehicle happen to already equal the CURRENT (not the caller's expected) assignment. Only once the expected id is confirmed current does the RPC check whether the requested driver+vehicle already match it (idempotent no-op) or require a real change.
+- **Status:** CONFIRMED — implemented (edited the existing, never-deployed P1-E3-S5A migration file in place, rather than layering a second migration on top of same-day, uncommitted churn — see "migration approach" below) and verified end-to-end: a new required SQL test (CASE D, `mutation_assignment_tests.sql` C12c) and a real two-independent-session application test both confirm a stale expected id is rejected even when the requested driver exactly matches the driver another Dispatcher already, independently, set. Full detail: `docs/reports/P1-E3-S5B-strict-stale-precondition-report.txt`.
+- **Reason:** ZD-145's original ordering (idempotent match checked first) meant: active assignment changes X → Y; a Dispatcher's stale form still expects X; if the Dispatcher's own requested driver/vehicle happen to equal Y's, the RPC returned `changed:false` — a silent success — without ever checking that the caller's own expectation (X) was stale. This directly contradicts the explicit product rule this hardening exists to enforce: **a stale expected assignment must never be treated as an idempotent success**, regardless of what the request happens to ask for. The fix is a pure reordering — no new parameter, no new error category, no change to what conditions constitute idempotency once the expected id is confirmed current.
+  - **This narrows, not just fixes, the retry-safety guarantee ZD-145 described.** A genuine retry of a Dispatcher's own already-applied change (e.g. a dropped HTTP response) carries the PRE-call expected id, which — after that same call's own success — is by definition no longer the active assignment's id. Under the corrected ordering, that retry is now also `assignment_conflict`, not a safe no-op. This is accepted deliberately, not overlooked: the explicit rule is "a stale expected assignment must NOT be treated as an idempotent success," full stop, with no carve-out for "stale because of the caller's own prior action" versus "stale because of someone else's." `ZD-093`'s own retry-safety guarantee is untouched — it concerns a genuinely different mechanism (`p_expected_current_state`, checked against Trip *state* on the six `driver_*` transition RPCs), not this assignment-*id* precondition, and no code implementing ZD-093 was changed.
+  - **Migration approach:** the P1-E3-S5A migration (`20260901120000_reassignment_concurrency_hardening.sql`) was edited in place — not superseded by a new migration file — because it has never been deployed or committed; it is same-session, same-day, uncommitted churn from the immediately preceding phase, not "historical" migration history in the sense this project otherwise never edits. A fresh `supabase db reset` produces the corrected function directly; there is no intermediate "wrong then right" state in the migration history at all, which a second on-top migration would have introduced for no benefit.
+  - **Test matrix:** `mutation_assignment_tests.sql`'s C11/C12 pair was expanded into the full required 4-case matrix (CASE A valid real reassignment, CASE B valid idempotent retry, CASE C stale different target, CASE D stale same target — the previously-missing guarantee) against one Trip's continuing assignment timeline, reusing only the two real Org A driver fixtures (no new driver fixture needed, unlike the P1-E3-S5A report's temporary test-only 3rd driver).
+- **Affected Product Areas:** `supabase/migrations/20260901120000_reassignment_concurrency_hardening.sql`, `docs/data/mutation-api.md`, `docs/product/dispatch-board-data-map.md`, `supabase/tests/mutation_assignment_tests.sql`
+- **Dependencies:** ZD-145 (amends), ZD-093 (explicitly distinguished, not modified), ZD-051, ZD-142 (superseded, unaffected by this further amendment)
+- **Owner:** Engineering / Security / Product
+- **Review Trigger:** A genuine future product requirement to restore leniency for a caller's own dropped-response retry specifically (as distinct from a different Dispatcher's newer decision) would need its own new, explicitly-scoped mechanism (e.g. an idempotency key distinct from the assignment id) — not assumed or designed here.
+
+No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

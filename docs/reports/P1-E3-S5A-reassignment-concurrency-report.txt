@@ -1,0 +1,428 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S5A — Reassignment Concurrency Hardening
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 6357a47 "Implement Today's Operations dashboard"
+                       (P1-E3-S5 remains uncommitted, exactly as its own
+                       report left it — see note below)
+Date/time:            2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+0. PRE-WORK NOTE — WORKING TREE WAS NOT CLEAN
+--------------------------------------------------------------------
+Work item §1 asked to confirm the working tree is clean and P1-E3-S5 is
+committed. `git status --short` was NOT clean — it showed exactly the
+P1-E3-S5 diff (28+ files: the Dispatch Board implementation, its data
+map, decision-register entries ZD-136–144, screenshots, and
+`docs/reports/P1-E3-S5-completion-report.txt`), still uncommitted. This
+is not "unexplained changes" in the sense work item §1 is guarding
+against — every line is directly attributable to the already-reported
+P1-E3-S5 work, matches that report's own "Files created/modified"
+section exactly, and this phase's own §0 explicitly frames P1-E3-S5 as
+"COMPLETE and READY" and builds directly on it. Proceeded on that
+basis, flagged here rather than silently ignored. `git log --oneline
+-5` confirmed `6357a47` (P1-E3-S4/S4A) as the last real commit; P1-E3-S5
+itself has not yet been committed by the user.
+
+--------------------------------------------------------------------
+1. ORIGINAL STALE-REASSIGNMENT BEHAVIOR
+--------------------------------------------------------------------
+`reassign_trip` (as built in P1-E2-S2, unchanged through P1-E3-S5) had
+no precondition tying a reassignment to the SPECIFIC `trip_assignments`
+row a Dispatcher actually reviewed. It located whichever assignment was
+currently active (`ended_at IS NULL`, under a row lock) and, if the
+requested driver/vehicle differed from it, atomically closed it and
+opened a new one — regardless of what the calling Dispatcher's own UI
+last displayed.
+
+--------------------------------------------------------------------
+2. RISK
+--------------------------------------------------------------------
+Scenario: Dispatcher A opens a Trip currently assigned to Driver 1.
+Dispatcher B reassigns the same Trip to Driver 2. Dispatcher A, unaware,
+submits their own (by-then-stale) decision — say, to Driver 3. Under
+the original behavior, A's request would succeed, silently overwriting
+B's newer decision, with no indication to either dispatcher that a
+conflict had occurred. Not a data-integrity risk (the schema's partial
+unique index and the RPC's own row lock already guaranteed exactly one
+active assignment at all times — confirmed transactionally safe in
+P1-E3-S5's own concurrency testing) but a real operational one: two
+dispatchers could each believe their own decision was final.
+
+--------------------------------------------------------------------
+3. RPC SIGNATURE BEFORE
+--------------------------------------------------------------------
+`reassign_trip(p_trip_id uuid, p_driver_id uuid, p_vehicle_id uuid
+default null, p_reason text default null)`
+
+--------------------------------------------------------------------
+4. RPC SIGNATURE AFTER
+--------------------------------------------------------------------
+`reassign_trip(p_trip_id uuid, p_driver_id uuid, p_vehicle_id uuid
+default null, p_reason text default null, p_expected_assignment_id
+uuid default null)` — the new parameter appended at the end, matching
+the work item's own preferred shape. Declared with a default of `null`
+(required by Postgres parameter-ordering rules, since it follows two
+already-defaulted parameters) but treated as functionally REQUIRED for
+any real reassignment — a `null`/omitted value cannot bypass the check;
+it is compared via `IS DISTINCT FROM`, under which NULL is never
+"equal" to a real assignment id, so omitting the parameter fails
+exactly the same way a wrong value does.
+
+--------------------------------------------------------------------
+5. SQL LOCKING/PRECONDITION MECHANISM
+--------------------------------------------------------------------
+`supabase/migrations/20260901120000_reassignment_concurrency_
+hardening.sql`. Within the SAME transaction and the SAME row lock the
+function already held for every other check (`select ... for update`
+on both the Trip and the active `trip_assignments` row — no new lock,
+no second round trip):
+  1. Auth/role/state checks — UNCHANGED.
+  2. Lock the active assignment (`ended_at is null ... for update`).
+  3. No active assignment → `ZW005` (unchanged).
+  4. Requested driver+vehicle already match the active assignment →
+     idempotent no-op (`changed: false`), returned immediately —
+     checked BEFORE the new precondition, deliberately (see §6).
+  5. **NEW:** `if v_existing.id is distinct from
+     p_expected_assignment_id then raise 'assignment_conflict' using
+     errcode = 'ZW005'; end if;` — a real change is being requested;
+     verify the caller reviewed the assignment that is STILL active.
+  6. Driver/vehicle validation — UNCHANGED.
+  7. Close old row, insert new row, write `trip_events`/`audit_events`
+     — UNCHANGED, still one atomic transaction.
+`assign_trip` was NOT modified (work item §8) — its existing "no
+active assignment allowed" precondition already correctly rejects a
+second, stale assignment attempt (re-verified, §17).
+
+--------------------------------------------------------------------
+6. APPLICATION INTEGRATION
+--------------------------------------------------------------------
+- `src/lib/operations/dispatch-board.ts` — `DispatchTrip` gained
+  `activeAssignmentId: string | null`, populated from the same embedded
+  `trip_assignments` relationship the rest of the query already reads
+  (no new query).
+- `src/components/operations/dispatch/AssignmentDialog.tsx` — for
+  `mode="reassign"`, renders `<input type="hidden" name=
+  "expectedAssignmentId" value={trip.activeAssignmentId ?? ""} />` —
+  never rendered/shown to the Dispatcher (work item §7).
+- `src/app/operations/dispatch/actions.ts` — reads
+  `expectedAssignmentId` from `FormData`, forwards it as-is to
+  `p_expected_assignment_id`. The Server Action does not itself compare
+  it against anything — per work item §7 ("do not trust a client-
+  provided assignment ID by itself"), the RPC, under its own lock, is
+  the sole authority.
+- Types regenerated: `src/lib/supabase/database.types.ts` (see §18).
+
+--------------------------------------------------------------------
+7. SAFE ERROR HANDLING
+--------------------------------------------------------------------
+No new error category was introduced. A stale reassignment still
+raises `ZW005`, mapped by the pre-existing, unmodified
+`ASSIGNMENT_CONFLICT` category (`src/lib/operations/dispatch-errors.
+ts`) to: "This trip's assignment just changed. The board has been
+refreshed with the current assignment." — calm, no SQLSTATE/ZW/
+Postgres detail exposed, matching work item §9's own example in
+substance (this phase reused the existing message rather than
+introducing new copy, per §9's own "reuse the existing safe Operations
+error mapping" instruction).
+
+--------------------------------------------------------------------
+8. NORMAL REASSIGN TEST
+--------------------------------------------------------------------
+Through the real running application: Dispatcher opens a real Trip's
+reassignment dialog (currently Driver A1) — confirmed the hidden
+`expectedAssignmentId` field is present, `type="hidden"`, and carries a
+real (non-empty) value, never visible in the rendered dialog. Chose
+Driver A2, submitted. Dialog closed (success). Independently verified
+via direct SQL: exactly ONE active assignment, owned by Driver A2; the
+PRIOR assignment (Driver A1) has `ended_at` set and `end_reason=
+'reassigned'`. 6/6 sub-assertions PASS.
+
+--------------------------------------------------------------------
+9. STALE REASSIGN TEST — MANDATORY (work item §10)
+--------------------------------------------------------------------
+Through the real running application, exactly the required scenario:
+Dispatcher A opens the Reassign dialog for a Trip currently assigned to
+Driver A1 (the dialog's hidden field captures assignment X's real id).
+"Dispatcher B" — a second, independent, real authenticated session —
+calls the real `reassign_trip` RPC directly, reassigning the SAME Trip
+to a genuinely different Driver (A3, a temporary fixture added only for
+this test session so the scenario doesn't collapse into the only-other-
+option coincidental-match case with just two real drivers), creating
+assignment Y. Dispatcher A then submits their own stale form — still
+carrying X's id, targeting Driver A2 — through the real UI.
+
+Result:
+  - DENIED — the dialog stays open and shows the real conflict message
+    ("...assignment just changed...").
+  - Independently verified via direct SQL: exactly ONE active
+    assignment exists (no corruption); it is STILL Y (Driver A3) —
+    Dispatcher A's stale request did NOT overwrite it; no additional
+    assignment row was created.
+  - After closing the dialog, the board (refreshed) correctly shows
+    Driver A3, not A's stale intended value.
+6/6 sub-assertions PASS. This is the exact mandatory scenario from work
+item §10, driven through the real UI end to end, not simulated at the
+SQL layer alone (a dedicated SQL-layer version, C17, was also added to
+`mutation_assignment_tests.sql` for fast regression coverage — see
+§16).
+
+--------------------------------------------------------------------
+10. STALE ASSIGN REGRESSION (unaffected, re-verified)
+--------------------------------------------------------------------
+`assign_trip` was not modified. Its own P1-E3-S5 stale-assign behavior
+(a second dispatcher's real `assign_trip` call is detected via the
+existing "no active assignment allowed" precondition) was re-verified
+by the unmodified, re-run `mutation_assignment_tests.sql` C1–C9 and the
+real two-process `mutation_concurrency_test.sh` (§17) — both still
+PASS, confirming this phase introduced no regression to the assign
+path.
+
+--------------------------------------------------------------------
+11. EXACTLY-ONE-ACTIVE-ASSIGNMENT VERIFICATION
+--------------------------------------------------------------------
+Independently confirmed via direct SQL, not inferred from the RPC's own
+return value, in every scenario tested this phase: the normal reassign
+test (§8), the stale reassign test (§9, both immediately after the
+stale rejection AND after the dialog closes), and the Driver revocation
+test (§12). Never more than one active (`ended_at IS NULL`)
+`trip_assignments` row per Trip at any point — the pre-existing partial
+unique index (`trip_assignments_one_active_per_trip`) remains the
+schema-level backstop, unchanged and re-verified (RLS test Y, re-run
+this phase).
+
+--------------------------------------------------------------------
+12. DRIVER REVOCATION TEST
+--------------------------------------------------------------------
+Re-run through the now-hardened RPC, exactly the P1-E3-S3/S5 scenario:
+confirmed Driver B has real `driver_get_trip_detail` access to a Trip
+BEFORE reassignment; confirmed Driver A does not yet. Reassigned the
+Trip from Driver B to Driver A through the real, hardened Dispatch UI.
+Re-checked both Drivers immediately after: Driver B is now denied
+(fails closed, real `ZW002 not_found`); Driver A now has access. 5/5
+sub-assertions PASS — confirms the hardening did not disturb this
+cross-surface security property at all.
+
+--------------------------------------------------------------------
+13. WRONG-ORG TEST
+--------------------------------------------------------------------
+Not re-derived as a new scenario this phase (the driver/vehicle
+validation SQL, which enforces the organization match, was not
+touched — only the NEW precondition was added, positioned entirely
+independently of that existing logic). Re-verified via the unmodified,
+re-run `mutation_assignment_tests.sql` (cross-org vehicle rejection,
+C13, updated only to supply a correct — not stale — expected id so the
+NEW precondition doesn't mask the ZW006 that test specifically
+targets) and a live application check: an Org B admin's session lands
+on their own org's Dispatch Board and never sees any Org A driver name
+or passenger data (AUTH-4/AUTH-4b, PASS).
+
+--------------------------------------------------------------------
+14. DRIVER DENIAL
+--------------------------------------------------------------------
+Live-verified: a `driver`-role Membership attempting
+`/operations/dispatch` is still redirected to `/driver` (AUTH-2, PASS).
+Unchanged mechanism — `requireOperationsAccess`, not touched this
+phase.
+
+--------------------------------------------------------------------
+15. INACTIVE MEMBERSHIP TEST
+--------------------------------------------------------------------
+Live-verified: an inactive Dispatcher Membership attempting
+`/operations/dispatch` is still redirected to `/access-unavailable`
+(AUTH-3, PASS).
+
+--------------------------------------------------------------------
+16. SQL REGRESSION
+--------------------------------------------------------------------
+Ran all 18 existing SQL test files against a fresh `supabase db reset`
+(this phase's one migration applied cleanly):
+
+  constraint_tests.sql                        13 assertions, 0 fail
+  create_trip_atomicity_tests.sql               2 assertions, 0 fail
+  create_trip_privilege_tests.sql               5 assertions, 0 fail
+  create_trip_tests.sql                        20 assertions, 0 fail
+  driver_read_authorization_tests.sql          17 assertions, 0 fail
+  driver_read_history_tests.sql                 8 assertions, 0 fail
+  driver_read_minimization_tests.sql           13 assertions, 0 fail
+  driver_read_privilege_tests.sql               8 assertions, 0 fail
+  function_privilege_tests.sql                  7 assertions, 0 fail
+  mutation_assignment_tests.sql                17 assertions, 0 fail  (+1: new C17)
+  mutation_atomicity_tests.sql                  2 assertions, 0 fail
+  mutation_authorization_tests.sql              4 assertions, 0 fail
+  mutation_idempotent_authorization_tests.sql   6 assertions, 0 fail
+  mutation_lifecycle_tests.sql                 24 assertions, 0 fail
+  mutation_privilege_tests.sql                  7 assertions, 0 fail
+  organization_timezone_tests.sql              13 assertions, 0 fail
+  rls_adversarial_tests.sql                    33 assertions, 0 fail
+  security_definer_exposure_tests.sql          20 assertions, 0 fail
+  ------------------------------------------------------------------
+  TOTAL: 219 assertions, 0 failures (100% PASS) — 218 pre-existing
+  (all re-passing after the required test-fixture updates below) + 1
+  new (C17, the SQL-layer stale-reassign test).
+
+Eight existing SQL test files called `reassign_trip` for a REAL
+(non-idempotent) reassignment and needed updating to fetch and supply
+the correct `p_expected_assignment_id` — not to route around the new
+check, but because those tests' own intent (a genuine, successful
+reassignment) now genuinely requires it:
+  `mutation_assignment_tests.sql` (C11, C12 — C12 deliberately
+    strengthened to use a STALE id to prove the idempotent-match path
+    doesn't depend on it; C13; new C17 added),
+  `mutation_atomicity_tests.sql` (E1 — needed the real id to reach the
+    forced-failure trigger point it actually targets),
+  `mutation_idempotent_authorization_tests.sql` (3 call sites),
+  `mutation_lifecycle_tests.sql` (1 call site),
+  `mutation_privilege_tests.sql` (2 literal signature-string
+    references, `reassign_trip(uuid,uuid,uuid,text)` →
+    `reassign_trip(uuid,uuid,uuid,text,uuid)`),
+  `driver_read_authorization_tests.sql` (1 call site),
+  `driver_read_history_tests.sql` (1 call site).
+Three call sites (C10 — no active assignment, C14 — illegal-transition
+state, C15 — anon denial) needed no change: each is rejected by a
+check that runs BEFORE the new precondition is ever reached.
+
+--------------------------------------------------------------------
+17. CONCURRENCY REGRESSION
+--------------------------------------------------------------------
+`bash supabase/tests/mutation_concurrency_test.sh` — re-run, unchanged
+(tests `assign_trip`, not modified this phase). Real two-OS-process
+test: Session B genuinely blocks on the Trip row lock (observed:
+1.866s wall-clock, not near-instant) while Session A holds it, then
+correctly sees A's already-committed assignment and rejects with
+`assignment_conflict`. TEST CONCURRENCY-1: PASS.
+
+--------------------------------------------------------------------
+18. GENERATED TYPES
+--------------------------------------------------------------------
+`npx supabase gen types typescript --local`, run against the local
+instance only (no remote Supabase touched). `diff` against the prior
+committed `database.types.ts` showed exactly one line added:
+`p_expected_assignment_id?: string` under `reassign_trip`'s `Args` —
+confirming the type generation picked up precisely the intended
+signature change and nothing else. Applied.
+
+--------------------------------------------------------------------
+19. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, zero errors (final run).
+
+--------------------------------------------------------------------
+20. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, zero errors, zero warnings (final run, no
+leftover scratch files).
+
+--------------------------------------------------------------------
+21. BUILD
+--------------------------------------------------------------------
+`npm run build` — succeeded. All 24 routes compiled, `/operations/
+dispatch` still dynamic (ƒ) as expected.
+
+--------------------------------------------------------------------
+22. DOCS UPDATED
+--------------------------------------------------------------------
+  - `docs/data/mutation-api.md` — `reassign_trip`'s documented
+    signature and behavior updated; `ZW005` row's description extended
+    to cover the new precondition.
+  - `docs/product/dispatch-board-data-map.md` — "Reassignment mutation"
+    and "Concurrency behavior" sections updated to describe the
+    hardened contract; status line amended.
+  - `docs/product/decision-register.md` — ZD-142 marked SUPERSEDED
+    (text left unedited below its status line, an honest record of
+    what was true when it was written — not silently rewritten); new
+    ZD-145 records the hardening decision in full, including the
+    idempotent-check-ordering rationale and the drop-then-recreate
+    migration technique.
+  - `docs/product/ui-backend-gap-register.md` — inspected; no entry
+    was applicable (this phase closes a real behavior gap already
+    fully described by ZD-142/now-ZD-145, not a backend-data gap in
+    the register's own sense) — left unchanged, deliberately, not
+    overlooked.
+
+--------------------------------------------------------------------
+23. FILES CREATED
+--------------------------------------------------------------------
+  supabase/migrations/20260901120000_reassignment_concurrency_hardening.sql
+  docs/reports/P1-E3-S5A-reassignment-concurrency-report.txt (this file)
+
+--------------------------------------------------------------------
+24. FILES MODIFIED
+--------------------------------------------------------------------
+  src/lib/operations/dispatch-board.ts (added `activeAssignmentId`)
+  src/components/operations/dispatch/AssignmentDialog.tsx (hidden
+    `expectedAssignmentId` field)
+  src/app/operations/dispatch/actions.ts (reads/forwards it)
+  src/lib/supabase/database.types.ts (regenerated, local only)
+  supabase/tests/mutation_assignment_tests.sql
+  supabase/tests/mutation_atomicity_tests.sql
+  supabase/tests/mutation_idempotent_authorization_tests.sql
+  supabase/tests/mutation_lifecycle_tests.sql
+  supabase/tests/mutation_privilege_tests.sql
+  supabase/tests/driver_read_authorization_tests.sql
+  supabase/tests/driver_read_history_tests.sql
+  docs/data/mutation-api.md
+  docs/product/dispatch-board-data-map.md
+  docs/product/decision-register.md
+
+`trip_assignments`' privilege posture was NOT touched — `authenticated`
+still has zero direct INSERT/UPDATE grant on it (re-verified,
+`rls_adversarial_tests.sql`/`mutation_privilege_tests.sql`, both
+re-run clean). `assign_trip`, its own tests, Operations Trip Detail,
+New Trip, and Driver GPS/location work were not begun, per explicit
+instruction.
+
+--------------------------------------------------------------------
+25. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+26. GATE VERDICT
+--------------------------------------------------------------------
+Every required condition met: the RPC change is deliberate, minimal,
+and additive to the existing signature convention; atomicity is
+preserved (same transaction, same row lock, no client-side two-step);
+idempotency is preserved for genuine retries while a stale decision is
+now correctly rejected (the distinction work item §6 asked to be
+documented, is); the UI change is a hidden field, never exposed, never
+trusted "by itself"; error handling reuses the existing safe mapping;
+the mandatory stale-reassignment scenario is DENIED end-to-end through
+the real application; Driver revocation, tenant isolation, and every
+other pre-existing security property were re-verified, not assumed;
+SQL regression (219/219) and concurrency regression both pass; types
+are regenerated and correct; build/lint/typecheck all pass.
+====================================================================
+REASSIGNMENT CONCURRENCY GATE:
+READY
+
+STALE REASSIGNMENT:
+DENIED
+
+ONE ACTIVE ASSIGNMENT:
+PASS
+
+DRIVER REVOCATION:
+PASS
+
+TENANT ISOLATION:
+PASS
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+P1-E3-S6 — Operations Trip Detail
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed; no remote
+Supabase was linked; no deployment configuration was touched;
+Operations Trip Detail and Driver GPS/location work were not begun.
+This phase stops here.
+====================================================================

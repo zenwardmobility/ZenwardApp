@@ -51,11 +51,12 @@ begin
 end $$;
 
 do $$
-declare v_ar public.trip_assignment_result;
+declare v_ar public.trip_assignment_result; v_expected uuid;
 begin
+  select id into v_expected from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000b2' and ended_at is null;
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2'; -- dispatcher
-  v_ar := public.reassign_trip('90000000-0000-0000-0000-0000000000b2', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign to Driver A2');
+  v_ar := public.reassign_trip('90000000-0000-0000-0000-0000000000b2', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign to Driver A2', v_expected);
   reset role;
   if not v_ar.changed then
     raise notice 'TEST G-A-setup: FAIL (reassignment to Driver A2 did not happen)';
@@ -84,11 +85,12 @@ end $$;
 -- performed this transition; A2 did.
 -- =============================================================================
 do $$
-declare v_ar public.trip_assignment_result;
+declare v_ar public.trip_assignment_result; v_expected uuid;
 begin
+  select id into v_expected from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000b3' and ended_at is null;
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2'; -- dispatcher
-  v_ar := public.reassign_trip('90000000-0000-0000-0000-0000000000b3', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign to Driver A2 before any progress');
+  v_ar := public.reassign_trip('90000000-0000-0000-0000-0000000000b3', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign to Driver A2 before any progress', v_expected);
   reset role;
 end $$;
 
@@ -231,11 +233,12 @@ end $$;
 -- not treated as the legitimate idempotent retry actor.
 -- =============================================================================
 do $$
-declare v_ar public.trip_assignment_result; v_r public.trip_transition_result;
+declare v_ar public.trip_assignment_result; v_r public.trip_transition_result; v_expected uuid;
 begin
+  select id into v_expected from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000b7' and ended_at is null;
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2'; -- dispatcher
-  v_ar := public.reassign_trip('90000000-0000-0000-0000-0000000000b7', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign to Driver A2 before any progress');
+  v_ar := public.reassign_trip('90000000-0000-0000-0000-0000000000b7', '30000000-0000-0000-0000-0000000000a2', null, 'test setup: reassign to Driver A2 before any progress', v_expected);
   reset role;
 
   set local role authenticated;

@@ -967,6 +967,7 @@ export type Database = {
       reassign_trip: {
         Args: {
           p_driver_id: string
+          p_expected_assignment_id?: string
           p_reason?: string
           p_trip_id: string
           p_vehicle_id?: string

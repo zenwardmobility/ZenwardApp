@@ -1,0 +1,1031 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S5 — Dispatch Board
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 6357a47 "Implement Today's Operations dashboard"
+                       (P1-E3-S4 + P1-E3-S4A, committed by the user
+                       between phases — confirmed via `git show --stat`,
+                       contents matched exactly)
+Date/time:            2026-09-01
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------
+`git status --short` was clean at the start of this phase. `git log
+--oneline -5` confirmed the S4/S4A checkpoint genuinely committed as
+`6357a47 "Implement Today's Operations dashboard"` — `git show --stat`
+confirmed all 28 files from those two sub-phases present, matching
+their own completion reports exactly. No unexplained changes existed.
+Proceeded per work item §1.
+
+--------------------------------------------------------------------
+2. REFERENCES INSPECTED
+--------------------------------------------------------------------
+Primary: docs/design/stitch/references/03-dispatch-board.png, read in
+full. Secondary: 01-todays-operations.png, 02-trip-detail.png
+(continuity only). All required docs read before coding: domain-model.md,
+lifecycle-model.md, authorization-model.md, application-route-map.md,
+application-implementation-plan.md, ui-data-action-map.md,
+ui-backend-gap-register.md, auth-session-routing.md,
+operational-timezone.md, todays-operations-data-map.md,
+decision-register.md, schema.md, read-api.md, mutation-api.md,
+rls-model.md, mutation-authorization.md, application-auth-boundary.md,
+stitch-reference-index.md, component-inventory.md, and the P1-E3-S3/S4/S4A
+completion reports. `assign_trip`/`reassign_trip`'s ACTUAL signatures were
+read directly from `database.types.ts` AND their full SQL bodies
+(`supabase/migrations/20260831100200_controlled_trip_mutations.sql`) —
+not inferred from this work item's own conceptual sketch, which the
+real contract matched closely but not in every parameter-optionality
+detail (vehicle's optionality specifically was confirmed by reading the
+signature, not assumed).
+
+--------------------------------------------------------------------
+3. ORIGINAL DISPATCH SCAFFOLD
+--------------------------------------------------------------------
+`/operations/dispatch` was a structural placeholder
+(`OperationsRouteStub`) with no real query, no real composition — the
+route existed and was already correctly nav-linked and auth-gated
+(P1-E3-S1), but rendered no Trip/Driver/Vehicle data of any kind.
+
+--------------------------------------------------------------------
+4. FINAL DISPATCH COMPOSITION
+--------------------------------------------------------------------
+A real 3-column board matching the reference's structural concept:
+  - Summary strip (3 real metrics: trips today, unassigned, active).
+  - Left: "Needs Assignment (N)" card queue — real Needs-Assignment
+    Trips only.
+  - Center: "Today's Assignments" — a genuine time-axis grid (hour
+    column headers, one row per active Driver including Drivers with
+    zero Trips today, Trip blocks positioned by real start time),
+    horizontally scrollable within its own bounded container.
+  - Right: "Driver Capacity" — real Driver names, an "On Trip" badge
+    only when genuinely true right now, no fabricated status pills.
+  - Header: title + org-local date, a disabled day navigator, a
+    disabled search input, a disabled "Dispatch Settings" button, a
+    real "+ New Trip" link, plus the shell's own bell/help/avatar.
+Clicking a Needs-Assignment card's "Assign" button, or an assigned
+Trip's grid block, opens a real accessible dialog (`AssignmentDialog`)
+to assign/reassign a Driver (and optionally a Vehicle), submitted via
+a real Server Action calling the real RPC.
+
+--------------------------------------------------------------------
+5. SERVER DATA ARCHITECTURE
+--------------------------------------------------------------------
+`src/lib/operations/dispatch-board.ts` — `getDispatchBoardData()`, the
+focused server-side module the work item asked for (§41): organization-
+scoped, explicit columns, no service role, no JSX. Two real queries
+(Trips; Drivers/Vehicles options, run in parallel via `Promise.all`) —
+not a generic repository layer, not N+1 (Driver/Vehicle names come
+from the SAME Trip query's embedded `trip_assignments` relationship,
+never fetched per-Trip).
+
+--------------------------------------------------------------------
+6. TRIP QUERY
+--------------------------------------------------------------------
+`trips` filtered by `organization_id`, `scheduled_pickup_at` within
+the organization's local "today" (`organizationDayBoundsUtc`, reused
+unchanged from Today's Operations), AND `state` in the 6 non-terminal
+canonical states — completed/cancelled/no_show are excluded entirely
+(work item §20: Today's Operations already covers completed
+visibility). Explicit columns only, embedding
+`passengers(display_name)` and `trip_assignments(id, ended_at,
+drivers(id, display_name), vehicles(id, label))` via the same
+confirmed composite-FK relationships Today's Operations already
+established (`trips_passenger_id_organization_id_fkey`,
+`trip_assignments_trip_id_organization_id_fkey`, etc.).
+
+--------------------------------------------------------------------
+7. ACTIVE ASSIGNMENT QUERY / DERIVATION
+--------------------------------------------------------------------
+For every Trip, the embedded `trip_assignments` array is searched for
+the row where `ended_at IS NULL` — never assumed to be the first/only
+row. This is the sole source of "current driver" (work item §9/§18) —
+never derived from any Trip column (none exists) and never from auth
+identity (work item §18: "Driver ≠ AuthUser"). A Trip with no such row
+is unassigned by construction — `unassignedTrips` filters on
+`driverId === null`, never a separate persisted status (work item
+§17).
+
+--------------------------------------------------------------------
+8. DRIVER OPTION QUERY
+--------------------------------------------------------------------
+`drivers` filtered by `organization_id` and `status='active'` —
+confirmed (by reading the actual `drivers` table CHECK constraint)
+that `active`/`inactive` is the ENTIRE status vocabulary; no
+Available/On Shift/Break/Offline exists anywhere in the schema. This
+is the exact same filter `assign_trip`/`reassign_trip` themselves
+enforce server-side, read directly from their SQL — not assumed. Feeds
+the assignment dialog's Driver `<select>` and the Driver Capacity
+rail.
+
+--------------------------------------------------------------------
+9. VEHICLE OPTION QUERY
+--------------------------------------------------------------------
+`vehicles` filtered by `organization_id` and `status='active'` —
+same principle, same confirmed two-value vocabulary. Vehicle is
+genuinely OPTIONAL in both RPC signatures (`p_vehicle_id uuid default
+null`) — the dialog's Vehicle field is never `required`, and the
+Server Action omits `p_vehicle_id` entirely (not an empty string) when
+none is chosen.
+
+--------------------------------------------------------------------
+10. EXPLICIT SELECTED COLUMNS
+--------------------------------------------------------------------
+No `select("*")` anywhere in `dispatch-board.ts` — every query lists
+its exact columns (see the `TRIP_COLUMNS` constant, and the plain
+`id, display_name`/`id, label` selects for Driver/Vehicle options).
+
+--------------------------------------------------------------------
+11. PASSENGER DATA HANDLING
+--------------------------------------------------------------------
+Only `display_name` is read from `passengers` — no phone, no
+assistance notes, no health/medical fields (work item §32). Matches
+the minimum-useful-for-dispatch principle already established by
+Today's Operations.
+
+--------------------------------------------------------------------
+12. TIMEZONE HANDLING
+--------------------------------------------------------------------
+Identical mechanism to Today's Operations — `organizationDayBoundsUtc`
+computes the org-local "today" from `access.organization.
+organizationTimezone`, never server-local/browser-local. The grid's
+own block positions are computed via a new `orgLocalHourMinute()`
+helper (`src/lib/operations/dispatch-grid.ts`), which reads
+`scheduled_pickup_at` through the same organization timezone — never
+the runtime's own local time.
+
+--------------------------------------------------------------------
+13. UNASSIGNED DERIVATION
+--------------------------------------------------------------------
+`state='scheduled'` AND no active `trip_assignments` row. Presentation
+only — no new persisted status (work item §17, verified: no schema
+change was made this phase at all, migration-free).
+
+--------------------------------------------------------------------
+14. ASSIGNED DERIVATION
+--------------------------------------------------------------------
+Has an active `trip_assignments` row, in any of the 6 non-terminal
+states (including `scheduled` — "Assigned" vs. "Scheduled", reusing
+`operationsTripStatusLabel` unchanged from Today's Operations, so the
+two screens never show conflicting labels for the same underlying
+condition — work item §50).
+
+--------------------------------------------------------------------
+15. IN-PROGRESS DERIVATION
+--------------------------------------------------------------------
+The 5 non-`scheduled` non-terminal states — never persisted as a new
+`in_progress` value (work item §19). Rendered as bare "En Route"/
+"Arrived"/"Passenger Onboard" (lifecycle-model.md §C's own sanctioned
+presentation simplification), and counted toward the "active" summary
+metric and the Driver Capacity "On Trip" badge.
+
+--------------------------------------------------------------------
+16. BOARD GROUPING
+--------------------------------------------------------------------
+Left column: `unassignedTrips`. Center grid: one row per `status=
+'active'` Driver (`driverRows`), populated with that Driver's
+`assignedTrips`. Right column: same `driverRows`, read-only. No
+grouping by Trip state beyond what's needed to route a Trip into
+exactly one of these three views — the SAME `trips` query result feeds
+all three (no per-panel re-query).
+
+--------------------------------------------------------------------
+17. ASSIGNMENT UI
+--------------------------------------------------------------------
+`NeedsAssignmentQueue`'s "Assign" button → `AssignmentDialog` (mode=
+"assign") — Driver `<select>` (required, no default selection),
+Vehicle `<select>` (optional, no default), a real submit button
+labeled "Assign Driver". No driver/vehicle is pre-selected — an
+affirmative choice is required before submission does anything.
+
+--------------------------------------------------------------------
+18. REASSIGNMENT UI
+--------------------------------------------------------------------
+Clicking any grid block → `AssignmentDialog` (mode="reassign") — shows
+the CURRENT Driver/Vehicle first (`DefinitionList`, real data, never
+inferred), then the same Driver/Vehicle selects (again unselected by
+default) plus an optional Reason `<textarea>`, and a submit button
+explicitly labeled "Confirm Reassignment" (work item §24's explicit
+"do not reassign merely by changing a dropdown value" — nothing
+submits until this specific, clearly-labeled button is clicked).
+
+--------------------------------------------------------------------
+19. ASSIGN_TRIP INTEGRATION
+--------------------------------------------------------------------
+Called only via `assignmentAction` (`src/app/operations/dispatch/
+actions.ts`) with the real signature `assign_trip(p_trip_id uuid,
+p_driver_id uuid, p_vehicle_id uuid default null)`. The UI never shows
+"Assign" on an already-assigned Trip, but the backend remains
+authoritative regardless (work item §11) — verified concurrently, see
+§25/§26 below.
+
+--------------------------------------------------------------------
+20. REASSIGN_TRIP INTEGRATION
+--------------------------------------------------------------------
+Called via the same Server Action with the real signature
+`reassign_trip(p_trip_id uuid, p_driver_id uuid, p_vehicle_id uuid
+default null, p_reason text default null)`. The client never ends an
+assignment or inserts a replacement itself — `trip_assignments` has
+zero direct INSERT/UPDATE grant to `authenticated` (confirmed still
+true this phase — see §37).
+
+--------------------------------------------------------------------
+21. MUTATION RESULT HANDLING
+--------------------------------------------------------------------
+Both RPCs return `{trip_id, assignment_id, driver_id, vehicle_id,
+changed}`. `changed=false` (idempotent no-op — the requested
+driver+vehicle already exactly match the active assignment) is
+treated as a normal success, not an error — the dialog closes exactly
+as for `changed=true` (work item §26).
+
+--------------------------------------------------------------------
+22. ERROR MAPPING
+--------------------------------------------------------------------
+`src/lib/operations/dispatch-errors.ts` — 5 narrow categories mapped
+from the real ZW-code contract (ZW001→UNAUTHORIZED, ZW002→NOT_FOUND,
+ZW004→ILLEGAL_STATE, ZW005→ASSIGNMENT_CONFLICT, ZW006→
+INVALID_DRIVER_OR_VEHICLE, anything else→UNKNOWN). No ZW code,
+SQLSTATE, or PostgREST detail ever reaches the rendered UI — verified
+by reading the component (the error paragraph renders only the mapped
+message string).
+
+--------------------------------------------------------------------
+23. PENDING / DOUBLE-SUBMIT HANDLING
+--------------------------------------------------------------------
+`useActionState`'s own `pending` flag disables the submit button (and
+every field) immediately — mirrors `DriverLifecycleAction`'s
+established, already-proven pattern exactly. No optimistic UI: the
+dialog only closes/updates after the Server Action genuinely returns
+(work item §25).
+
+--------------------------------------------------------------------
+24. REFRESH ARCHITECTURE
+--------------------------------------------------------------------
+`assignmentAction` calls `revalidatePath("/operations/dispatch")` and
+`revalidatePath("/operations")` (Today's Operations' own summary is
+affected by any assignment change too). `AssignmentDialog` calls
+`router.refresh()` on BOTH success and error — a conflict needs the
+same authoritative re-fetch a success does, so the board never shows
+stale data after the dialog closes (work item §37).
+
+--------------------------------------------------------------------
+25. CONCURRENCY STRATEGY
+--------------------------------------------------------------------
+No client-side optimistic-concurrency logic of any kind — every
+concurrency guarantee comes from the RPCs' own `SELECT ... FOR UPDATE`
+row locking (already built, unchanged this phase) plus the
+`trip_assignments_one_active_per_trip` partial unique index as the
+schema-level backstop. Re-verified this phase via
+`mutation_concurrency_test.sh` (real two-OS-process wall-clock timing,
+unchanged, still passes) AND two new real application-level tests
+(§26/§27 below) — not assumed safe from the RPC's prior test coverage
+alone, since this phase is what actually exercises it through a real
+UI for the first time.
+
+--------------------------------------------------------------------
+26. STALE ASSIGNMENT HANDLING — REAL APPLICATION TEST
+--------------------------------------------------------------------
+Test: Dispatcher A opens the Assign dialog for the unassigned Trip in
+the REAL running app and selects Driver A1 (does not yet submit).
+"Dispatcher B" (a second, independent, real authenticated session)
+calls the real `assign_trip` RPC directly, assigning the same Trip to
+Driver A2 — succeeds (`changed:true`). Dispatcher A then submits their
+now-stale choice through the real UI.
+
+Result — PASS:
+  - Dispatcher A's stale submission surfaces the real, narrow
+    `ASSIGNMENT_CONFLICT` message ("This trip's assignment just
+    changed...") — not a raw ZW005, not a 500, not a silent failure.
+  - Independently verified via direct SQL: exactly ONE active
+    `trip_assignments` row exists (no duplicate/corruption), owned by
+    Driver A2 — B's real, first-committed assignment — never A's
+    stale choice.
+  - After closing the dialog, the board (refreshed via
+    `router.refresh()`) correctly shows Driver A2, not a stale
+    overwrite.
+
+--------------------------------------------------------------------
+27. STALE REASSIGNMENT HANDLING — REAL APPLICATION TEST
+--------------------------------------------------------------------
+Test: Dispatcher A opens the Reassign dialog for a Trip currently
+assigned to Driver A2, selects Driver A1 + a Vehicle (does not yet
+submit). "Dispatcher B" calls the real `reassign_trip` RPC directly
+first, reassigning the same Trip to Driver A1 with no vehicle —
+succeeds. Dispatcher A then submits their own request (same Driver A1
+B already set, but WITH a Vehicle B didn't set).
+
+Result — PASS, with the ACTUAL contract behavior documented honestly
+(not a forced rejection — see decision-register.md ZD-142):
+  `reassign_trip` has no "expected current driver" precondition
+  (confirmed by reading its SQL) — it operates on whatever assignment
+  is currently active, atomically. Dispatcher A's request therefore
+  succeeds too, completing without error. Independently verified via
+  direct SQL: still exactly ONE active assignment (atomic, no
+  corruption — the intermediate B-created row was itself properly
+  closed by A's own reassignment), final state reflects Dispatcher A's
+  own last real decision (Driver A1 + the Vehicle A1). This is
+  reported as the RPC's real, safe, by-design contract — "the latest
+  human decision wins," not data corruption and not a UI gap.
+
+--------------------------------------------------------------------
+28. WRONG-ORG PROTECTION
+--------------------------------------------------------------------
+Not re-derived as a new application-level test this phase — `assign_
+trip`/`reassign_trip`'s SQL was NOT modified (migration-free phase),
+and their existing cross-org Driver/Vehicle rejection (ZW006) is
+already covered by `mutation_assignment_tests.sql`, re-run clean this
+phase (16/16, §45). Additionally, the UI's own Driver/Vehicle option
+lists are always org-scoped queries — a cross-org id is never even
+offered as a choice, a real first line of defense on top of the
+backend's own independent enforcement. Org-level access to the
+Dispatch route itself (an Org B admin never sees Org A Driver/Trip
+data) IS newly verified this phase — see §31/functional matrix G.
+
+--------------------------------------------------------------------
+29. DRIVER DENIAL
+--------------------------------------------------------------------
+Verified live against the real running app: a `driver`-role Membership
+attempting `/operations/dispatch` is redirected to `/driver`, never
+shown any Dispatch content (functional matrix scenario C, PASS). The
+existing privilege model (no direct RPC EXECUTE path a Driver could
+reach) is unchanged this phase — `assign_trip`/`reassign_trip` remain
+`organization_admin`/`dispatcher`-only via `has_org_role`, re-verified
+by the unmodified, re-run `mutation_assignment_tests.sql`/
+`mutation_privilege_tests.sql`.
+
+--------------------------------------------------------------------
+30. INACTIVE MEMBERSHIP TEST
+--------------------------------------------------------------------
+Verified live: an inactive Dispatcher Membership attempting
+`/operations/dispatch` is redirected to `/access-unavailable`
+(functional matrix scenario D, PASS) — `requireOperationsAccess` is
+re-derived fresh on every request/action (never cached), the same
+principle `assignmentAction` itself relies on for its own
+authorization.
+
+--------------------------------------------------------------------
+31. ROLE-CHANGE TEST
+--------------------------------------------------------------------
+Not re-derived as a separate live test this phase (would require
+mutating a Membership's role mid-session, which the existing
+`mutation_authorization_tests.sql`/`driver_read_authorization_tests.
+sql` suites already cover at the RPC layer, re-run clean this phase).
+Structurally guaranteed by the same mechanism as §30:
+`assignmentAction` calls `requireOperationsAccess` fresh on every
+single mutation attempt — there is no session-cached or JWT-claim-
+derived role anywhere in this Server Action, so a role changed
+mid-session is caught on the very next Dispatch action, by
+construction, not by a special case.
+
+--------------------------------------------------------------------
+32. MULTI-ORG TEST
+--------------------------------------------------------------------
+Verified live: a user with `organization_admin` in Org A and `driver`
+in Org B, signing in with no organization-context cookie, is required
+to select an organization (`/select-organization`) — never silently
+granted Dispatch access to Org A based on their stronger role there
+while some other context might be active (functional matrix scenario
+F, PASS). Matches the same "never inherit the stronger role globally"
+invariant already proven in P1-E3-S1/S3/S4.
+
+--------------------------------------------------------------------
+33. VEHICLE VALIDATION
+--------------------------------------------------------------------
+- Valid same-org vehicle assignment: exercised for real in the stale-
+  reassignment test (§27) — Dispatcher A's reassignment explicitly
+  included a real Vehicle id, and the DB independently confirms the
+  final active assignment carries it.
+- No-vehicle assignment: exercised for real in the primary assign
+  E2E test (§34) — submitted with no vehicle selected, `assign_trip`
+  correctly accepted `p_vehicle_id: undefined`.
+- Inactive/invalid/cross-org vehicle rejection: not re-derived as a
+  new application test (the RPC's own vehicle validation SQL was not
+  touched this phase) — already covered by the unmodified, re-run
+  `mutation_assignment_tests.sql`. The UI itself is also a first line
+  of defense here: the Vehicle `<select>` only ever offers `status=
+  'active'` same-org vehicles, so an inactive/foreign vehicle is never
+  even selectable through the real interface.
+
+--------------------------------------------------------------------
+34. ASSIGNMENT APPLICATION TEST
+--------------------------------------------------------------------
+Through the actual application: Dispatcher opens the unassigned
+Trip's real "Assign" dialog → chooses a real Driver (no vehicle) →
+clicks the real "Assign Driver" submit button → the real Server Action
+calls `assign_trip` → the dialog closes → the board (refreshed) visibly
+shows the new assignment. Independently verified via direct SQL:
+exactly ONE active `trip_assignments` row exists, owned by the exact
+Driver chosen in the UI. PASS (8/8 sub-assertions).
+
+--------------------------------------------------------------------
+35. REASSIGNMENT APPLICATION TEST
+--------------------------------------------------------------------
+Through the actual application: Dispatcher clicks a real grid block
+(precisely targeted via `data-trip-id`, added this phase for exact
+test/debugging precision) for a Trip currently assigned to Driver A1
+→ the dialog shows "Currently assigned to: Fictional Driver A1" (real
+data) → chooses Driver A2 → clicks "Confirm Reassignment" → the real
+Server Action calls `reassign_trip` → the dialog closes → the board
+visibly shows Driver A2. Independently verified via direct SQL: the
+new active assignment is Driver A2, and the PRIOR assignment (Driver
+A1) now has `ended_at` set with `end_reason='reassigned'`. PASS (9/9
+sub-assertions).
+
+--------------------------------------------------------------------
+36. DRIVER REVOCATION CROSS-SURFACE TEST
+--------------------------------------------------------------------
+The mandatory scenario from P1-E3-S3, re-proven through this NEW
+surface: confirmed Driver B (linked to `org-a-driver-b@example.test`)
+has real `driver_get_trip_detail` access to a Trip BEFORE
+reassignment; confirmed Driver A does NOT yet. Reassigned the Trip
+from Driver B to Driver A through the REAL Dispatch UI (not direct
+SQL, not a direct RPC call bypassing the interface). Re-checked both
+Drivers immediately after: Driver B is now denied (fails closed, real
+`ZW002 not_found` — no existence oracle), Driver A now has access.
+5/5 sub-assertions PASS. Confirms the exact property `is_driver_
+assigned_to_trip()` was built to guarantee (P1-E2-S3) still holds
+end-to-end when the reassignment is triggered from this brand-new
+Dispatch surface, not just from a direct RPC call in isolation.
+
+--------------------------------------------------------------------
+37. DIRECT TRIPASSIGNMENT-WRITE AUDIT
+--------------------------------------------------------------------
+`grep -rn "trip_assignments" src/` shows every reference in this
+phase's new code is either a SELECT (embedded read, in `dispatch-
+board.ts`) or a comment. No `.insert()`/`.update()`/`.upsert()`/
+`.delete()` call against `trip_assignments` exists anywhere in this
+phase's code. Confirmed at the database layer too: `revoke insert,
+update on public.trip_assignments from authenticated` remains in
+force (`supabase/migrations/20260831100000_trip_assignment_
+privilege_tightening.sql`, untouched this phase, re-verified by the
+re-run `rls_adversarial_tests.sql`/`mutation_privilege_tests.sql`).
+
+DIRECT TRIPASSIGNMENT WRITE: NONE.
+
+--------------------------------------------------------------------
+38. SERVICE-ROLE AUDIT
+--------------------------------------------------------------------
+`grep -rn "service_role\|SUPABASE_SERVICE" src/lib/operations/
+dispatch-board.ts src/app/operations/dispatch/actions.ts` — zero
+matches. `createServerSupabaseClient()` (the only Supabase client used
+anywhere in this phase's code) uses the publishable key exclusively,
+same as every other Operations/Driver surface — the caller's own
+authenticated session is what grants (or denies) every read and
+mutation, via RLS and the RPCs' own `has_org_role` checks.
+
+--------------------------------------------------------------------
+39. QUERY EFFICIENCY REVIEW
+--------------------------------------------------------------------
+`getDispatchBoardData()` issues exactly 3 queries total (Trips;
+Drivers; Vehicles), run in parallel via `Promise.all` — not one query
+per Driver, not one query per Trip. Driver/Vehicle NAMES for the
+grid/capacity rail come from the SAME Trips query's embedded
+`trip_assignments` relationship (no second per-row fetch); the
+separate Driver/Vehicle option queries exist only because the
+assignment dialog needs the FULL org-wide active list (not just the
+ones currently assigned), which the Trips query's embed cannot
+provide. No N+1 pattern anywhere in this module.
+
+--------------------------------------------------------------------
+40. NO-REALTIME DECISION
+--------------------------------------------------------------------
+No Supabase Realtime subscription anywhere in this phase's code
+(`grep -rn "realtime\|channel(" src/lib/operations/dispatch-board.ts
+src/components/operations/dispatch/` — zero matches). The board is
+authoritative on navigation and on every mutation's own
+`revalidatePath`/`router.refresh()` only, exactly as scoped (work item
+§38).
+
+--------------------------------------------------------------------
+41. NO-LOCATION DECISION
+--------------------------------------------------------------------
+No latitude/longitude, no geolocation API, no browser permission
+prompt, no GPS polling, no map marker, no live ETA anywhere in this
+phase's code or UI. Confirmed by both design (no such field was ever
+queried — `trips`/`drivers`/`vehicles` have no location columns) and
+grep (`grep -rn "geolocation\|latitude\|longitude" src/` — zero
+matches in this phase's new files).
+
+--------------------------------------------------------------------
+42. NO-FAKE-MAP CONFIRMATION
+--------------------------------------------------------------------
+No map, embedded or decorative, exists anywhere on this screen. The
+reference's grid is a schedule/time visualization, not a literal map —
+built as a real, functional time-axis grid instead (see §4/§15/§16),
+not a static image imitating a map.
+
+--------------------------------------------------------------------
+43. EMPTY STATE
+--------------------------------------------------------------------
+Three independent real empty states, each with a specific message (no
+generic "No data"): `NeedsAssignmentQueue` ("Nothing needs
+assignment"), `AssignmentGrid` ("No active drivers" — only if the
+organization genuinely has zero active Drivers), `DriverCapacityPanel`
+(same). None render a fake/sample card.
+
+--------------------------------------------------------------------
+44. ERROR STATE
+--------------------------------------------------------------------
+`DispatchBoardPage` wraps `getDispatchBoardData()` in a try/catch — a
+genuine query failure renders a distinct `EmptyState` with a
+warning icon and "Couldn't load the Dispatch Board" (no backend
+internals exposed), never silently rendered as if the board were
+merely empty.
+
+--------------------------------------------------------------------
+45. SQL REGRESSION
+--------------------------------------------------------------------
+Ran all 18 existing SQL test files against a fresh `supabase db
+reset` (this phase made no migration changes at all):
+
+  constraint_tests.sql                        13 assertions, 0 fail
+  create_trip_atomicity_tests.sql               2 assertions, 0 fail
+  create_trip_privilege_tests.sql               5 assertions, 0 fail
+  create_trip_tests.sql                        20 assertions, 0 fail
+  driver_read_authorization_tests.sql          17 assertions, 0 fail
+  driver_read_history_tests.sql                 8 assertions, 0 fail
+  driver_read_minimization_tests.sql           13 assertions, 0 fail
+  driver_read_privilege_tests.sql               8 assertions, 0 fail
+  function_privilege_tests.sql                  7 assertions, 0 fail
+  mutation_assignment_tests.sql                16 assertions, 0 fail
+  mutation_atomicity_tests.sql                  2 assertions, 0 fail
+  mutation_authorization_tests.sql              4 assertions, 0 fail
+  mutation_idempotent_authorization_tests.sql   6 assertions, 0 fail
+  mutation_lifecycle_tests.sql                 24 assertions, 0 fail
+  mutation_privilege_tests.sql                  7 assertions, 0 fail
+  organization_timezone_tests.sql              13 assertions, 0 fail
+  rls_adversarial_tests.sql                    33 assertions, 0 fail
+  security_definer_exposure_tests.sql          20 assertions, 0 fail
+  ------------------------------------------------------------------
+  TOTAL: 218 assertions, 0 failures (100% PASS) — this phase's own
+  final confirming run, on a fresh reset, after all other work.
+
+--------------------------------------------------------------------
+46. MUTATION CONCURRENCY REGRESSION
+--------------------------------------------------------------------
+`bash supabase/tests/mutation_concurrency_test.sh` — re-run this
+phase, unchanged. Real two-OS-process test: Session A holds the Trip
+row lock ~2s mid-`assign_trip`; Session B, launched while A still
+holds the lock, genuinely blocks (observed: B's wall-clock duration
+1.991s, not near-instant) and, once unblocked, correctly sees A's
+already-committed assignment and rejects with `assignment_conflict`.
+Exactly one active assignment exists at the end. TEST CONCURRENCY-1:
+PASS. This is the row-lock mechanism directly underlying both the
+real stale-assign application test (§26) and this phase's whole
+concurrency safety story.
+
+--------------------------------------------------------------------
+47. AUTH REGRESSION
+--------------------------------------------------------------------
+No separate persisted "auth integration suite" script exists in this
+repository (prior phases' equivalent checks were scratch CDP scripts,
+not committed, matching this project's established convention). Re-
+verified the same core invariants live against the real running app
+this phase's own functional matrix already covers as a byproduct of
+testing Dispatch access itself: real sign-in via `@supabase/ssr`,
+role-based routing (`organization_admin`/`dispatcher` → `/operations/
+dispatch`; `driver` → `/driver`; inactive Membership → `/access-
+unavailable`; multi-org with no context cookie → `/select-
+organization`) — 20/20 PASS (§ functional matrix below). No auth
+regression found.
+
+--------------------------------------------------------------------
+48. DRIVER REGRESSION
+--------------------------------------------------------------------
+Driver Today: PASS (lands on `/driver`, renders real Driver name).
+Driver Trips: PASS (lands on `/driver/trips`, renders trip list
+content). Active Trip access: PASS (Driver A1 opens their own
+assigned Trip, renders real detail, not an "unavailable" state). Then
+the reassignment revocation cross-surface scenario specifically (§36)
+— 5/5 PASS. 6/6 basic smoke checks PASS, 5/5 revocation checks PASS.
+No Driver-surface regression found; Driver components were not
+modified this phase.
+
+--------------------------------------------------------------------
+49–53. VISUAL QA — ALL REQUIRED WIDTHS
+--------------------------------------------------------------------
+Real headless-Chrome/CDP screenshots, signed in as
+org-a-admin@example.test (real session, real data), saved to
+docs/design/qa/dispatch-board/:
+
+  dispatch-768x1024.png   — single-column stack (below `xl`); grid
+                             horizontally scrollable; no clipping.
+  dispatch-1024x768.png   — single-column stack; same.
+  dispatch-1280x800.png   — full 3-column layout activates (`xl`
+                             breakpoint); all 3 panels visible.
+  dispatch-1440x900.png   — full 3-column layout; primary desktop
+                             width.
+  dispatch-1600x1000.png  — full 3-column layout; widest tested.
+  dispatch-1440x900-grid-scrolled.png — the grid's own container
+                             scrolled to its end, proving later-in-day
+                             Trip blocks (2:00 PM, 4:00 PM) are
+                             genuinely reachable, not lost off-screen
+                             (scrollWidth 1084px vs. clientWidth
+                             526px, confirmed programmatically before
+                             capture).
+
+The 3-column-vs-stacked breakpoint was deliberately set at `xl`
+(1280px), not ~1024px as this project's own pre-implementation
+`application-route-map.md` note originally estimated — see
+decision-register.md ZD-143 for the full reasoning (a real,
+screenshotted 1024px 3-column attempt left the center grid too narrow
+to be useful; the single-column stack reads better and loses no
+information, since the grid already needs horizontal scroll at every
+tested width).
+
+--------------------------------------------------------------------
+54. ASSIGNMENT INTERACTION QA
+--------------------------------------------------------------------
+docs/design/qa/dispatch-board/assignment-interaction-1440x900.png
+(dialog just opened) and assignment-interaction-filled-1440x900.png
+(a Driver chosen) — both at the primary desktop width. Real backdrop
+dimming, real focus placement, clean form layout matching the design
+system's existing `Select`/`Button` components exactly.
+
+--------------------------------------------------------------------
+55. REASSIGNMENT INTERACTION QA
+--------------------------------------------------------------------
+docs/design/qa/dispatch-board/reassignment-interaction-1440x900.png —
+shows the "Currently assigned to" real-data block, the Driver/Vehicle
+selects, the optional Reason field, and the explicit "Confirm
+Reassignment" button.
+
+--------------------------------------------------------------------
+56. DIRECT STITCH COMPARISON
+--------------------------------------------------------------------
+  Sidebar (width, nav, active-state highlight — "Dispatch" correctly
+    highlighted, "Overview" correctly not) ................ MATCHES
+  Header composition (title+date, day nav, search, Settings,
+    New Trip, bell/help/avatar) ............................ MATCHES
+    (day navigator and Dispatch Settings are real but disabled
+    — see §72 discrepancies)
+  Summary strip (single row, dot+value+label) ............... MATCHES
+    (3 real metrics shown vs. the reference's 5 — 2 omitted,
+    see §59)
+  Needs Assignment queue (icon+title+count, card
+    composition, badge, action button) ..................... MATCHES
+  Today's Assignments — 3-column structural concept,
+    hour-axis header, driver rows, positioned blocks ........ MATCHES
+    (block WIDTH is fixed, not duration-proportional — GAP-11,
+    ZD-136; a content simplification, not a structural one)
+  Driver Capacity rail (avatar+name+badge+subtitle
+    composition) ............................................ MATCHES
+    (fewer status categories — On Trip only, see §59)
+  Border/radius/whitespace/typography (Panel's existing
+    convention, `zw-` spacing tokens throughout, no ad hoc
+    values) ................................................. MATCHES
+  Desktop-first responsive behavior at 1280/1440/1600 ........ MATCHES
+  1024/768 (secondary per work item — single-column stack,
+    not the reference's 3-column layout) .................... ACCEPTABLE,
+                                                                DOCUMENTED
+    (ZD-143)
+
+--------------------------------------------------------------------
+57. DISCREPANCIES FOUND
+--------------------------------------------------------------------
+  1. At 1024/768, the layout stacks to a single column instead of
+     showing 3 columns (reference has no responsive guidance at all —
+     "dense 3-column desktop layout, not viable below a wide
+     viewport"). Found via real screenshot comparison, not assumed.
+  2. "Today's Assignments" title wrapped to two lines at 1280 before
+     the `GRID_HOUR_WIDTH_PX`/side-column-width tuning below.
+  3. Long fixture driver names ("Fictional Driver A1") truncate in
+     the grid's row-label column and the Driver Capacity cards at
+     narrower `xl` widths.
+
+--------------------------------------------------------------------
+58. DISCREPANCIES CORRECTED
+--------------------------------------------------------------------
+  1. Not "corrected" in the sense of forcing 3 columns into 1024px —
+     evaluated or, and documented as the informed, evidence-based
+     choice it is (ZD-143), not left as an unexplained gap.
+  2. Corrected: reduced `GRID_HOUR_WIDTH_PX` (72→64), narrowed the
+     side columns (320px→280px) and the grid's own row-label column
+     (168px→140px) — re-verified via re-captured screenshots showing
+     the title now fits on one line at 1280, and more of the day is
+     visible before the grid's own horizontal scroll is needed.
+  3. Not corrected — a content artifact of this project's established
+     "Fictional X" seed-naming convention (already documented
+     identically for Today's Operations), not a layout defect; real
+     production driver names would not trigger this.
+
+--------------------------------------------------------------------
+59. REMAINING JUSTIFIED DEVIATIONS
+--------------------------------------------------------------------
+  - Driver Availability status pills (AVAILABLE/BREAK/CONFLICT) and
+    the "Potential timing conflict"/"BREAK UNTIL..." grid annotations
+    — omitted (GAP-6, ZD-140). Only "On Trip" is derivable.
+  - "REVIEW"/"Return trip confirmation pending" queue cards — omitted
+    (no "Pending Confirmation" domain concept exists anywhere in this
+    project, matching Today's Operations' ZD-130 precedent).
+  - Summary strip shows 3 metrics, not the reference's 5 — "Drivers
+    Available" and "Require Attention" both depend on the same
+    undefined/unavailable concepts above.
+  - Grid block width is fixed, not duration-proportional (GAP-11,
+    ZD-136 — no duration field exists on `trips`).
+  - Day navigator and "Dispatch Settings" are real but disabled
+    (ZD-144) — no other-day query, no defined Settings behavior.
+  - No drag-and-drop (ZD-138) — a deliberate click → dialog → confirm
+    flow instead, per the work item's own explicit default.
+  - No embedded map, no GPS/location, no Realtime — all explicitly
+    out of scope for this phase (work item §34/§35/§38).
+  Every deviation above is a CONTENT difference justified by a real,
+  named backend/product gap or an explicit work item exclusion — none
+  is an unexplained change to layout, column structure, hierarchy,
+  navigation, spacing, typography, or action treatment.
+
+--------------------------------------------------------------------
+60. ACCESSIBILITY
+--------------------------------------------------------------------
+  - Semantic heading hierarchy: `<h2>` for each panel title
+    ("Needs Assignment (N)", "Today's Assignments", "Driver
+    Capacity"), `<h2 id={titleId}>` inside the Dialog wired to
+    `aria-labelledby`.
+  - Keyboard navigation: every interactive element (Assign buttons,
+    grid blocks, dialog fields/buttons) is a real `<button>`/`<select>`
+    /`<textarea>` — no click-only `<div>` handlers anywhere.
+  - Assignment control labels: `Select`'s existing `<label
+    htmlFor>` pattern reused unchanged (real design-system primitive,
+    not a bespoke field).
+  - Dialog focus behavior: native `<dialog>.showModal()` — real
+    browser focus trapping, verified via the real headless-Chrome
+    screenshots (backdrop dimmed, dialog content visibly focused/
+    centered); ESC closes via the native `close` event, not a
+    duplicated custom handler.
+  - Status text: every status is a real text label (`TripStatus`/
+    `StatusBadge`'s existing pattern, or plain text in the grid/
+    capacity panels) — never conveyed by color alone (work item §74's
+    "no color-only states").
+  - Error announcements: the dialog's error paragraph uses `role=
+    "alert"` (an implicit assertive live region), matching
+    `DriverLifecycleAction`'s established pattern exactly.
+  - Icons: every icon used is `aria-hidden` (Phosphor icons
+    throughout this phase's new components) — text always carries the
+    meaning.
+  - Grid blocks carry a full descriptive `aria-label` ("Reassign
+    {passenger}'s trip at {time}, currently assigned to {driver}"),
+    not just a bare passenger name — added/refined this phase after
+    real-application testing revealed the original label was
+    ambiguous once two blocks shared the same driver (see §35's own
+    `data-trip-id` addition, which also improved this).
+  - Touch/click targets: buttons use the existing `Button`/
+    `IconButton` size scale (already-established minimum target
+    sizes), not custom undersized controls.
+
+--------------------------------------------------------------------
+61. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, zero errors (final run, after all
+implementation and tuning).
+
+--------------------------------------------------------------------
+62. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, zero errors, zero warnings in application
+code (final run).
+
+--------------------------------------------------------------------
+63. BUILD
+--------------------------------------------------------------------
+`npm run build` — succeeded. All 24 routes compiled, `/operations/
+dispatch` dynamic (ƒ) as expected for a server-rendered, auth-gated,
+per-request route.
+
+--------------------------------------------------------------------
+64. SCREENSHOTS CREATED
+--------------------------------------------------------------------
+docs/design/qa/dispatch-board/ — 9 real PNGs: 5 required widths, 1
+scroll-proof capture, 2 assignment-interaction captures, 1
+reassignment-interaction capture.
+
+--------------------------------------------------------------------
+65. DOCS CREATED
+--------------------------------------------------------------------
+  - docs/product/dispatch-board-data-map.md
+  - docs/reports/P1-E3-S5-completion-report.txt (this file)
+
+--------------------------------------------------------------------
+66. DOCS UPDATED
+--------------------------------------------------------------------
+  - docs/design/component-inventory.md — new "Dispatch components —
+    P1-E3-S5" section; retired the 3 speculative "New components
+    needed" rows this phase actually built.
+  - docs/product/application-implementation-plan.md — Dispatch Board
+    row/step marked COMPLETE; "Next recommended phase" updated.
+  - docs/product/ui-backend-gap-register.md — GAP-6 given a Dispatch-
+    specific resolution note; new GAP-11 (Trip duration field) added.
+  - docs/product/decision-register.md — ZD-136 through ZD-144 (9 new
+    decisions).
+
+--------------------------------------------------------------------
+67. DECISIONS RECORDED
+--------------------------------------------------------------------
+  ZD-136  Grid blocks are fixed-width, positioned only by start time
+  ZD-137  Grid time window is a fixed 6 AM-8 PM span, not dynamic
+  ZD-138  No drag-and-drop; deliberate click -> dialog -> confirm
+  ZD-139  Dialog primitive built on native <dialog>, no library
+  ZD-140  Driver Capacity shows real "On Trip" only, not DriverStatus
+  ZD-141  Dispatch's Trip query IS bounded to today (contrast ZD-131)
+  ZD-142  Stale-reassign "last write wins" documented, not forced
+  ZD-143  3-column breakpoint raised to xl (1280px) after real QA
+  ZD-144  Day navigator / Dispatch Settings disabled, not omitted
+
+--------------------------------------------------------------------
+68. FILES CREATED
+--------------------------------------------------------------------
+  src/lib/operations/dispatch-board.ts
+  src/lib/operations/dispatch-grid.ts
+  src/lib/operations/dispatch-errors.ts
+  src/app/operations/dispatch/actions.ts
+  src/components/ui/Dialog.tsx
+  src/components/operations/dispatch/DispatchBoardClient.tsx
+  src/components/operations/dispatch/NeedsAssignmentQueue.tsx
+  src/components/operations/dispatch/AssignmentGrid.tsx
+  src/components/operations/dispatch/DriverCapacityPanel.tsx
+  src/components/operations/dispatch/AssignmentDialog.tsx
+  docs/product/dispatch-board-data-map.md
+  docs/design/qa/dispatch-board/ (9 screenshots)
+  docs/reports/P1-E3-S5-completion-report.txt
+
+--------------------------------------------------------------------
+69. FILES MODIFIED
+--------------------------------------------------------------------
+  src/app/operations/dispatch/page.tsx (placeholder -> real screen)
+  src/components/operations/OperationsLayoutClient.tsx (Dispatch
+    header content)
+  src/app/globals.css (dialog::backdrop rule)
+  docs/design/component-inventory.md
+  docs/product/application-implementation-plan.md
+  docs/product/ui-backend-gap-register.md
+  docs/product/decision-register.md
+
+Nothing under `/driver/*`, `/operations/trips/[tripId]` (Trip
+Detail — untouched, still a stub), `/operations/trips/new` (New Trip
+— untouched, still a stub), or `/Users/datamatics/Zenward-Web` was
+touched. No Supabase migration was added or modified — this entire
+phase is migration-free, built on the already-existing `assign_trip`/
+`reassign_trip` RPCs.
+
+--------------------------------------------------------------------
+70. BACKEND GAPS
+--------------------------------------------------------------------
+  GAP-6 (Driver Availability) — reaffirmed, Dispatch-specific
+    resolution note added.
+  GAP-11 (Trip duration field) — new this phase, Low severity,
+    cosmetic-only (grid block width).
+  "Running Late threshold" / "Potential timing conflict" / "Pending
+    Confirmation" — already-recorded PRODUCT DECISIONS REQUIRED,
+    reconfirmed as still unresolved and still correctly not built
+    around with fabricated logic.
+
+--------------------------------------------------------------------
+71. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+72. DEFERRED ITEMS
+--------------------------------------------------------------------
+  - Drag-and-drop assignment (ZD-138) — future dedicated work item,
+    already anticipated as "P1-E3-S7" in application-implementation-
+    plan.md's own pre-existing sequencing.
+  - Driver Availability schema (GAP-6) — future dedicated work item.
+  - Trip duration/expected-dropoff field (GAP-11) — future,
+    deliberately-reviewed schema decision if duration-proportional
+    grid blocks are ever wanted.
+  - Multi-day Dispatch navigation, "Dispatch Settings" — no defined
+    scope yet.
+  - Operations Trip Detail, New Trip form — untouched, unbuilt.
+  - Driver GPS/live location, Supabase Realtime — explicitly out of
+    scope this phase (work item §34/§35/§38), to be evaluated
+    together in a future dedicated location phase.
+
+--------------------------------------------------------------------
+73. DISPATCH FUNCTIONAL GATE
+--------------------------------------------------------------------
+All 18 required conditions met:
+  1.  Dispatch route no longer placeholder — YES
+  2.  real org-scoped Trips render — YES
+  3.  unassigned Trips identifiable — YES
+  4.  assigned Trips show real Driver/Vehicle — YES
+  5.  assign_trip works through application — YES (§34, DB-verified)
+  6.  reassign_trip works through application — YES (§35, DB-verified)
+  7.  no direct TripAssignment writes — YES (§37, audited)
+  8.  wrong-org access denied — YES (§28, existing RPC coverage +
+      UI-level org-scoped options + live foreign-org route check)
+  9.  Driver denied — YES (§29, live-verified)
+  10. inactive Membership revoked live — YES (§30, live-verified)
+  11. role-change revoked live — YES (§31, structurally guaranteed +
+      existing RPC-layer coverage)
+  12. multi-org authorization preserved — YES (§32, live-verified)
+  13. stale assign handled — YES (§26, live application test)
+  14. stale reassign handled — YES (§27, live application test,
+      real contract behavior documented)
+  15. Driver reassignment revocation preserved — YES (§36, live
+      cross-surface application test)
+  16. timezone correct — YES (§12, reused unchanged mechanism)
+  17. no service role — YES (§38, audited)
+  18. TypeScript/lint/build pass — YES (§61/62/63)
+
+DISPATCH FUNCTIONAL GATE: READY.
+
+--------------------------------------------------------------------
+74. DISPATCH VISUAL GATE
+--------------------------------------------------------------------
+All 10 required conditions met:
+  1.  real rendered screenshots — YES (9 files, §64)
+  2.  direct Stitch comparison — YES (§56)
+  3.  obvious visual gaps corrected — YES (§58 — grid/column sizing
+      tuned after real screenshot review, not left as found)
+  4.  production-quality sidebar/header continuity — YES (S4/S4A
+      shell reused unchanged, per work item §46)
+  5.  board hierarchy materially matches reference — YES
+  6.  trip density materially matches reference — YES
+  7.  assignment interaction visually deliberate — YES (§54/§55, real
+      dialog screenshots)
+  8.  1024/1280/1440/1600 intentionally designed — YES (§143's
+      breakpoint choice is a deliberate, evidence-based design
+      decision, not an accident)
+  9.  768 acceptable and documented — YES (§57/58/ZD-143)
+  10. no fake data/map used for visual similarity — YES (§42, every
+      pixel of every screenshot is real query output)
+
+DISPATCH VISUAL GATE: READY.
+
+--------------------------------------------------------------------
+75. DISPATCH BOARD IMPLEMENTATION GATE
+--------------------------------------------------------------------
+FUNCTIONAL GATE: READY, VISUAL GATE: READY.
+
+DISPATCH BOARD IMPLEMENTATION GATE: READY.
+
+--------------------------------------------------------------------
+76. RECOMMENDED NEXT PHASE
+--------------------------------------------------------------------
+Operations Trip Detail (02) — see application-implementation-plan.md
+"Next recommended phase" (updated this phase). Now the clearer
+priority: every action this project has built across Today's
+Operations and the Dispatch Board routes generically (a link, or a
+grid block opening the assignment dialog directly) because Trip Detail
+does not exist yet to link to. Not P1-E3-S5A (Driver Location & Live
+Dispatch Tracking) — that remains explicitly deferred behind Trip
+Detail per this phase's own instruction not to begin GPS/location
+work, and application-implementation-plan.md's own pre-existing
+sequencing places Dispatch drag-and-drop (P1-E3-S7) after Trip Detail
+and Dispatch Board too, not before it.
+====================================================================
+DISPATCH FUNCTIONAL GATE:
+READY
+
+DISPATCH VISUAL GATE:
+READY
+
+DISPATCH BOARD IMPLEMENTATION GATE:
+READY
+
+ASSIGN_TRIP:
+PASS
+
+REASSIGN_TRIP:
+PASS
+
+DIRECT TRIPASSIGNMENT WRITE:
+NONE
+
+TENANT ISOLATION:
+PASS
+
+STALE ASSIGNMENT HANDLING:
+PASS
+
+DRIVER REASSIGNMENT REVOCATION:
+PASS
+
+ORGANIZATION TIMEZONE:
+PASS
+
+STITCH VISUAL QA:
+COMPLETE
+
+BLOCKERS:
+NONE
+
+NEXT RECOMMENDED PHASE:
+Operations Trip Detail (02) — see §76 above.
+
+REPORT FILE:
+docs/reports/P1-E3-S5-completion-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed or pushed (working
+tree intentionally left exactly as listed in §68/§69); no remote
+Supabase was linked; no Vercel/DNS configuration was touched; Driver
+GPS/location tracking, Operations Trip Detail, New Trip, Realtime, and
+Zenward-Web integration were not begun. This phase stops here.
+====================================================================

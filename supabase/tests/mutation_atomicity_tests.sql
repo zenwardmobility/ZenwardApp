@@ -58,10 +58,10 @@ create trigger _test_force_audit_failure_trigger
 -- ---------------------------------------------------------------------------
 do $$
 declare
-  v_before_driver uuid; v_before_ended timestamptz;
+  v_before_driver uuid; v_before_ended timestamptz; v_expected uuid;
   v_events_before int; v_assignments_before int;
 begin
-  select driver_id, ended_at into v_before_driver, v_before_ended
+  select id, driver_id, ended_at into v_expected, v_before_driver, v_before_ended
     from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000e1' and ended_at is null;
   select count(*) into v_events_before from public.trip_events where trip_id = '90000000-0000-0000-0000-0000000000e1';
   select count(*) into v_assignments_before from public.trip_assignments where trip_id = '90000000-0000-0000-0000-0000000000e1';
@@ -69,7 +69,9 @@ begin
   set local role authenticated;
   set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a2'; -- dispatcher
   begin
-    perform public.reassign_trip('90000000-0000-0000-0000-0000000000e1', '30000000-0000-0000-0000-0000000000a2', null, '__ATOMICITY_TEST_FORCED_FAILURE__');
+    -- P1-E3-S5A: real (non-idempotent) expected_assignment_id required to
+    -- reach the forced-failure trigger point this test actually targets.
+    perform public.reassign_trip('90000000-0000-0000-0000-0000000000e1', '30000000-0000-0000-0000-0000000000a2', null, '__ATOMICITY_TEST_FORCED_FAILURE__', v_expected);
     raise notice 'TEST E1: FAIL (expected the forced failure to propagate, but the call succeeded)';
   exception when sqlstate 'ZW999' then
     -- Expected. Check nothing done before the forced failure persisted.

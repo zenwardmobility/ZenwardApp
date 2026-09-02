@@ -66,6 +66,7 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Recommendation:** A dedicated future work item (schema + RLS + read/mutation surface for Driver-set or dispatcher-set availability), scoped and reviewed on its own — not designed here.
 - **Blocks:** Full fidelity of the Driver Availability/Capacity panels only; both screens remain otherwise implementable.
 - **Resolution this phase (Today's Operations, P1-E3-S4):** Confirmed still open — the Driver Availability panel is omitted from Today's Operations entirely (not degraded to a partial "On Trip only" version), since Today's Operations' own summary strip already reports the "active" trip count elsewhere; a partial panel here would have added visual clutter without adding information not already shown. Dispatch Board (not built this phase) remains the screen where "On Trip only" degradation, per the original recommendation, is the more natural fit.
+- **Resolution (Dispatch Board, P1-E3-S5):** Built exactly as the original recommendation anticipated — `DriverCapacityPanel` shows real Driver names and an "On Trip" badge only when a genuine active-state assignment exists right now; no badge at all otherwise. AVAILABLE/BREAK/CONFLICT pills and the "Potential timing conflict"/"BREAK UNTIL..." grid annotations from the reference are not built (ZD-140). Still fully open as its own future work item.
 
 ### GAP-7 — TripException Driver-facing status view
 
@@ -99,6 +100,15 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Severity:** Low — a single button on one screen, not core trip-management functionality.
 - **Recommendation:** Scope as its own small feature when prioritized; not designed here.
 - **Resolution (Today's Operations, P1-E3-S4):** The button is rendered, real, and `disabled` — not hidden, not a fake working control. Still fully open as a future feature.
+
+### GAP-11 — No Trip duration / expected-dropoff field — found P1-E3-S5
+
+- **Screen:** Dispatch Board (03) — "Today's Assignments" time-axis grid
+- **Finding:** `trips` has only `scheduled_pickup_at`/`appointment_at` (both single instants) — no field represents how long a Trip is expected to take, or when it's expected to end. The reference's own grid renders each Trip block with a visible WIDTH suggesting a duration.
+- **Severity:** Low — cosmetic precision of one visual element on one screen; no correctness or security issue, and nothing is hidden (every block still shows its real start time and status).
+- **Recommendation:** Do not invent an estimated-duration heuristic (e.g. "assume 45 minutes") to fill this gap — that would be fabricated data presented as if real. If duration-proportional grid blocks are ever wanted, this needs its own deliberately-reviewed schema decision (a stored duration? computed from historical Trip data? facility-specific defaults?), not assumed here.
+- **Resolution this phase:** `AssignmentGrid` renders every Trip block at the same fixed width, positioned only by its real start time (`src/lib/operations/dispatch-grid.ts`, ZD-136). Not implemented as duration-proportional, not faked.
+- **Blocks:** Full Stitch-reference visual parity of the grid's block sizing only — the grid is otherwise fully functional.
 
 ---
 
