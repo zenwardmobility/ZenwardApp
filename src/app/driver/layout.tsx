@@ -34,5 +34,16 @@ export default async function DriverLayout({ children }: { children: ReactNode }
     );
   }
 
-  return <DriverLayoutClient driverName={access.displayName}>{children}</DriverLayoutClient>;
+  // P1-E3-S9 (Owner-Operator Mode) — true only when this person's real
+  // Membership.role for this org is organization_admin/dispatcher (they
+  // reached here via the relaxed guard as a dual-hat owner-operator, not
+  // as an ordinary Driver-only Membership) — see requireDriverAccess's
+  // own comment for why role, not a separate flag, is the right signal.
+  const showOperationsLink = access.organization.role !== "driver";
+
+  return (
+    <DriverLayoutClient driverName={access.displayName} showOperationsLink={showOperationsLink}>
+      {children}
+    </DriverLayoutClient>
+  );
 }

@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, SignOut } from "@phosphor-icons/react/dist/ssr";
+import { ArrowLeft, SignOut, SquaresFour } from "@phosphor-icons/react/dist/ssr";
 import { DriverShell } from "@/components/driver/DriverShell";
 import { DriverHeader } from "@/components/driver/DriverHeader";
 import { Avatar } from "@/components/ui/Avatar";
@@ -23,6 +23,8 @@ export interface DriverLayoutClientProps {
   children: ReactNode;
   /** Real driver identity (driver_get_profile.display_name) — P1-E3-S2, threaded from the server layout's already-resolved access result. */
   driverName?: string;
+  /** P1-E3-S9 (Owner-Operator Mode) — true only for an organization_admin/dispatcher who reached /driver/* via the sidebar's conditional "Drive" link, not for an ordinary Driver-only Membership. Adds a small way back to Operations, since Sign Out is the wrong action for someone who never left their real account. */
+  showOperationsLink?: boolean;
 }
 
 /**
@@ -37,7 +39,7 @@ export interface DriverLayoutClientProps {
  * affordance reusing the existing signOutAction (work item §28 — no
  * second session-clearing mechanism).
  */
-export function DriverLayoutClient({ children, driverName }: DriverLayoutClientProps) {
+export function DriverLayoutClient({ children, driverName, showOperationsLink }: DriverLayoutClientProps) {
   const pathname = usePathname();
   const isTripDetail = pathname.startsWith("/driver/trips/") && pathname !== "/driver/trips";
 
@@ -61,9 +63,20 @@ export function DriverLayoutClient({ children, driverName }: DriverLayoutClientP
             ) : undefined
           }
           trailing={
-            <form action={signOutAction}>
-              <IconButton type="submit" label="Sign out" icon={<SignOut className="size-5" aria-hidden />} />
-            </form>
+            <div className="flex items-center gap-1">
+              {showOperationsLink && (
+                <Link
+                  href="/operations"
+                  aria-label="Back to Operations"
+                  className="inline-flex size-11 items-center justify-center rounded-sm text-text-secondary transition-colors duration-base ease-standard hover:bg-surface-hover"
+                >
+                  <SquaresFour className="size-5" aria-hidden />
+                </Link>
+              )}
+              <form action={signOutAction}>
+                <IconButton type="submit" label="Sign out" icon={<SignOut className="size-5" aria-hidden />} />
+              </form>
+            </div>
           }
         />
       }

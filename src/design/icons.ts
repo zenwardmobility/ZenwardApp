@@ -10,6 +10,7 @@ import {
   ChartBar,
   Gear,
   MapPin,
+  SteeringWheel,
 } from "@phosphor-icons/react/dist/ssr";
 import type { Icon } from "@phosphor-icons/react";
 
@@ -36,6 +37,7 @@ export const navIcons: Record<string, Icon> = {
   reports: ChartBar,
   settings: Gear,
   location: MapPin,
+  drive: SteeringWheel,
 };
 
 export type NavIconKey = keyof typeof navIcons;

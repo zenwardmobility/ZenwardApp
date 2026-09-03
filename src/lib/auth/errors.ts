@@ -12,6 +12,12 @@ export const AUTH_ERROR = {
   ORG_CONTEXT_INVALID: "ORG_CONTEXT_INVALID",
   ROLE_FORBIDDEN: "ROLE_FORBIDDEN",
   DRIVER_LINK_MISSING: "DRIVER_LINK_MISSING",
+  // P1-E3-S9 — signup-specific codes.
+  SIGNUP_INVALID_INPUT: "SIGNUP_INVALID_INPUT",
+  SIGNUP_WEAK_PASSWORD: "SIGNUP_WEAK_PASSWORD",
+  SIGNUP_EMAIL_TAKEN: "SIGNUP_EMAIL_TAKEN",
+  SIGNUP_FAILED: "SIGNUP_FAILED",
+  INVITE_INVALID: "INVITE_INVALID",
 } as const;
 
 export type AuthErrorCode = (typeof AUTH_ERROR)[keyof typeof AUTH_ERROR];
@@ -24,4 +30,9 @@ export const AUTH_ERROR_MESSAGE: Record<AuthErrorCode, string> = {
   ORG_CONTEXT_INVALID: "That organization is not available for your account.",
   ROLE_FORBIDDEN: "Your account does not have access to this area.",
   DRIVER_LINK_MISSING: "Your account is not yet linked to a driver profile.",
+  SIGNUP_INVALID_INPUT: "Please fill in your name, email, password, and business name.",
+  SIGNUP_WEAK_PASSWORD: "Please choose a password with at least 8 characters.",
+  SIGNUP_EMAIL_TAKEN: "An account with that email already exists — try signing in instead.",
+  SIGNUP_FAILED: "We couldn't complete sign-up. Please try again.",
+  INVITE_INVALID: "This invite link is no longer valid — it may have been used already or revoked. Ask your dispatcher for a new one.",
 };

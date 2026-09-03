@@ -2345,6 +2345,66 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product / Sales / Security
 - **Review Trigger:** None anticipated for the geography; the layout hardening should be revisited only if a future design system change removes `min-w-0`/`truncate` support from the underlying primitives.
 
+### ZD-193 — Self-service organization creation via one atomic SECURITY DEFINER RPC, not a raw INSERT grant
+
+- **Date:** 2026-09-03
+- **Category:** Architecture / Security
+- **Decision:** `organizations` and `memberships` still have NO raw INSERT grant to `authenticated` — organization creation was never opened up as a direct client capability, even though self-service signup is now a genuine, explicitly-authorized new feature (P1-E3-S9). `signup_create_organization` is the sole controlled path: one SECURITY DEFINER function that atomically creates a UserProfile, a new Organization, and the caller's own hard-coded `organization_admin` Membership in a single transaction — mirroring `create_trip`'s own established pattern exactly (state/role is a Postgres literal in the function body, never a parameter).
+- **Status:** CONFIRMED — implemented, verified via 6 dedicated SQL tests (SIGNUP-1 through SIGNUP-6) plus a full live browser signup.
+- **Reason:** `organizations.sql`'s original comment framed creation as "a platform-level action, not a normal-user capability" (P1-E1). This phase deliberately, explicitly extends WHO may trigger that platform-level action (any authenticated user, not just a service role) — but the MECHANISM stays exactly consistent with the original framing: still no raw grant, still a narrow, controlled, audited path, just one now reachable by ordinary users for a legitimate new purpose. Work item §2's "failed signup does not leave a broken partial state" is satisfied structurally: the one implicit transaction rolls back atomically, and the one piece that can't roll back (the auth user itself, created by a prior, separate `signUp()` call) simply lands in the already-safe, already-tested "authenticated, zero Membership" state if nothing further happens.
+- **Affected Product Areas:** `supabase/migrations/20260903100000_organization_signup.sql`, `src/app/sign-up/`.
+- **Dependencies:** None
+- **Owner:** Security / Engineering
+- **Review Trigger:** None anticipated.
+
+### ZD-194 — `current_driver_id()` relaxed from `role='driver'` to `status='active'` (any role) — Owner-Operator Mode vs. ZD-100
+
+- **Date:** 2026-09-03
+- **Category:** Security
+- **Decision:** `current_driver_id()` — the function every Driver-scoped RLS policy and RPC ultimately calls — previously required the caller's Membership to have `role = 'driver'` specifically (P1-E2-S3, ZD-100's own fix for a real vulnerability: an inactive Membership retaining Driver access through a stale `drivers.status='active'` row). This phase relaxes that to simply requiring an ACTIVE Membership of ANY role, found necessary via direct live testing while building Owner-Operator Mode (an organization_admin who self-links a Driver row keeps `role='organization_admin'`, by design — so the old check could never pass for them, making the feature structurally impossible).
+- **Status:** CONFIRMED — implemented (`20260903100700_current_driver_id_owner_operator_mode.sql`), verified: ZD-100's own original property (inactive Membership → zero Driver access, ANY role) re-confirmed via a fresh test (OWNERDRIVER-5) in addition to the pre-existing `driver_read_authorization_tests.sql` DETAIL-6/DETAIL-7, both still passing unchanged.
+- **Reason:** The real security property ZD-100 protected was never "is this specifically a Driver-role Membership" — it was "does an INACTIVE Membership retain access through a stale Driver row." That property is fully preserved by the relaxed check (still requires `m.status = 'active'`); only the now-too-narrow additional role restriction was dropped, and only because this phase introduces a real, reviewed, self-only new case (Owner-Operator Mode) that legitimately needs it.
+- **Affected Product Areas:** `public.current_driver_id(uuid)` — and therefore, transitively, every Driver-scoped RLS policy and RPC (no other code changes needed, matching the original ZD-100 migration's own "every caller is corrected automatically" note).
+- **Dependencies:** Enables ZD-196 (Owner-Operator Mode) and the `/driver/*` route-guard relaxation.
+- **Owner:** Security
+- **Review Trigger:** Any future change to Membership's role model should re-verify this function's own comment and test coverage remain accurate.
+
+### ZD-195 — Retired the broad, unconditional `drivers.user_id` client UPDATE grant
+
+- **Date:** 2026-09-03
+- **Category:** Security
+- **Decision:** `drivers.user_id` — the column that determines which auth account a Driver row is linked to — is no longer in the client-reachable UPDATE column grant. Before this phase, `drivers_update_org_admin`'s column grant included `user_id` with no constraint on what value it could be set to: an organization_admin could set any Driver row's `user_id` to ANY `auth.users.id`, including a completely unrelated person's account, silently granting them Driver access without consent. Never exercised by any shipped feature (Driver onboarding was GAP-15, unbuilt until this phase), but genuinely live-exploitable via a direct REST/RPC call.
+- **Status:** CONFIRMED — implemented (`20260903100300_retire_direct_driver_user_id_update.sql`), verified: `information_schema.column_privileges` directly inspected before and after; the full SQL regression suite re-confirmed 309/309 unaffected.
+- **Reason:** `link_self_as_driver` and `redeem_driver_invite` (both SECURITY DEFINER, both structurally self-only — see ZD-196) are now the sole paths that ever set this column, and both are incapable of targeting anyone other than `auth.uid()` itself. This mirrors the exact "retire the broad direct grant, add a controlled narrow path" precedent GAP-1/ZD-101 already established for `trips` INSERT.
+- **Affected Product Areas:** `public.drivers` table grants.
+- **Dependencies:** None
+- **Owner:** Security
+- **Review Trigger:** None anticipated.
+
+### ZD-196 — Driver invite is a token-gated record, never admin-created credentials
+
+- **Date:** 2026-09-03
+- **Category:** Security / Architecture
+- **Decision:** Closing GAP-15 (Driver Onboarding), the organization admin never creates the invited driver's account or handles their password. `create_driver_invite` creates only a `driver_invites` row (email, display name, a random token). The invitee signs up themselves through ordinary Supabase Auth with the matching email, then calls `redeem_driver_invite(token)` — which takes NO `organization_id` parameter at all (resolved entirely from the invite row) — to atomically get a `driver` Membership and a linked Driver row.
+- **Status:** CONFIRMED — implemented, verified via 9 dedicated SQL tests (INVITE-1 through INVITE-6, REDEEM-1 through REDEEM-5) plus a genuine two-process concurrency test plus a full live browser redemption flow (sign up with the invited email → land on `/driver` → real Membership + Driver rows confirmed in the database).
+- **Reason:** Work item §10's own explicit requirements — "no orphan Driver/Auth records on partial failure," "invite cannot create foreign-org membership," "no broad direct INSERT/UPDATE grants" — are all satisfied structurally by this design, not merely by careful error handling: the auth user's creation is entirely outside this feature's own transaction (Supabase Auth's own already-atomic `signUp()`), and cross-org redemption isn't merely denied, it's not expressible as an input (no org_id parameter exists to supply).
+- **Affected Product Areas:** `driver_invites` (new table), `create_driver_invite`/`revoke_driver_invite`/`get_driver_invite_preview`/`redeem_driver_invite`, `src/app/join/[token]/`.
+- **Dependencies:** ZD-195 (the narrowed `drivers.user_id` grant this design relies on).
+- **Owner:** Security / Product
+- **Review Trigger:** If a real outbound-email capability is ever added, revisit whether the invite link should also be emailed automatically rather than shared manually by the admin (deliberately out of scope this phase — no email delivery is configured in this environment at all).
+
+### ZD-197 — `business_stage`-driven navigation personalization deliberately deferred (GAP-16)
+
+- **Date:** 2026-09-03
+- **Category:** Product / UX
+- **Decision:** Work item §12's "progressive complexity" framing suggested a business-stage-aware navigation reorder (STARTING operators seeing "My Trips/Drive" emphasized over "Dispatch/Fleet"). This phase built only the one genuinely-derived, safe piece — the conditional "Drive" sidebar item, gated on a real linked Driver row, never on `business_stage` itself — and deliberately did NOT build a `business_stage`-keyed reordering or hiding of the existing 7-item Operations nav.
+- **Status:** CONFIRMED — deliberate deferral, recorded as GAP-16, not a silently-dropped requirement.
+- **Reason:** The exact target nav composition per business stage was not specified precisely enough to build safely without real risk of regressing the already-tested navigation for every other operator size, within this phase's time budget. A real derived signal (a linked Driver row) was judged safer and more honest than a self-reported, easily-stale `business_stage` value driving what controls someone can even see.
+- **Affected Product Areas:** None (no code change).
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** A dedicated future work item, with exact target nav compositions specified up front.
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

@@ -36,6 +36,8 @@ export interface OperationsSidebarProps {
   orgUnit: string;
   dispatcherName: string;
   dispatcherRole?: string;
+  /** P1-E3-S9 (Owner-Operator Mode, work item §4/§12) — real fact from a live `current_driver_id()` check, never inferred from role. Gates the conditional "Drive" nav item only; the actual /driver/* access decision is independently re-checked by `requireDriverAccess`. */
+  hasLinkedDriverProfile?: boolean;
 }
 
 /**
@@ -49,8 +51,15 @@ export function OperationsSidebar({
   orgUnit,
   dispatcherName,
   dispatcherRole,
+  hasLinkedDriverProfile,
 }: OperationsSidebarProps) {
   const pathname = usePathname();
+  // P1-E3-S9 (work item §4/§12, "progressive complexity" — "a 1-2 vehicle
+  // operator should quickly reach... Drive"): appended, never replacing
+  // any existing item — Operations nav stays the same 7 items for
+  // everyone, plus this one additional, conditional item for a genuine
+  // dual-hat owner-operator. Same platform, no forked nav structure.
+  const navItems = hasLinkedDriverProfile ? [...NAV_ITEMS, { key: "drive" as const, label: "Drive", href: "/driver" }] : NAV_ITEMS;
 
   return (
     <aside className="hidden shrink-0 flex-col bg-navy-surface md:flex md:w-16 lg:w-64">
@@ -100,7 +109,7 @@ export function OperationsSidebar({
 
       <nav aria-label="Primary" className="flex-1 overflow-y-auto px-2 py-3 lg:px-3">
         <ul className="flex flex-col gap-1">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const Icon = navIcons[item.key];
             const isActive =
               item.href === "/operations" ? pathname === item.href : pathname.startsWith(item.href);

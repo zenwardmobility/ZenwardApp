@@ -24,16 +24,27 @@ begin
   end if;
 end $$;
 
--- No function in the public schema grants EXECUTE to anon.
+-- No function in the public schema grants EXECUTE to anon, EXCEPT the
+-- one deliberate, reviewed exception below (P1-E3-S9,
+-- get_driver_invite_preview) — an unauthenticated invite recipient must
+-- be able to preview "you've been invited to join {org} as a driver"
+-- BEFORE they have an account to sign in with. The function itself is
+-- narrow, read-only, token-gated (a 122-bit random UUID is the
+-- credential), and returns only organization_name/display_name/email/
+-- status — never organization_id or any other invite column (see
+-- 20260903100200_driver_invites.sql). Any OTHER anon-executable function
+-- still fails this test, unchanged.
 do $$
 declare v_bad text;
 begin
   select string_agg(p.proname, ', ') into v_bad
   from pg_proc p
   join pg_namespace n on n.oid = p.pronamespace
-  where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'EXECUTE');
+  where n.nspname = 'public'
+    and has_function_privilege('anon', p.oid, 'EXECUTE')
+    and p.proname <> 'get_driver_invite_preview';
   if v_bad is null then
-    raise notice 'FUNCTION-PRIV no-anon-execute: PASS (anon cannot execute any public-schema function)';
+    raise notice 'FUNCTION-PRIV no-anon-execute: PASS (anon cannot execute any public-schema function, except the deliberate get_driver_invite_preview exception, P1-E3-S9)';
   else
     raise notice 'FUNCTION-PRIV no-anon-execute: FAIL (anon can execute: %)', v_bad;
   end if;

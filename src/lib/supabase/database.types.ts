@@ -81,6 +81,59 @@ export type Database = {
           },
         ]
       }
+      driver_invites: {
+        Row: {
+          accepted_at: string | null
+          accepted_by: string | null
+          created_at: string
+          display_name: string
+          email: string
+          id: string
+          invited_by: string
+          organization_id: string
+          phone: string | null
+          status: string
+          token: string
+          updated_at: string
+        }
+        Insert: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          display_name: string
+          email: string
+          id?: string
+          invited_by: string
+          organization_id: string
+          phone?: string | null
+          status?: string
+          token?: string
+          updated_at?: string
+        }
+        Update: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          display_name?: string
+          email?: string
+          id?: string
+          invited_by?: string
+          organization_id?: string
+          phone?: string | null
+          status?: string
+          token?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "driver_invites_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       driver_location_updates: {
         Row: {
           accuracy_meters: number | null
@@ -280,25 +333,31 @@ export type Database = {
       }
       organizations: {
         Row: {
+          business_stage: string | null
           created_at: string
           id: string
           name: string
+          service_area_description: string | null
           status: string
           timezone: string
           updated_at: string
         }
         Insert: {
+          business_stage?: string | null
           created_at?: string
           id?: string
           name: string
+          service_area_description?: string | null
           status?: string
           timezone: string
           updated_at?: string
         }
         Update: {
+          business_stage?: string | null
           created_at?: string
           id?: string
           name?: string
+          service_area_description?: string | null
           status?: string
           timezone?: string
           updated_at?: string
@@ -898,6 +957,21 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      create_driver_invite: {
+        Args: {
+          p_display_name: string
+          p_email: string
+          p_organization_id: string
+          p_phone?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["driver_invite_result"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_invite_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       create_trip: {
         Args: {
           p_appointment_at?: string
@@ -1036,6 +1110,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      get_driver_invite_preview: {
+        Args: { p_token: string }
+        Returns: Database["public"]["CompositeTypes"]["driver_invite_preview"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_invite_preview"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       has_org_role: {
         Args: { p_org_id: string; p_roles: string[] }
         Returns: boolean
@@ -1047,6 +1131,20 @@ export type Database = {
       is_org_member: { Args: { p_org_id: string }; Returns: boolean }
       is_platform_admin: { Args: never; Returns: boolean }
       is_valid_iana_timezone: { Args: { p_timezone: string }; Returns: boolean }
+      link_self_as_driver: {
+        Args: {
+          p_display_name: string
+          p_organization_id: string
+          p_phone?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["owner_driver_link_result"]
+        SetofOptions: {
+          from: "*"
+          to: "owner_driver_link_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       reassign_trip: {
         Args: {
           p_driver_id: string
@@ -1069,6 +1167,16 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "trip_transition_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      redeem_driver_invite: {
+        Args: { p_token: string }
+        Returns: Database["public"]["CompositeTypes"]["driver_invite_redemption_result"]
+        SetofOptions: {
+          from: "*"
+          to: "driver_invite_redemption_result"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -1097,6 +1205,22 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      revoke_driver_invite: { Args: { p_invite_id: string }; Returns: boolean }
+      signup_create_organization: {
+        Args: {
+          p_business_name: string
+          p_business_stage?: string
+          p_display_name: string
+          p_timezone?: string
+        }
+        Returns: Database["public"]["CompositeTypes"]["organization_signup_result"]
+        SetofOptions: {
+          from: "*"
+          to: "organization_signup_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
     }
     Enums: {
       [_ in never]: never
@@ -1113,6 +1237,25 @@ export type Database = {
         passenger_display_name: string | null
         vehicle_label: string | null
         vehicle_status: string | null
+      }
+      driver_invite_preview: {
+        organization_name: string | null
+        display_name: string | null
+        email: string | null
+        status: string | null
+      }
+      driver_invite_redemption_result: {
+        driver_id: string | null
+        organization_id: string | null
+        membership_created: boolean | null
+        driver_linked: boolean | null
+      }
+      driver_invite_result: {
+        invite_id: string | null
+        token: string | null
+        email: string | null
+        status: string | null
+        reused: boolean | null
       }
       driver_location_result: {
         location_id: string | null
@@ -1151,6 +1294,17 @@ export type Database = {
         assignment_ended_at: string | null
         end_reason: string | null
         trip_outcome: string | null
+      }
+      organization_signup_result: {
+        organization_id: string | null
+        membership_id: string | null
+        role: string | null
+        created: boolean | null
+      }
+      owner_driver_link_result: {
+        driver_id: string | null
+        organization_id: string | null
+        linked: boolean | null
       }
       trip_assignment_result: {
         trip_id: string | null

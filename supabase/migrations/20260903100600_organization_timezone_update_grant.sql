@@ -1,0 +1,22 @@
+-- P1-E3-S9 — a real, pre-existing gap found while building Business
+-- Basics (work item §6): `20260901100000_organization_operational_
+-- timezone.sql` (P1-E3-S2C) added `organizations.timezone`, backfilled
+-- it, and made it NOT NULL — but never granted `authenticated` UPDATE
+-- access to it at all. That was correct FOR THAT PHASE: no self-service
+-- feature existed yet that needed to change an organization's own
+-- timezone after creation (it was set once, at creation/seed time,
+-- never edited). This phase is the first to introduce a legitimate
+-- self-service need (the onboarding flow's own timezone selector) —
+-- confirmed as a real, reproducible "permission denied for table
+-- organizations" error via direct testing before this migration was
+-- written, not assumed.
+--
+-- Safe to grant now: `organizations_update_org_admin` already restricts
+-- this to the organization's own organization_admin
+-- (has_org_role(id, ['organization_admin'])), and
+-- `organizations_timezone_valid_iana`'s own CHECK constraint (backed by
+-- `is_valid_iana_timezone`, already EXECUTE-granted to authenticated)
+-- rejects anything that isn't a genuine IANA zone name regardless of
+-- what a client sends.
+
+grant update (timezone) on public.organizations to authenticated;

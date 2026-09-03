@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { getUser } from "@/lib/auth/session";
 import { isSafeRedirectPath } from "@/lib/auth/redirect";
 import { SignInForm } from "@/components/auth/SignInForm";
@@ -63,6 +64,13 @@ export default async function SignInPage({
         </p>
 
         <SignInForm next={next} />
+
+        <p className={cn(typography.bodySmall, "mt-6 text-center text-text-secondary")}>
+          New to Zenward?{" "}
+          <Link href="/sign-up" className="font-medium text-brand-interactive-teal">
+            Create an account
+          </Link>
+        </p>
       </div>
     </div>
   );

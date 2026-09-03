@@ -181,30 +181,70 @@ begin
 end $$;
 
 -- =============================================================================
--- No unintended write surface: `timezone` is NOT in the authenticated
--- column-level UPDATE grant (organizations remains name/status only for
--- ordinary roles — this phase deliberately does not build a timezone
--- self-service feature, work item §6).
+-- P1-E3-S9 update: the onboarding flow's own Business Basics step now
+-- legitimately needs an Organization Admin to set their OWN org's
+-- timezone (work item §6, "Timezone must be canonical because Trip
+-- scheduling depends on it" — collected at signup time, not hard-coded).
+-- 20260903100600_organization_timezone_update_grant.sql deliberately
+-- ADDS the column grant this test previously asserted did not exist —
+-- this test now verifies the NEW, correct boundary instead: an
+-- Organization Admin CAN update their own org's timezone, to a genuine
+-- IANA value only, and still CANNOT touch a foreign org's timezone
+-- (org-scoping is unchanged, only the same-org write itself is now
+-- permitted). The original value is restored at the end so later tests
+-- in this suite are unaffected.
 -- =============================================================================
 do $$
-declare v_failed boolean := false;
+declare v_succeeded boolean := false;
 begin
   set local role authenticated;
-  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1'; -- Org A admin (has UPDATE via organizations_update_org_admin)
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1'; -- Org A admin, own org
   begin
     update public.organizations set timezone = 'America/Chicago' where id = '10000000-0000-0000-0000-0000000000a1';
-    v_failed := true;
+    v_succeeded := true;
   exception
     when insufficient_privilege then
-      null; -- expected — no column grant exists for timezone
+      null;
   end;
   reset role;
-  if v_failed then
-    raise notice 'TEST TZ-NOWRITE-1: FAIL (an Organization Admin was able to UPDATE timezone — no column grant should exist)';
+  if v_succeeded then
+    raise notice 'TEST TZ-WRITE-1 (own org, valid IANA zone): PASS (Organization Admin can update their own org''s timezone)';
   else
-    raise notice 'TEST TZ-NOWRITE-1: PASS (Organization Admin cannot UPDATE timezone — column-level grant correctly excludes it)';
+    raise notice 'TEST TZ-WRITE-1 (own org, valid IANA zone): FAIL (expected success, UPDATE was denied)';
   end if;
 end $$;
+
+do $$
+declare v_denied boolean := false;
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '20000000-0000-0000-0000-0000000000a1'; -- Org A admin — NOT Org B's admin
+  begin
+    update public.organizations set timezone = 'America/Denver' where id = '10000000-0000-0000-0000-0000000000b1';
+  exception
+    when insufficient_privilege then
+      v_denied := true;
+  end;
+  reset role;
+  -- A foreign-org UPDATE is denied by the RLS `with check`, not the
+  -- column grant itself (the grant is role-wide, not org-scoped) — a
+  -- silent zero-row UPDATE is the same DENY outcome as an exception here,
+  -- so both count as PASS; only an actual foreign-org write is FAIL.
+  declare v_leaked text;
+  begin
+    select timezone into v_leaked from public.organizations where id = '10000000-0000-0000-0000-0000000000b1';
+    if v_leaked = 'America/Denver' then
+      raise notice 'TEST TZ-WRITE-2 (foreign org denied): FAIL (Org A admin changed Org B''s timezone)';
+    else
+      raise notice 'TEST TZ-WRITE-2 (foreign org denied): PASS (DENY — org-scoping unchanged)';
+    end if;
+  end;
+end $$;
+
+-- Restore Org A's original timezone so later tests in this suite (and
+-- any other suite run after it in the same reset cycle) see the
+-- unmodified seed value.
+update public.organizations set timezone = 'America/New_York' where id = '10000000-0000-0000-0000-0000000000a1';
 
 -- =============================================================================
 -- Validator function privilege: `authenticated` MUST be able to execute it

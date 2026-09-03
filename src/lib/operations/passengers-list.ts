@@ -6,6 +6,8 @@ export interface PassengersListRow {
   displayName: string;
   phone: string | null;
   status: string;
+  /** Carried through for the Edit dialog only (P1-E3-S9, work item §9) — never rendered as a directory table column, matching this file's own minimum-necessary display discipline. */
+  assistanceNotes: string | null;
 }
 
 export interface PassengersListResult {
@@ -30,7 +32,7 @@ export async function getPassengersList(organizationId: string, search?: string)
 
   let query = supabase
     .from("passengers")
-    .select("id, display_name, phone, status", { count: "exact" })
+    .select("id, display_name, phone, status, assistance_notes", { count: "exact" })
     .eq("organization_id", organizationId)
     .order("display_name", { ascending: true })
     .limit(PASSENGERS_LIST_LIMIT);
@@ -51,6 +53,7 @@ export async function getPassengersList(organizationId: string, search?: string)
       displayName: row.display_name,
       phone: row.phone,
       status: row.status,
+      assistanceNotes: row.assistance_notes,
     })),
     totalCount: count ?? data.length,
   };

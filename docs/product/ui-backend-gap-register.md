@@ -1,8 +1,8 @@
 # Zenward Platform — UI/Backend Gap Register
 
-**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S0A — Controlled Internal Trip Creation Boundary (GAP-1 and GAP-2 resolved)
-**Status:** Planning/documentation only, except GAP-1/GAP-2 below, which P1-E3-S0A closed with real migrations and tests — see docs/reports/P1-E3-S0A-controlled-trip-creation-report.txt.
-**Last updated:** 2026-08-31
+**Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S0A — Controlled Internal Trip Creation Boundary (GAP-1 and GAP-2 resolved), P1-E3-S8B1 (GAP-12 through GAP-15 found), P1-E3-S9 (GAP-12 through GAP-15 resolved, GAP-16 found)
+**Status:** GAP-1/GAP-2/GAP-12/GAP-13/GAP-14/GAP-15 all resolved with real migrations, RPCs, and tests — see the respective phase reports. GAP-16 is a deliberate, documented deferral.
+**Last updated:** 2026-09-03
 
 Every UI requirement from the 7 Stitch references that the current backend does not support, classified `BLOCKS P1-E3-S1` / `BLOCKS SPECIFIC SCREEN` / `DEFERRED` / `OPTIONAL`. Only gaps actually found by the reference analysis in [ui-data-action-map.md](./ui-data-action-map.md) are listed — nothing speculative.
 
@@ -120,37 +120,42 @@ Every UI requirement from the 7 Stitch references that the current backend does 
 - **Resolution this phase:** `AssignmentGrid` renders every Trip block at the same fixed width, positioned only by its real start time (`src/lib/operations/dispatch-grid.ts`, ZD-136). Not implemented as duration-proportional, not faked.
 - **Blocks:** Full Stitch-reference visual parity of the grid's block sizing only — the grid is otherwise fully functional.
 
-### GAP-12 — Passenger Edit/Deactivate — found P1-E3-S8B1
+### GAP-12 — Passenger Edit/Deactivate — found P1-E3-S8B1, **RESOLVED P1-E3-S9**
 
-- **Screen:** Passengers (new, real as of this phase)
-- **Finding:** `passengers_update_org_operations` (RLS) plus the narrowed `display_name, phone, assistance_notes, status` column grant already exist and are already safe (org+role-scoped, non-dangerous columns only) — inspected directly before deciding, not assumed. A future Edit/Deactivate flow needs no new RLS or migration, only a form and a Server Action.
-- **Severity:** Low — a real, working Add Passenger path exists; Edit/Deactivate is a genuine capability gap, not a security concern.
-- **Recommendation:** Build when there's real product need beyond pilot operations — the existing RLS is already the hard part, done.
-- **Blocks:** Nothing critical; a mis-entered Passenger name/phone currently has no in-app correction path (would need re-creation or direct DB access).
+- **Screen:** Passengers
+- **Finding:** `passengers_update_org_operations` (RLS) plus the narrowed `display_name, phone, assistance_notes, status` column grant already existed and were already safe (org+role-scoped, non-dangerous columns only) — inspected directly before deciding, not assumed. A future Edit/Deactivate flow needed no new RLS or migration, only a form and a Server Action.
+- **Resolution (P1-E3-S9):** Built exactly as anticipated — click a row on the Passengers screen to open `EditPassengerDialog` → `updatePassengerAction`, a direct UPDATE against the already-safe column grant. Deactivate is the same form's Status field, not a separate destructive control — the row is never deleted. See `docs/product/onboarding-data-map.md`.
+- **Blocks:** Nothing — closed.
 
-### GAP-13 — Facility Create/Edit — found P1-E3-S8B1
+### GAP-13 — Facility Create/Edit — found P1-E3-S8B1, **RESOLVED P1-E3-S9**
 
-- **Screen:** Facilities (new, real as of this phase)
-- **Finding:** `facilities_insert_org_operations`/`_update_org_operations` (RLS) already org+role-scoped and column-narrowed (`name, address_line1, address_line2, city, state, postal_code, status`). Read-only list built this phase; create/edit deliberately deferred for scope discipline (work item §39's own explicit fallback), not a safety concern.
-- **Severity:** Low.
-- **Recommendation:** Straightforward to add later — no RLS work needed.
-- **Blocks:** New Trip's Facility selector still only shows Facilities seeded/created outside the app (e.g. via `supabase/seed.sql` or a future migration) — there is currently no in-app way to add a new referring clinic.
+- **Screen:** Facilities
+- **Finding:** `facilities_insert_org_operations`/`_update_org_operations` (RLS) already org+role-scoped and column-narrowed (`name, address_line1, address_line2, city, state, postal_code, status`). Read-only list built at P1-E3-S8B1; create/edit deliberately deferred then for scope discipline.
+- **Resolution (P1-E3-S9):** `createFacilityAction`/`updateFacilityAction`, both direct RLS-protected mutations against the already-safe grant. "Add Facility" on the Facilities screen, and the SAME action reused (not duplicated) as the onboarding flow's own "First Facility" step. Facility remains a distinct entity from Organization throughout.
+- **Blocks:** Nothing — closed. New Trip's Facility selector now shows any Facility an operator creates in-app.
 
-### GAP-14 — Fleet (Vehicle) Create/Edit — found P1-E3-S8B1
+### GAP-14 — Fleet (Vehicle) Create/Edit — found P1-E3-S8B1, **RESOLVED P1-E3-S9**
 
-- **Screen:** Fleet (new, real as of this phase)
-- **Finding:** `vehicles_insert_org_admin`/`_update_org_admin` (RLS) already Organization-Admin-scoped and column-narrowed (`label, status`). Read-only list built this phase; create/edit deliberately deferred, same reasoning as GAP-13.
-- **Severity:** Low.
-- **Recommendation:** Straightforward to add later — no RLS work needed.
-- **Blocks:** No in-app way to add a new vehicle to the fleet yet.
+- **Screen:** Fleet
+- **Finding:** `vehicles_insert_org_admin`/`_update_org_admin` (RLS) already Organization-Admin-scoped and column-narrowed (`label, status`). Read-only list built at P1-E3-S8B1; create/edit deliberately deferred then, same reasoning as GAP-13.
+- **Resolution (P1-E3-S9):** `createVehicleAction`/`updateVehicleAction`, both direct RLS-protected mutations. "Add Vehicle" on the Fleet screen (click a row to edit), and the SAME action reused as the onboarding flow's own "First Vehicle" step. Only real schema fields (`label`, `status`) — no fabricated wheelchair/stretcher/ambulatory capability column, since the schema has none.
+- **Blocks:** Nothing — closed.
 
-### GAP-15 — Driver Onboarding (Driver + Membership + user invite) — found P1-E3-S8B1
+### GAP-15 — Driver Onboarding (Driver + Membership + user invite) — found P1-E3-S8B1, **RESOLVED P1-E3-S9**
 
-- **Screen:** Drivers (new, real as of this phase)
-- **Finding:** Unlike GAP-12/13/14, this is NOT merely a deferred form — Driver is not AuthUser/Membership, and no safe, coherent contract exists yet for inviting a new authenticated user, creating their Membership, AND linking a `drivers` row together. Building any part of this casually (e.g. a bare `drivers` INSERT with no linked user) would either fabricate a fake invite flow or risk creating orphaned auth users with no way to actually sign in.
-- **Severity:** Medium — this is real, expected pilot-onboarding functionality an operator will need, not a nice-to-have.
-- **Recommendation:** A dedicated future work item (P1-E3-S9, Driver/user invite flow, reviewed on its own — auth implications, not merely a CRUD form).
-- **Blocks:** Adding a new Driver to an organization currently requires direct database access (seed data or manual SQL) — there is no in-app path at all.
+- **Screen:** Drivers
+- **Finding:** Unlike GAP-12/13/14, this was NOT merely a deferred form — Driver is not AuthUser/Membership, and no safe, coherent contract existed for inviting a new authenticated user, creating their Membership, AND linking a `drivers` row together. Building any part of this casually (e.g. a bare `drivers` INSERT with no linked user) would have either fabricated a fake invite flow or risked creating orphaned auth users with no way to actually sign in.
+- **Resolution (P1-E3-S9):** A token-gated invite record (`driver_invites`), never admin-created credentials — the org admin creates an invite, the invitee signs up themselves through ordinary Supabase Auth with the matching email, then redeems the invite (`redeem_driver_invite`) to atomically get a `driver` Membership + linked Driver row. Full design, authorization boundaries, and the real `drivers.user_id` grant-narrowing this work also required: `docs/product/driver-invite-linkage-model.md`. Verified via 9 dedicated SQL tests plus a genuine two-process concurrency test (`driver_invite_concurrency_test.sh`) plus a full live browser redemption flow.
+- **Blocks:** Nothing — closed. Adding a new Driver to an organization is now a real, safe, self-service in-app path (`/operations/drivers` → Invite Driver).
+
+### GAP-16 — `business_stage`-driven navigation personalization — found P1-E3-S9, deliberately deferred
+
+- **Screen:** Operations sidebar (all screens)
+- **Finding:** Work item §12 ("progressive complexity") suggested a STARTING (1–2 vehicle) operator's navigation could emphasize "My Trips/Passengers/Facilities/Drive" over "Dispatch/Drivers/Fleet/Operations." This phase built the one genuinely-derived, safe piece of that idea (the conditional "Drive" item, gated on a real linked Driver row — `docs/product/owner-operator-mode.md`), but deliberately did NOT build a `business_stage`-keyed reordering/hiding of the existing 7-item nav.
+- **Severity:** Low — cosmetic/UX refinement, not a capability gap; every nav item already works identically for every business stage.
+- **Reason for deferral:** The exact UX shape (which items move where, whether any are hidden vs. reordered, at what vehicle-count threshold) was not specified precisely enough to build safely without real risk of regressing the already-tested, already-working navigation for every OTHER operator size, within this phase's own time budget.
+- **Recommendation:** A dedicated, narrowly-scoped future work item, with the exact target nav compositions for each business stage specified up front — not assumed or improvised here.
+- **Blocks:** Nothing structural — the full, identical navigation already works for every operator regardless of size.
 
 ---
 

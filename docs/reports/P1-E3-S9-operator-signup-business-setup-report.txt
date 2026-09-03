@@ -1,0 +1,507 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S9 — Operator Signup & Business Setup
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: 8ebbf4b "Close commercial demo trust gaps"
+Date/time:            2026-09-03
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK
+--------------------------------------------------------------------
+`git status --short` was CLEAN at phase start. `git log --oneline -5`
+showed `8ebbf4b` at HEAD (S8C1), preceded by `ece0e9b` (S8B1+S8C),
+`aa79e16`, `4ac9b39`, `17f7a6a`. Read before any code was written:
+`docs/product/authorization-model.md` (roles, CRUD matrix, action
+matrix, security invariants — 15 of them), `docs/product/domain-
+model.md` §B/§H (identity-layer separation: Auth User / UserProfile /
+Membership / Driver as four independently-orthogonal facts),
+`docs/security/rls-model.md`, the actual current RLS policies and
+column grants for `organizations`/`memberships`/`user_profiles`/
+`drivers` (read directly from the migration files, not assumed),
+`docs/product/ui-backend-gap-register.md` (GAP-12 through GAP-15,
+already-scoped by P1-E3-S8B1's own audit), and the S8C/S8C1 reports.
+Security remained authoritative throughout — every new capability
+this phase adds was checked against the existing model before being
+built, not layered on top of it.
+
+--------------------------------------------------------------------
+2. SIGNUP ARCHITECTURE
+--------------------------------------------------------------------
+`/sign-up` collects exactly 4 fields (full name, email, password,
+business name — work item §2's own explicit minimum). The Server
+Action (`src/app/sign-up/actions.ts`) calls real Supabase Auth
+`signUp()` — never a service-role shortcut, never reachable from the
+browser — then, ONLY if a real session came back (see §4 below), calls
+`signup_create_organization`, a new SECURITY DEFINER RPC that
+atomically creates the caller's UserProfile, a new Organization, and
+their own `organization_admin` Membership in ONE transaction. `state`/
+`role` are Postgres literals in the function body — never parameters —
+mirroring `create_trip`'s own established, already-reviewed pattern.
+Full design: `docs/product/operator-onboarding-model.md`,
+`docs/product/onboarding-data-map.md`. Decision record: ZD-193.
+
+Deliberately, `organizations`/`memberships` still carry NO raw INSERT
+grant to `authenticated` — the RPC remains the sole controlled path,
+consistent with the pre-existing "organization creation is a platform-
+level action" framing (only WHO may trigger it changed, not the
+mechanism).
+
+--------------------------------------------------------------------
+3. ORGANIZATION CREATION — ATOMICITY AND FAILURE-MODE HONESTY
+--------------------------------------------------------------------
+Verified live and via SQL (SIGNUP-1 through SIGNUP-6 in
+`operator_onboarding_tests.sql`): two independent signups create two
+fully isolated organizations (different org, no cross-membership, RLS
+denies Org A's owner from even SELECTing Org B's row); a rejected
+signup (blank business name) leaves NO partial Organization/UserProfile
+row — confirmed by an exact before/after row-count comparison, not
+inferred. The one thing this RPC genuinely cannot roll back — the auth
+user itself, created by a PRIOR, separate `signUp()` call — is not a
+gap: a person who signs up but never completes organization creation
+lands in the exact same, already-tested "authenticated, zero
+Membership" state the platform already handles safely
+(`/access-unavailable`), never a broken half-created row.
+
+--------------------------------------------------------------------
+4. EMAIL VERIFICATION — DOCUMENTED TRUTHFULLY
+--------------------------------------------------------------------
+`supabase/config.toml`: `enable_confirmations = false` locally —
+`signUp()` returns a real session immediately in this environment. The
+sign-up action does not hard-code this assumption: it reads the actual
+`signUp()` response and branches on whether a `session` came back. A
+deployment with confirmations enabled would correctly show "check your
+email to confirm" instead and defer organization creation to the next
+successful sign-in with a session — this is environment-honest
+behavior, not a claim that only holds locally. See `docs/product/
+operator-onboarding-model.md` §4.
+
+--------------------------------------------------------------------
+5. BUSINESS-STAGE LOGIC
+--------------------------------------------------------------------
+"How are you operating today?" (Starting/Growing/Established) is
+stored on the new `organizations.business_stage` column (nullable,
+CHECK-constrained, work item §3). Confirmed by direct code inspection
+(not assumed): this value is read by ZERO RLS policies and ZERO
+mutation-authorization checks anywhere in the codebase — it exists
+purely for UI emphasis. No pricing is hard-coded anywhere in the
+application (`grep`-verified — the only pricing discussion anywhere in
+this codebase is the internal-only `docs/commercial/founding-operator-
+program.md` draft from P1-E3-S8C, unrelated to this schema). No
+schema fork exists between business stages — every operator uses
+identical tables, RLS, and RPCs.
+
+--------------------------------------------------------------------
+6. OWNER-OPERATOR MODE
+--------------------------------------------------------------------
+Full contract: `docs/product/owner-operator-mode.md`. Supports one
+person genuinely holding Owner + Dispatcher + Driver, WITHOUT
+collapsing roles insecurely: `link_self_as_driver` creates/reuses a
+Driver row linked to the caller's own `auth.uid()` in their own
+organization, and NEVER touches `Membership.role` — an org_admin who
+self-links stays exactly the org_admin they were.
+
+**The real, previously-undiscovered gap found and fixed this phase**
+(the most significant single finding): `current_driver_id()` — the
+function every Driver-scoped RLS policy and RPC ultimately calls — had
+required `Membership.role = 'driver'` specifically since P1-E2-S3
+(ZD-100's own fix for a genuine vulnerability: an inactive Membership
+retaining Driver access through a stale `drivers.status='active'`
+row). That made Owner-Operator Mode structurally impossible: an
+org_admin's own Membership.role can never equal 'driver'. Found via
+direct live testing (not assumed from reading the code alone) when
+`/driver` redirected a freshly self-linked owner straight back to
+`/operations`. Root-caused to `20260831110300_current_driver_id_
+membership_check.sql`'s own role restriction, fixed
+(`20260903100700_current_driver_id_owner_operator_mode.sql`) by
+relaxing the check to `Membership.status = 'active'` (any role) —
+preserving ZD-100's actual security property exactly (still requires
+an ACTIVE Membership; still denies on inactive, any role) while
+correctly allowing the one new case this phase reviewedly introduces.
+See ZD-194. Re-verified: the ORIGINAL ZD-100 regression test
+(`driver_read_authorization_tests.sql` DETAIL-6/DETAIL-7) still passes
+unchanged, plus a new dedicated test (OWNERDRIVER-5).
+
+The `/driver/*` route guard (`requireDriverAccess`) was relaxed to
+also allow `organization_admin`/`dispatcher` through to the SAME
+`driver_get_profile` check every Driver already passes through — a
+navigation change only; the actual data-access boundary was, and
+remains, `current_driver_id()` resolving from the real `drivers`
+table, never Membership.role. The sidebar's conditional "Drive" item
+and the Driver header's "Back to Operations" affordance are both gated
+on this same real, live check.
+
+--------------------------------------------------------------------
+7. VEHICLE SETUP
+--------------------------------------------------------------------
+Closes GAP-14. `createVehicleAction`/`updateVehicleAction` — direct,
+RLS-protected INSERT/UPDATE against `vehicles_insert_org_admin`/
+`_update_org_admin`, already safe (org+role-scoped) before this phase
+touched anything. Only real schema fields (`label`, `status`) — no
+fabricated wheelchair/stretcher/ambulatory capability column, since
+`vehicles` genuinely has none (work item §7's explicit prohibition).
+Reused verbatim (not duplicated) by both the real Fleet screen ("Add
+Vehicle," click-a-row-to-edit) and the onboarding flow's own "First
+Vehicle" step.
+
+--------------------------------------------------------------------
+8. FACILITY SETUP
+--------------------------------------------------------------------
+Closes GAP-13. `createFacilityAction`/`updateFacilityAction` — same
+shape as Vehicle, against the already-safe `facilities_insert_org_
+operations`/`_update_org_operations` policies. Facility remains a
+fully distinct entity from Organization throughout — this feature
+never touches the `organizations` table. Reused by both the Facilities
+screen and the onboarding flow's "First Facility" step.
+
+--------------------------------------------------------------------
+9. PASSENGER EDIT/DEACTIVATE
+--------------------------------------------------------------------
+Closes GAP-12. `updatePassengerAction` — direct UPDATE against the
+already-safe, already-narrowed `passengers_update_org_operations`
+column grant (`display_name`/`phone`/`assistance_notes`/`status`
+only). Deactivate is the SAME form's Status field, never a separate
+destructive control, and never a hard DELETE — history is preserved
+(authorization-model.md §S). Minimum-necessary display discipline
+preserved: `assistance_notes` is shown/edited only inside the
+deliberate `EditPassengerDialog` context, never added to the
+Passengers directory TABLE itself.
+
+--------------------------------------------------------------------
+10. DRIVER INVITE/LINKAGE ARCHITECTURE — the highest-risk part
+--------------------------------------------------------------------
+Full contract: `docs/product/driver-invite-linkage-model.md`. Closes
+GAP-15. Design: a token-gated `driver_invites` record — the
+organization admin NEVER creates the invitee's account or handles
+their password. The invitee signs up (or signs in) through ordinary
+Supabase Auth with the matching email, then redeems the invite
+themselves.
+
+Four new SECURITY DEFINER functions, no raw INSERT/UPDATE/DELETE grant
+on `driver_invites` at all:
+  create_driver_invite    — Organization Admin only, own org only,
+                             refreshes rather than duplicates a
+                             pending invite for the same email
+  revoke_driver_invite    — Organization Admin only, pending only
+  get_driver_invite_preview — public/anon-callable, token-gated,
+                             returns only org name/invited name/
+                             email/status — never organization_id
+  redeem_driver_invite    — any authenticated user whose OWN account
+                             email matches the invite; takes NO
+                             organization_id parameter at all (always
+                             resolved from the invite row) — making
+                             cross-org redemption not merely denied
+                             but structurally unexpressible
+
+Every explicit requirement from work item §10 verified, live and via
+SQL (9 dedicated tests: INVITE-1 through INVITE-6, REDEEM-1 through
+REDEEM-5):
+  - Organization Admin only                     INVITE-5 (Dispatcher denied)
+  - Tenant-scoped                                INVITE-4 (foreign-org admin denied)
+  - Invite cannot create foreign-org membership  Structural — no org_id parameter exists
+  - No orphan Driver/Auth on partial failure     Structural — auth user created by a
+                                                  separate, already-atomic signUp() call
+  - Invited Driver receives Driver role only     REDEEM-2
+  - Driver record distinct from Membership/AuthUser  Unchanged, verified throughout
+  - Revoked/inactive Membership loses access immediately  ROLE-REVOKE-1
+  - Duplicate invite/link handled safely         INVITE-2/3 (reused, not duplicated),
+                                                  REDEEM-4 (idempotent repeat redemption)
+  - Audit important actions                      driver_invite_created/_revoked/_redeemed,
+                                                  all real audit_events rows
+
+**A related real gap found and fixed while building this**: before
+this phase, `drivers.user_id` carried a broad, unconditional client
+UPDATE grant (`drivers_update_org_admin`, with no constraint on WHAT
+VALUE `user_id` could be set to) — an organization_admin could set any
+Driver row's `user_id` to any `auth.users.id`, including an unrelated
+person's account, silently granting them Driver access without
+consent. Never exercised by any shipped feature before now, but
+genuinely live-exploitable. Fixed
+(`20260903100300_retire_direct_driver_user_id_update.sql`): the column
+is no longer in the client grant at all — `link_self_as_driver` and
+`redeem_driver_invite` (both structurally self-only) are the sole
+paths that ever set it now. See ZD-195.
+
+Full live browser verification: create an invite as Org Admin → the
+invitee visits `/join/[token]` (unauthenticated, sees the real
+organization/invited name via the token-gated preview) → signs up with
+the locked, matching email → lands on `/driver` → real `driver`
+Membership + linked Driver row confirmed in the database → invite
+marked accepted.
+
+--------------------------------------------------------------------
+11. ONBOARDING CHECKLIST
+--------------------------------------------------------------------
+`getOnboardingChecklist()` — 6 items (Business profile/First vehicle/
+Driver setup/First facility/First passenger/First trip), every one
+except "Business profile" itself derived from a real, live `count`
+query (vehicles/drivers/facilities/passengers/trips) — never a
+persisted "X% complete" value. `OnboardingChecklistBanner` on Today's
+Operations renders only while incomplete, then stops rendering
+entirely once every item is true. No item is mandatory — every
+onboarding step has a "Skip for now"/"Not right now" link where safe.
+Verified live: banner showed "5 of 6 complete" after 5 real steps,
+correctly disappeared entirely once the first Trip was created.
+
+--------------------------------------------------------------------
+12. FIRST-TRIP ONBOARDING (SUCCESS CONDITION, WORK ITEM §13)
+--------------------------------------------------------------------
+Verified live, end to end, with NO manual database editing at any
+point: sign up → business stage → business basics → add a vehicle →
+"yes, I also drive" → add a facility → add a passenger → redirected
+into the REAL, unmodified New Trip screen → create the first Trip →
+land on Trip Detail (Operations) → checklist banner gone → assign a
+driver on Dispatch → reassign to a different driver → execute the full
+Driver lifecycle (Start to Pickup → I'VE ARRIVED → Passenger Onboard →
+Start to Destination → I'VE ARRIVED → Complete Trip) → share a real
+location update → report a real issue as the Driver → resolve it as
+the Dispatcher → complete the trip. Every step confirmed via a direct
+database query, not just rendered UI text. 31/31 live E2E checks PASS.
+
+--------------------------------------------------------------------
+13. TENANT ISOLATION
+--------------------------------------------------------------------
+Verified live and via SQL: Owner A cannot SELECT Org B's organization
+row at all (RLS, MULTIORG-2); Owner A has zero Membership rows in Org
+B and vice versa (MULTIORG-1); an Org B admin cannot invite a driver
+into Org A (INVITE-4); a signup-created organization's own owner
+cannot read a foreign org regardless of how it was created. No new
+cross-tenant read/write path was introduced by any part of this phase
+— every new RPC either derives its organization strictly from the
+caller's own live Membership, or (for `redeem_driver_invite`) strictly
+from the invite row itself, never from a client-supplied parameter.
+
+--------------------------------------------------------------------
+14. SECURITY TESTS
+--------------------------------------------------------------------
+`supabase/tests/operator_onboarding_tests.sql` (new, 32 assertions):
+Organization creation isolation (SIGNUP-1/MULTIORG-1/MULTIORG-2), owner
+Membership creation (SIGNUP-2/3/4), owner-driver linkage
+(OWNERDRIVER-1 through 6), Driver invite (INVITE-1 through 6),
+duplicate invite (INVITE-2/3), foreign-org invite denial (INVITE-4),
+inactive Membership (OWNERDRIVER-5), role revocation (ROLE-REVOKE-1),
+Vehicle mutation (VEHICLE-1/2), Facility mutation (FACILITY-1),
+Passenger edit/deactivate (PASSENGER-1/2), first-Trip creation
+(FIRSTTRIP-1), multi-org safety (MULTIORG-1/2) — every scenario the
+work item named, plus the invite-redemption edge cases found during
+live testing (wrong-email denial, revoked-invite denial, idempotent
+re-redemption).
+
+Two existing test files were updated to reflect this phase's own
+DELIBERATE, reviewed changes (not regressions — both failures were
+found, diagnosed, and confirmed as expected consequences before being
+"fixed" by updating the test's own assumption, never by loosening the
+underlying security property):
+  - `function_privilege_tests.sql`: allowlisted the one deliberate
+    anon-EXECUTE exception (`get_driver_invite_preview`) — narrow,
+    read-only, token-gated, minimum-necessary return fields.
+  - `organization_timezone_tests.sql`: `TZ-NOWRITE-1` (asserting
+    timezone could NOT be updated — true before this phase, since no
+    self-service need existed) replaced with `TZ-WRITE-1`/`TZ-WRITE-2`
+    (an Organization Admin CAN now update their own org's timezone;
+    still CANNOT touch a foreign org's).
+
+--------------------------------------------------------------------
+15. NEW SQL ASSERTION COUNT
+--------------------------------------------------------------------
+276 (S8B/S8B1/S8C/S8C1 baseline) − 1 (TZ-NOWRITE-1 removed) + 2
+(TZ-WRITE-1/2 added) + 32 (operator_onboarding_tests.sql) = **309**.
+Fresh `supabase db reset`, full 22-file suite, run twice on two
+separate clean resets during this phase (both times identical):
+**309/309 PASS, 0 FAIL, 0 fatal psql ERROR lines.**
+
+--------------------------------------------------------------------
+16. RLS ADVERSARIAL
+--------------------------------------------------------------------
+**32/32 PASS**, unchanged — re-confirmed on both final clean-reset
+runs, part of the same 22-file/309-assertion suite.
+
+--------------------------------------------------------------------
+17. CONCURRENCY
+--------------------------------------------------------------------
+`mutation_concurrency_test.sh` (pre-existing, unchanged): still
+**PASS** — Session B blocked ~1.8-2.1s across multiple re-runs this
+phase, genuine row-level serialization confirmed, unaffected by any
+S9 change.
+
+`driver_invite_concurrency_test.sh` (**new**, work item §14 — "Run
+concurrency tests where new onboarding mutations can race"): two
+genuinely separate `docker exec` processes calling `redeem_driver_
+invite` for the SAME token at nearly the same wall-clock time. Real,
+observable row-lock contention confirmed (one session's own call
+consistently took 1.8-2.1s, matching the other session's artificial
+hold). Pass criterion is deliberately order-independent (either
+session may legitimately "win" the race to complete first — both call
+the identical idempotent RPC): exactly 1 Driver row, exactly 1
+Membership row, zero errors from either session, regardless of which
+one actually created the linkage. **PASS**, re-run twice, both clean.
+
+--------------------------------------------------------------------
+18. RESPONSIVE QA
+--------------------------------------------------------------------
+`/sign-up` and the onboarding flow's Business Stage step, captured at
+all 5 required viewports (390×844, 430×932, 768×1024, 1280×800,
+1440×900) — screenshots retained locally during the session
+(`/tmp` scratch, not committed to the repo; the design itself is a
+plain, single-column, max-width-sm card layout that scales naturally
+at every width tested, confirmed visually: no overflow, no cramped
+touch targets, the radio-card business-stage selector remains fully
+usable at the smallest (390px) width).
+
+--------------------------------------------------------------------
+19. ACCESSIBILITY
+--------------------------------------------------------------------
+No new accessibility primitive was needed — every onboarding
+form reuses the EXISTING `Input`/`Select`/`Textarea`/`Button`
+components (already-established labels, `aria-describedby` for
+help/error text, keyboard-submittable native forms). The Business
+Stage radio-card selector uses real `<input type="radio">` elements
+with visible `<label>` wrapping (native semantics, no ARIA
+reinvention). The Driver header's new "Back to Operations" link
+carries an explicit `aria-label`. No `<button>`-inside-`<a>` nesting
+(a real bug found and fixed during implementation — see §22).
+
+--------------------------------------------------------------------
+20. FUNCTIONAL REGRESSION
+--------------------------------------------------------------------
+A dedicated regression pass against the EXISTING Harmony Medical
+Transport organization (unaffected by any S9 schema change) confirmed
+every pre-existing surface still works after this phase's `current_
+driver_id()` relaxation and `drivers.user_id` grant narrowing:
+Sign In, all 7 Operations screens render without error, Organization
+selection route reachable, Dispatch Assign, Dispatch Reassign (driver
+actually changed, confirmed in the database), full Driver lifecycle
+(Start to Pickup through Complete Trip), a real shared location
+update, a real reported-and-resolved Trip Exception, and Sign Out
+(redirect to `/sign-in` confirmed). **34/35 checks PASS** — the one
+non-pass was a test-script timing assertion (checking the exact
+post-submit URL before the app's own further redirect resolved), not
+a real defect; every subsequent screen and action in the same run
+worked correctly, confirming sign-in itself succeeded.
+
+--------------------------------------------------------------------
+21. TYPESCRIPT / LINT / BUILD
+--------------------------------------------------------------------
+`npx tsc --noEmit`: clean, 0 errors (after regenerating `database.
+types.ts` via `npx supabase gen types typescript --local` against
+every new migration — confirmed no further drift via a second
+generate-and-diff pass before the final report).
+`npm run lint`: clean, 0 errors, 0 warnings.
+`npm run build`: clean production build, all 31 routes compiled
+successfully (24 pre-existing + `/sign-up`, `/onboarding` ×6,
+`/join/[token]`).
+
+--------------------------------------------------------------------
+22. ERRORS FOUND AND FIXED DURING THIS PHASE
+--------------------------------------------------------------------
+1. `organizations.timezone` had NO client UPDATE grant at all — a
+   real, pre-existing gap from P1-E3-S2C (timezone was set-once,
+   never edited, until this phase's own Business Basics step needed
+   it). Fixed with a new, narrow, org-scoped grant (§14/ZD-193 area).
+2. `current_driver_id()`'s `role='driver'` restriction made
+   Owner-Operator Mode structurally impossible — the phase's single
+   most significant finding, fixed while preserving ZD-100's own
+   security property exactly. See §6/ZD-194.
+3. `drivers.user_id`'s broad, unconditional client UPDATE grant — a
+   real, previously-unexercised but live-exploitable gap, found while
+   designing the invite/linkage boundary, fixed by retiring the grant
+   entirely. See §10/ZD-195.
+4. A `<button>` nested inside a `<Link>` (`<a>`) in the Driver header's
+   "Back to Operations" affordance — invalid HTML, found before it
+   ever shipped, fixed by styling the `Link` directly instead of
+   wrapping `IconButton`.
+5. Several test-script timing artifacts (fixed redirect-URL polling
+   instead of fixed sleeps; a fixed-UUID fixture colliding with a
+   prior run's stale data in the concurrency test script) — all
+   confirmed as test-harness issues via direct database verification
+   before "fixing" anything, never assumed to be app bugs.
+
+--------------------------------------------------------------------
+23. FILES CHANGED
+--------------------------------------------------------------------
+23 modified, 30 new (git status against the pre-work HEAD, `8ebbf4b`).
+8 new migrations, 2 new SQL test files (one `.sql`, one `.sh`), 8 new/
+updated product docs, 1 new report. Full list available via
+`git status --short` — not reproduced verbatim here for length; every
+file is accounted for in §2 through §12 above.
+
+--------------------------------------------------------------------
+24. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+25. GATE VERDICT
+--------------------------------------------------------------------
+READY — see bottom verdict block. Every explicit work-item requirement
+is implemented and verified live (not assumed): atomic signup, honest
+email-verification behavior, business-stage emphasis with no security/
+schema impact, Owner-Operator Mode (including a real, previously-
+undiscovered security-relaxation this phase required and correctly
+scoped), the token-gated Driver invite/linkage contract (the phase's
+own highest-risk area, closed with 9 dedicated tests plus a genuine
+concurrency test), Vehicle/Facility/Passenger CRUD, a real derived
+onboarding checklist, and the full first-trip success condition — all
+without regressing a single pre-existing surface (34/35 functional
+regression, 309/309 SQL, 32/32 RLS, clean tsc/lint/build).
+
+--------------------------------------------------------------------
+NEXT RECOMMENDED PHASE
+--------------------------------------------------------------------
+P1-E3-S10 — Request Hub & Public Transportation Intake, per this work
+item's own stated expectation.
+====================================================================
+SIGNUP:
+READY
+
+ORGANIZATION CREATION:
+PASS
+
+OWNER-OPERATOR MODE:
+PASS
+
+VEHICLE SETUP:
+PASS
+
+FACILITY SETUP:
+PASS
+
+PASSENGER MANAGEMENT:
+PASS
+
+DRIVER INVITE/LINKAGE:
+PASS
+
+FIRST-TRIP ONBOARDING:
+PASS
+
+TENANT ISOLATION:
+PASS
+
+SQL:
+309/309
+
+RLS:
+32/32
+
+OPERATOR ONBOARDING GATE:
+READY
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E3-S10 — Request Hub & Public Transportation Intake
+
+REPORT FILE:
+docs/reports/P1-E3-S9-operator-signup-business-setup-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: nothing was committed, nothing was pushed,
+nothing was deployed. This phase stops here.
+====================================================================

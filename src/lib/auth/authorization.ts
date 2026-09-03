@@ -47,6 +47,38 @@ export async function requireOperationsAccess(currentPath: string): Promise<Orga
 }
 
 /**
+ * Route guard for /onboarding/* (P1-E3-S9). Deliberately reuses the exact
+ * same resolution/role logic as `requireOperationsAccess` rather than a
+ * separate "just signed up" concept — a brand-new organization's creator
+ * already has exactly one active Membership (organization_admin) the
+ * instant `signup_create_organization` returns, so the ordinary
+ * single-Membership auto-resolution in `resolveOrganizationContext`
+ * already does the right thing with no special-casing.
+ */
+export async function requireOnboardingAccess(currentPath: string): Promise<OrganizationContext> {
+  await requireUser(`/sign-in?next=${encodeURIComponent(currentPath)}`);
+
+  const resolution = await resolveOrganizationContext();
+
+  if (resolution.status === "none") {
+    redirect("/access-unavailable");
+  }
+  if (resolution.status === "select-required") {
+    selectOrganizationRedirect(currentPath);
+  }
+
+  const { context } = resolution;
+  if (!OPERATIONS_ROLES.has(context.role)) {
+    if (context.role === "driver") {
+      redirect("/driver");
+    }
+    redirect("/access-unavailable");
+  }
+
+  return context;
+}
+
+/**
  * Route guard for /driver/*. Same auth/org-context resolution as
  * Operations, then requires role=driver for the resolved organization,
  * then confirms a genuinely linked, active Driver record by calling the
@@ -58,6 +90,19 @@ export async function requireOperationsAccess(currentPath: string): Promise<Orga
  * /driver's own guard would loop, work item §60) — it returns a
  * discriminated "link-missing" result so the layout can render a safe,
  * non-crashing account-configuration state inline instead.
+ *
+ * P1-E3-S9 (work item §4, Owner-Operator Mode): an organization_admin or
+ * dispatcher who has ALSO linked themselves as a Driver in this same
+ * organization (`link_self_as_driver`/`redeem_driver_invite`) may reach
+ * /driver/* too — this is a NAVIGATION relaxation only, not a security
+ * one. The actual data access this route eventually performs is still
+ * gated entirely by `driver_get_profile`/`current_driver_id()` resolving
+ * from the real `drivers` table (organization_id + user_id + status —
+ * never Membership.role), exactly as before; this guard simply stops
+ * redirecting a dual-hat person away before that check ever runs.
+ * Operations authorization (Membership.role) is completely untouched —
+ * an Operations-role person with NO linked Driver row is redirected to
+ * /operations exactly as before, unchanged.
  */
 export async function requireDriverAccess(currentPath: string): Promise<DriverAccessResult> {
   await requireUser(`/sign-in?next=${encodeURIComponent(currentPath)}`);
@@ -72,10 +117,8 @@ export async function requireDriverAccess(currentPath: string): Promise<DriverAc
   }
 
   const { context } = resolution;
-  if (context.role !== "driver") {
-    if (OPERATIONS_ROLES.has(context.role)) {
-      redirect("/operations");
-    }
+  const isOperationsRole = OPERATIONS_ROLES.has(context.role);
+  if (context.role !== "driver" && !isOperationsRole) {
     redirect("/access-unavailable");
   }
 
@@ -85,6 +128,13 @@ export async function requireDriverAccess(currentPath: string): Promise<DriverAc
   });
 
   if (error || !data || !data.driver_id || !data.display_name) {
+    // An Operations-role person with no linked Driver row has no reason
+    // to be here at all (unlike a pure Driver Membership with a missing
+    // link, which is a real account-setup gap worth showing inline) —
+    // send them back to their real home surface.
+    if (isOperationsRole) {
+      redirect("/operations");
+    }
     return { status: "link-missing", organization: context };
   }
 

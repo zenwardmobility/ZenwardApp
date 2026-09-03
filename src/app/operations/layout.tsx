@@ -4,6 +4,7 @@ import { getCurrentPathname } from "@/lib/auth/current-path";
 import { getUser } from "@/lib/auth/session";
 import { getDisplayName } from "@/lib/auth/profile";
 import { getActiveMemberships } from "@/lib/auth/membership";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { OperationsLayoutClient } from "@/components/operations/OperationsLayoutClient";
 
 /**
@@ -29,11 +30,26 @@ export default async function OperationsLayout({ children }: { children: ReactNo
   const memberships = await getActiveMemberships();
   const hasMultipleOrganizations = memberships.length > 1;
 
+  // Owner-Operator Mode (P1-E3-S9, work item §4/§12): a cheap, real check
+  // — does THIS person also have a linked, active Driver row in THIS
+  // organization? Never inferred from Membership.role (which stays
+  // organization_admin/dispatcher, untouched) — resolved the same way
+  // every Driver-scoped RLS/RPC already does, via the drivers table
+  // itself. Purely a navigation-affordance signal (whether to show
+  // "Drive" in the sidebar); requireDriverAccess independently re-checks
+  // this exact fact server-side regardless of what this renders.
+  const supabase = await createServerSupabaseClient();
+  const { data: linkedDriverId } = await supabase.rpc("current_driver_id", {
+    p_org_id: organization.organizationId,
+  });
+  const hasLinkedDriverProfile = Boolean(linkedDriverId);
+
   return (
     <OperationsLayoutClient
       organization={organization}
       dispatcherDisplayName={dispatcherDisplayName}
       hasMultipleOrganizations={hasMultipleOrganizations}
+      hasLinkedDriverProfile={hasLinkedDriverProfile}
     >
       {children}
     </OperationsLayoutClient>

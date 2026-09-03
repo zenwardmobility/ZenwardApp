@@ -40,6 +40,8 @@ export interface OperationsLayoutClientProps {
   dispatcherDisplayName: string;
   /** Real fact from a live `getActiveMemberships()` call (P1-E3-S8B1) — gates the account menu's "Switch Organization" item, never assumed. */
   hasMultipleOrganizations: boolean;
+  /** Real fact from a live `current_driver_id()` call (P1-E3-S9, Owner-Operator Mode) — gates the sidebar's conditional "Drive" item. Never inferred from Membership.role. */
+  hasLinkedDriverProfile: boolean;
   children: ReactNode;
 }
 
@@ -194,6 +196,7 @@ export function OperationsLayoutClient({
   organization,
   dispatcherDisplayName,
   hasMultipleOrganizations,
+  hasLinkedDriverProfile,
   children,
 }: OperationsLayoutClientProps) {
   const pathname = usePathname();
@@ -205,6 +208,7 @@ export function OperationsLayoutClient({
         orgUnit: ROLE_LABEL[organization.role],
         dispatcherName: dispatcherDisplayName,
         dispatcherRole: ROLE_LABEL[organization.role],
+        hasLinkedDriverProfile,
       }}
       header={buildHeaderProps(pathname, organization, dispatcherDisplayName, hasMultipleOrganizations)}
     >
