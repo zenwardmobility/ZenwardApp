@@ -30,14 +30,28 @@ function stringField(formData: FormData, name: string): string {
  * organization_admin Membership in one transaction (docs/product/
  * operator-onboarding-model.md).
  *
+ * When email confirmation IS required (`needsEmailConfirmation: true`),
+ * full name/business name are NOT lost — they were just passed as
+ * `signUp()`'s own `options.data` above, persisted on the auth.users row
+ * itself independent of confirmation state. `/sign-in`'s own Server
+ * Action calls `complete_pending_signup()` after every successful
+ * sign-in, which performs this SAME organization creation using those
+ * persisted values the first time a real session exists (P1-E4-S0A §4/§8
+ * — this phase's own fix for a real gap: before it existed, a person who
+ * had to confirm their email landed on `/access-unavailable` with their
+ * original signup details permanently gone). See docs/product/
+ * operator-onboarding-model.md §4A.
+ *
  * Failure-mode honesty (work item §2's own "failed signup does not leave
  * a broken partial state"): if `signUp()` succeeds but the RPC fails for
  * any reason, the person is left with a real, valid, harmless account and
  * NO organization — the exact same "authenticated, zero Membership" state
  * `/access-unavailable` already handles for other fixtures. Nothing is
- * silently half-created; they can retry signup (a second
- * `signup_create_organization` call from an already-authenticated session
- * is safe and non-destructive) or contact support.
+ * silently half-created; since their full name/business name are already
+ * persisted in `auth.users.raw_user_meta_data` (above), signing in again
+ * safely retries `signup_create_organization` from those same values via
+ * `complete_pending_signup()` — the same continuation the email-
+ * confirmation case uses — or they can contact support.
  */
 export async function signUpAction(_prevState: SignUpState, formData: FormData): Promise<SignUpState> {
   const fullName = stringField(formData, "fullName");
@@ -57,6 +71,19 @@ export async function signUpAction(_prevState: SignUpState, formData: FormData):
   const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
     email,
     password,
+    options: {
+      // Persisted on the auth.users row itself (Supabase's own
+      // `raw_user_meta_data`), regardless of whether email confirmation
+      // is required — unlike a local variable in this Server Action,
+      // this survives the confirmation boundary. `complete_pending_
+      // signup()` reads these back once a real session first exists
+      // (P1-E4-S0A §8/§4 — see docs/product/operator-onboarding-model.md
+      // §4A for the full architecture).
+      data: {
+        pending_full_name: fullName,
+        pending_business_name: businessName,
+      },
+    },
   });
 
   if (signUpError) {

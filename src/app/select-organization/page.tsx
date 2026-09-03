@@ -28,7 +28,10 @@ export default async function SelectOrganizationPage({
   const resolution = await resolveOrganizationContext();
 
   if (resolution.status === "none") {
-    redirect("/access-unavailable");
+    // P1-E4-S0A1 §6 — same reasoning as the route guards in
+    // src/lib/auth/authorization.ts: route through the pending-signup/
+    // invite continuation rather than straight to `/access-unavailable`.
+    redirect("/complete-signup");
   }
   if (resolution.status === "single" || resolution.status === "selected") {
     redirect(next ?? "/");

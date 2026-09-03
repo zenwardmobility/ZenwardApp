@@ -1,0 +1,522 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E4-S0A1 — Cloud Signup Continuation Fix
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT (fix built + fully proven);
+                       VERCEL STAGING + SUPABASE STAGING (reachability
+                       and rate-limit facts confirmed; fix NOT yet
+                       deployed there — see §10/§30)
+Git branch:           main
+Git HEAD at start:    77c5566 "Implement operator signup and business onboarding"
+Date/time:            2026-09-03
+====================================================================
+
+--------------------------------------------------------------------
+1. GIT STATE
+--------------------------------------------------------------------
+`git status --short` at phase start showed only the carry-over,
+uncommitted P1-E4-S0/S0A work (3 modified product docs, `.tmp-qa/`
+scratch, the S0 report) — no unexplained changes. `git log --oneline`
+HEAD was `77c5566` (P1-E3-S9), unchanged since S9/S0/S0A — nothing has
+been committed by this session at any point; per every phase's own
+explicit instruction, nothing is committed or pushed by this report
+either.
+
+--------------------------------------------------------------------
+2. REPRODUCING THE REPORTED CLOUD FAILURE
+--------------------------------------------------------------------
+Read the actual current source (not assumed from docs) for the full
+signup path: `/sign-up`'s Server Action, `/join/[token]`'s Server
+Action, `signup_create_organization`, root `/` routing, and
+`/access-unavailable`. Found the exact mechanism, confirmed by
+tracing the code (not by asking the deployed app, which required a
+real inbox and rate-limited email — see §8):
+
+`src/app/sign-up/actions.ts` called `signUp({ email, password })`
+with NO metadata. `fullName`/`businessName` existed only as local
+variables inside that one Server Action invocation. When Supabase
+Auth requires email confirmation, `signUp()` returns no session — the
+action returned `needsEmailConfirmation: true` and those two values
+were gone, never persisted anywhere. The person who later confirms
+their email and signs in reaches `/` with a real session and zero
+Memberships → `resolveOrganizationContext()` returns `status: "none"`
+→ (before this phase) straight to `/access-unavailable`, a dead end
+offering only Sign Out. This exactly matches the reported failure —
+confirmed as the root cause by reading the code, not inferred.
+
+The same class of bug existed in `/join/[token]`'s Driver-invite
+signup (§7 below): the invite `token` was likewise only a local
+Server Action variable, lost the same way.
+
+--------------------------------------------------------------------
+3. ARCHITECTURE OF THE FIX
+--------------------------------------------------------------------
+Matches the work item's own preferred architecture:
+
+  Supabase Auth signUp()
+    → pending signup intent persisted in user_metadata (NOT authority)
+    → email confirmation
+    → HTTPS callback (Supabase's own /auth/v1/verify → Site URL)
+    → authenticated completion route (Route Handler, not a page — §5)
+    → UserProfile + Organization + organization_admin Membership
+    → onboarding
+
+**What's persisted, and why it's safe (work item §4 — "acceptable to
+store non-sensitive onboarding intent... metadata is never
+authorization"):** `signUp()`'s `options.data` now carries
+`pending_full_name`/`pending_business_name` (operator signup, in
+`src/app/sign-up/actions.ts`) or `pending_driver_invite_token`
+(+`pending_full_name`) for Driver-invite signup, in
+`src/app/join/[token]/actions.ts`. Supabase persists this on the
+`auth.users` row itself (`raw_user_meta_data`), independent of
+confirmation state. This is plain display/intent data — the role
+granted (`organization_admin`, always) and the actual Organization/
+Membership identity are still derived entirely server-side from
+`auth.uid()` inside SECURITY DEFINER RPCs. Metadata is READ to decide
+WHICH RPC to call; it never grants privilege by itself, and nothing
+in this design trusts a client-supplied user_id, organization_id, or
+role — full detail in `docs/product/operator-onboarding-model.md`
+§4A and `docs/product/driver-invite-linkage-model.md` §1A.
+
+--------------------------------------------------------------------
+4. ROOT CAUSE OF WHY FULL NAME/BUSINESS NAME/INTENT WERE LOST
+--------------------------------------------------------------------
+See §2. The precise mechanism: `signUp()`'s local-variable-only
+values never survive past the single Server Action invocation that
+received them, and no other code path ever reads them again. Fixed
+by moving them onto Supabase's own persistent `auth.users` row at the
+moment of signup — the earliest point they can be captured, and a
+storage location that survives the confirmation boundary by
+construction (Supabase itself manages it, not this application).
+
+--------------------------------------------------------------------
+5. THE CONTINUATION ROUTE — AND A REAL FRAMEWORK BUG FOUND BUILDING IT
+--------------------------------------------------------------------
+`/complete-signup` (`src/app/complete-signup/route.ts`) is the one
+authoritative continuation point. Root `/` now routes every
+authenticated, zero-Membership visitor here — not straight to
+`/access-unavailable` — because a real session can come to exist
+WITHOUT the person ever submitting `/sign-in`'s own form: Supabase's
+confirmation-link redirect (`/auth/v1/verify` → Site URL) is exactly
+that path. `requireOperationsAccess`/`requireOnboardingAccess`/
+`requireDriverAccess`/`/select-organization` were ALSO updated
+(`src/lib/auth/authorization.ts`, `src/app/select-organization/
+page.tsx`) to route their own "zero Membership" cases through
+`/complete-signup` first — closing the same gap for a deep link
+(a bookmark, an already-open tab) reached before ever visiting `/`.
+
+**A genuine Next.js App Router bug found and designed around, not
+papered over:** an earlier version of this fix put the identical
+routing/completion logic in a Server Component page
+(`complete-signup/page.tsx`). Live local testing (a REAL Mailpit-
+delivered confirmation email, a real link click, then sign-in — not
+assumed) showed: the mutation (Organization/Membership creation)
+succeeded server-side EVERY time, confirmed directly against the
+database — but the page's own `redirect("/onboarding")` call,
+issued from a chained client-router navigation after an internal
+`await` for that mutating RPC, was silently not followed by the
+browser. The on-screen URL stayed stuck at `/complete-signup`
+indefinitely (verified via a 15-poll, 6-second wait — no change);
+only a hard reload of that same URL then correctly redirected onward.
+Fixed by moving the logic to a Route Handler (`route.ts`), which
+always returns a real HTTP redirect response with a `Location`
+header — the well-trodden path Next's client-side navigation
+reliably follows. Recorded as ZD-200 (durable pattern for any future
+similar flow).
+
+A second, related issue found the same way: Next.js's OWN dev-mode
+navigation fired two concurrent GET requests to `/complete-signup`
+for one sign-in (observed directly in the dev server's request log).
+Since `complete_pending_signup()` is idempotent, this created the
+Organization/Membership exactly once regardless — but the FIRST
+version of the destination logic ("did *this* request create it? →
+onboarding, else → operations") meant the losing, second request
+could redirect a genuinely brand-new owner straight to a bare
+Operations screen, skipping onboarding entirely. Fixed by deciding
+the destination from the organization's own `business_stage` (still
+`null` only for a never-onboarded org) instead of from which request
+happened to win the race — recorded as ZD-201. Re-verified after the
+fix: the same race, reproduced again, correctly lands on `/onboarding`
+from either request. Also verified this specific race is a dev-mode-
+only Next.js characteristic — a production build (`next build` +
+`next start`) was separately tested (§9) and reached `/onboarding`
+directly, exactly once, with no stuck intermediate state.
+
+--------------------------------------------------------------------
+6. IDEMPOTENCY — EXACTLY ONCE, NOT "WHICHEVER REQUEST GOT THERE FIRST"
+--------------------------------------------------------------------
+`signup_create_organization` is DELIBERATELY non-idempotent by its
+own S9-era design (a second call is a legitimate second business —
+unchanged, still true, still correct for that case). The
+continuation therefore needed its OWN exactly-once gate, not a thin
+wrapper: two new SECURITY DEFINER RPCs
+(`supabase/migrations/20260903110000_complete_pending_signup.sql`):
+
+  complete_pending_signup()
+    - pg_advisory_xact_lock keyed by the caller's own auth.uid() —
+      serializes concurrent calls from the SAME person (two tabs, a
+      double sign-in, the dev-mode race in §5).
+    - If the caller already holds ANY Membership → safe no-op
+      (created: false). Covers every repeat call after the first
+      success, and anyone who already has an org through another path.
+    - Reads pending_full_name/pending_business_name from
+      auth.users.raw_user_meta_data, calls signup_create_organization
+      with them exactly once.
+
+  complete_pending_signup_manual(full_name, business_name)
+    - Same lock + Membership guard, caller-supplied values instead of
+      metadata — backs the explicit recovery form (§9 below).
+
+Both verified via 8 new SQL tests (SIGNUPCONT-1 through 8, in
+`supabase/tests/operator_onboarding_tests.sql`) AND via live local
+browser runs, including a genuine concurrent-request race (§5) —
+Organization/Membership/UserProfile confirmed created EXACTLY ONCE
+via direct database query in every run, never zero, never two.
+
+--------------------------------------------------------------------
+7. DRIVER INVITE CONFIRMATION — AUDITED AND FIXED SEPARATELY
+--------------------------------------------------------------------
+`/join/[token]`'s `joinSignUpAction` had the identical bug: `token`
+was only a local variable, lost the moment `signUp()` returned no
+session. Fixed the same way — `options.data.pending_driver_invite_
+token` (+ `pending_full_name`, for a parity fix below) persisted at
+signUp() time. `/complete-signup` checks for this token FIRST, before
+ever looking at operator-signup metadata:
+  - Present → calls `redeem_driver_invite(token)` (unchanged,
+    already-idempotent RPC from S9). Success → `/driver`.
+  - Failure (revoked/stale/wrong-email/any other denial
+    `redeem_driver_invite` already enforces) → `/access-unavailable`
+    — deliberately NEVER the operator organization-creation form.
+    Verified structurally: the driver-invite branch returns before
+    the operator-metadata branch is ever reached in the same request.
+
+**A related, smaller, pre-existing gap found and fixed while
+auditing this (not newly introduced):** `/join/[token]`'s own
+pre-confirmation `user_profiles` upsert silently failed (no session
+yet to satisfy `user_profiles_insert_own`'s self-only RLS check,
+error never checked) — meaning a confirmed Driver invitee's
+`user_profiles.display_name` stayed unset. `drivers.display_name`
+itself (the Driver-facing source of truth, set from the admin's own
+invite) was NEVER affected by this — confirmed by reading
+`redeem_driver_invite`'s own INSERT, which sources `display_name`
+from the invite row, never `user_profiles`. Fixed for parity anyway:
+`/complete-signup`'s driver-invite branch retries the
+`user_profiles` upsert now that a real session exists.
+
+Full live local proof (`.tmp-qa/join-confirmation-e2e.mjs`, a real
+Mailpit-delivered confirmation email and a real link click): a
+Driver invite created as Org Admin → invitee signs up at
+`/join/[token]` → "check your email" shown → real confirmation email
+received → link followed → sign-in → `/driver` reached (confirmed
+via direct DB query after a page-timing artifact on the very first
+check — re-verified: `/operations` attempt correctly bounced back to
+`/driver`, proving the Membership+redemption succeeded) →
+`drivers.display_name = 'DI Target Driver'` (admin-specified, correct)
+→ `user_profiles.display_name = 'DI Target Driver Real Name'` (the
+parity fix, correct).
+
+--------------------------------------------------------------------
+8. EMAIL CONFIRMATION — LOCAL: FULLY PROVEN. CLOUD: RATE-LIMITED
+--------------------------------------------------------------------
+**Local (Mailpit, no rate limit) — the authoritative proof of the
+fix itself:** `supabase/config.toml`'s `enable_confirmations` was
+deliberately flipped to `true` for controlled local testing (per this
+phase's own instruction NOT to disable confirmations to force a pass
+— this is the opposite: temporarily ENABLING the real gate locally,
+purely to exercise it with a real email, then reverted before every
+regression run — see §12). Full chain proven end to end, 7/7 checks,
+clean run (`.tmp-qa/local-confirmation-e2e.mjs`):
+`/sign-up` → "Check your email to confirm your account" shown → real
+confirmation email received in Mailpit → real HTTPS confirmation
+link followed → sign in → `/onboarding` reached (continuation fired)
+→ refreshing `/onboarding` does not bounce out or duplicate → sign
+out → sign back in → lands on `/operations` (not re-onboarded, not
+duplicated). Verified via direct database query: exactly 1
+Organization, 1 Membership, 1 UserProfile. Re-run 9 total times
+across this phase (including the race-condition and production-build
+checks in §5/§9) — every run's final database state was exactly-once,
+zero exceptions.
+
+**Cloud (Supabase staging project, ref `wyocbivzgrbekuyqdfts`) —
+directly tested, genuinely rate-limited, NOT a defect in this fix:**
+A raw `POST /auth/v1/signup` against the staging project's own Auth
+API (bypassing the app entirely — no code from this phase involved)
+returned `{"code":429,"error_code":"over_email_send_rate_limit",
+"msg":"email rate limit exceeded"}`, both on first discovery and on a
+re-check roughly two hours later. This is Supabase's own built-in
+email sender's default, test-appropriate-only sending quota — already
+flagged as a known risk in the P1-E4-S0 report, now directly
+confirmed, not merely anticipated. The rate limit is a staging-
+PROJECT configuration fact (no custom SMTP provider attached),
+entirely independent of whether this phase's fix is even deployed —
+it would have blocked testing the ORIGINAL buggy code too. Not worked
+around: no confirmations were disabled, no rate limit was bypassed.
+See `docs/deployment/staging-auth-configuration.md` §Email
+confirmation reality for the full detail and the recommended fix
+(configure a real SMTP provider).
+
+--------------------------------------------------------------------
+9. UNCONFIRMED ACCESS — DENIED, AT TWO INDEPENDENT LAYERS
+--------------------------------------------------------------------
+Verified directly, not assumed: a fresh, deliberately UNCONFIRMED
+signup (`confirmed_at: undefined`), then a direct `POST /auth/v1/
+token?grant_type=password` against the local Auth API returned
+`{"code":400,"error_code":"email_not_confirmed","msg":"Email not
+confirmed"}` — Supabase's OWN Auth layer refuses to issue a session
+at all for an unconfirmed user; this is not merely an application-
+level check. At the app level: the same sign-in attempt through the
+real `/sign-in` form shows the existing generic "doesn't match our
+records" message (never leaks confirmation status, consistent with
+the established "never distinguish no-such-account from wrong-
+password" discipline) and stays on `/sign-in`; a direct, cookie-less
+navigation to `/operations` correctly redirects to `/sign-in`.
+DENIED, confirmed at both layers.
+
+--------------------------------------------------------------------
+10. PRODUCTION-BUILD VERIFICATION (NOT JUST DEV MODE)
+--------------------------------------------------------------------
+Since the race condition in §5 was traced to a Next.js DEV-mode
+navigation characteristic, the fix was separately re-verified against
+a real production build (`next build` + `next start`, not `next
+dev`): a fresh signup → real Mailpit confirmation email → link
+followed → sign-in reached `/onboarding` on the FIRST attempt, no
+stuck intermediate state, no duplicate request observed. Database
+confirmed exactly 1 Organization, 1 Membership. This is the
+representative mode for what actually runs on Vercel.
+
+**What was NOT possible this phase:** deploying this fix to the real
+Vercel staging project and re-running the equivalent E2E against
+`https://app.zenwardmobility.com` itself. Two independent, structural
+reasons, neither a defect in the fix: (1) this phase's own explicit
+instruction — "Do NOT commit/push automatically" — the fix exists
+only in this local working tree until a human explicitly authorizes
+a push; (2) even if deployed, §8's rate limit would still block a
+NEW real confirmation email from staging's own Supabase project
+right now. `https://app.zenwardmobility.com` itself IS confirmed
+live and reachable (HTTP 200, real page, correct title) — see §11 —
+this is a reachability confirmation, not a claim that the NEW fix has
+been exercised there.
+
+--------------------------------------------------------------------
+11. APP.ZENWARDMOBILITY.COM
+--------------------------------------------------------------------
+Confirmed directly via `curl`: `https://app.zenwardmobility.com/
+sign-in` returns HTTP 200, real Next.js SSR HTML, correct
+`<title>Sign in — Zenward Mobility</title>`. This is a real custom
+domain now attached to the Vercel staging project (superseding
+`zenward-app-staging.vercel.app` as the primary URL — see
+`docs/deployment/staging-runbook.md` §Working staging URL for the
+full history). This is the CURRENTLY-DEPLOYED commit (still S9/S0A's
+own code, since nothing from this phase has been pushed — see §10) —
+still exhibits the ORIGINAL bug this phase fixes, by design (not
+independently re-confirmed live against staging this phase, to avoid
+consuming more of the already-exhausted email quota on a signup that
+would only reproduce a bug already root-caused in §2).
+
+--------------------------------------------------------------------
+12. RECOVERING THE STRANDED ACCOUNT
+--------------------------------------------------------------------
+**What was NOT possible:** directly inspecting the specific reported
+stranded staging account. A `supabase db dump --linked --schema auth`
+(read-only, intended purely to check whether that account's metadata
+happens to already exist) was declined by this environment's own
+permission system — a reasonable restriction, given the `auth`
+schema contains password hashes, and this session does not treat
+that as something to work around.
+
+**What WAS proven instead — the recovery mechanism itself, via an
+equivalent local fixture:** a fresh `auth.users` row was created
+directly, matching the real account's exact shape (confirmed,
+zero Membership, EMPTY `raw_user_meta_data` — i.e., no pending
+metadata at all, exactly what an account created before this fix
+existed would have). Signing in as this account reached
+`/complete-signup/form` — NOT `/access-unavailable` — rendering the
+explicit "Complete your organization setup" recovery form (screenshot
+captured, `.tmp-qa/complete-signup-form.png`, matches the existing
+visual system). Submitting it (`complete_pending_signup_manual`)
+created the Organization/Membership/UserProfile from the entered
+values, exactly once, with NO manual database editing at any point —
+verified via direct database query. This is the generic mechanism
+that would recover the real stranded account identically, once the
+fix is deployed and that person next signs in.
+
+--------------------------------------------------------------------
+13. WHAT THIS PHASE DELIBERATELY DID NOT DO
+--------------------------------------------------------------------
+- Did not disable email confirmations on staging, or bypass/work
+  around the rate limit in any way, to force a cloud PASS.
+- Did not push or commit anything — the fix exists only in this
+  local working tree (work item's own explicit instruction).
+- Did not configure `app.zenwardmobility.com`'s DNS/domain attachment
+  itself (already done, by the user, before this phase began) —
+  this phase only confirmed it and specified the Supabase Auth URL
+  values that must target it (§14).
+- Did not create a Production Supabase project, deploy real customer
+  data, or begin S10.
+- Did not build a password-recovery flow (still missing — recorded,
+  unchanged, as a pre-production requirement, per explicit
+  instruction not to add even a placeholder link for one that
+  doesn't exist).
+- Did not attempt to extract the staging project's own auth-schema
+  data via any other means after the sanctioned `db dump` path was
+  declined (§12) — no credential-scraping, no alternate export route.
+
+--------------------------------------------------------------------
+14. DOCUMENTATION UPDATED
+--------------------------------------------------------------------
+`docs/product/operator-onboarding-model.md` (new §4A — the full
+continuation architecture), `docs/product/driver-invite-linkage-model.md`
+(new §1A — the same for Driver invites), `docs/product/onboarding-
+data-map.md` (2 new RPCs), `docs/product/auth-session-routing.md` and
+`docs/product/application-route-map.md` (the `none` → `/complete-
+signup` routing change, new routes documented), `docs/product/
+decision-register.md` (ZD-200, ZD-201), `docs/product/application-
+implementation-plan.md` (phase entries), `docs/deployment/staging-
+auth-configuration.md` (new confirmed URL, the rate-limit finding),
+`docs/deployment/staging-runbook.md` (new confirmed URL).
+
+--------------------------------------------------------------------
+15. LOCAL REGRESSION
+--------------------------------------------------------------------
+Fresh `supabase db reset`, full 22-file suite, single clean pass:
+**317/317 PASS, 0 FAIL, 0 fatal psql ERROR lines** (309 prior
+baseline + 8 new SIGNUPCONT-1 through 8 tests). **RLS: 32/32 PASS**
+(unchanged, same suite). Both concurrency scripts re-run and PASS:
+`mutation_concurrency_test.sh` (~1.81s genuine row-lock contention,
+consistent with prior runs) and `driver_invite_concurrency_test.sh`
+(~1.81s contention, exactly 1 Driver row + 1 Membership row
+regardless of which session won). `npx tsc --noEmit`: clean, 0
+errors. `npm run lint`: 0 errors, 0 warnings in application code (9
+warnings exist only in untracked `.tmp-qa/` scratch scripts, not part
+of the application). `npm run build`: clean production build, 33
+routes compiled successfully (32 prior + `/complete-signup/form`;
+`/complete-signup` itself is a Route Handler, not a page route).
+
+--------------------------------------------------------------------
+16. FILES CHANGED
+--------------------------------------------------------------------
+New: `supabase/migrations/20260903110000_complete_pending_signup.sql`,
+`src/app/complete-signup/route.ts`, `src/app/complete-signup/form/
+page.tsx`, `src/app/complete-signup/actions.ts`, `src/components/
+auth/CompleteSignupForm.tsx`. Modified: `src/app/sign-up/actions.ts`,
+`src/app/sign-in/actions.ts` (reverted to its original simple form —
+an earlier version of this fix put the continuation call there
+directly; centralized to `/complete-signup` instead once the
+"session can exist without ever hitting sign-in" problem was found),
+`src/app/join/[token]/actions.ts`, `src/app/page.tsx`, `src/app/
+select-organization/page.tsx`, `src/lib/auth/authorization.ts`,
+`src/lib/supabase/database.types.ts` (regenerated), `supabase/tests/
+operator_onboarding_tests.sql` (+8 tests, 2 new fixture users). 8
+docs updated (§14). No file was deleted from the repository (an
+earlier `complete-signup/page.tsx`, created and then replaced by the
+route.ts + form/page.tsx split during this same phase, was removed
+before ever being part of any committed state).
+
+--------------------------------------------------------------------
+17. BLOCKERS
+--------------------------------------------------------------------
+1. **The fix is not yet deployed.** Exists only in this local working
+   tree — per this phase's own explicit "Do NOT commit/push
+   automatically." A human must authorize the push before it can run
+   on `app.zenwardmobility.com` at all.
+2. **Supabase staging's built-in email sender is rate-limited**
+   (`over_email_send_rate_limit`, confirmed directly, twice). Blocks
+   any further live signup-with-real-cloud-email testing until either
+   the window resets or a real SMTP provider (Postmark/Resend/
+   SendGrid/etc.) is configured — recommended in `docs/deployment/
+   staging-auth-configuration.md`.
+3. **The real stranded staging account could not be directly
+   inspected** (a `db dump` of the sensitive `auth` schema was
+   correctly declined) — recovery was proven via an equivalent local
+   fixture instead (§12), not the exact real row.
+4. **Password recovery remains genuinely missing** from the
+   application — a real, unchanged, pre-production requirement, not
+   built this phase per explicit instruction.
+
+None of these four represent a defect in the fix itself — all four
+are either explicit scope boundaries this phase was told to respect,
+or environment facts (email rate limit, dump permission) outside
+this phase's ability to change from within this session.
+
+--------------------------------------------------------------------
+18. RECOMMENDED NEXT STEP
+--------------------------------------------------------------------
+Per the work item's own explicit instruction: return to P1-E4-S0A —
+Complete Cloud Staging Validation, to finish the remaining hard-gate
+cloud E2E items — once (a) this fix is reviewed and deployed (a
+human-authorized push), and (b) a real SMTP provider is attached to
+the staging Supabase project so live confirmation-email testing is no
+longer rate-limited. Only then P1-E3-S10.
+====================================================================
+OPERATOR EMAIL CONFIRMATION:
+PASS (LOCAL — real Mailpit email, real link click, 7/7 checks, 9
+total clean runs including a production-build run; CLOUD NOT RUN —
+blocked by Supabase's own email rate limit, §8, independent of this
+fix)
+
+SIGNUP CONTINUATION:
+PASS
+
+EXISTING STRANDED ACCOUNT RECOVERY:
+PASS (mechanism proven via an equivalent local fixture, §12; the
+actual real staging account could not be directly inspected — db
+dump declined)
+
+ORGANIZATION CREATED EXACTLY ONCE:
+PASS
+
+MEMBERSHIP CREATED EXACTLY ONCE:
+PASS
+
+USER PROFILE CREATED EXACTLY ONCE:
+PASS
+
+DRIVER INVITE CONFIRMATION:
+PASS
+
+UNCONFIRMED ACCESS:
+DENIED
+
+APP.ZENWARDMOBILITY.COM:
+PASS (reachable, HTTP 200, correct page — currently serving the
+PRE-fix code; this fix has not been deployed there — see §10/§17)
+
+SQL:
+317/317
+
+RLS:
+32/32
+
+CLOUD SIGNUP GATE:
+NOT READY — the fix itself is complete and rigorously proven locally
+(including the exact production-build mode Vercel runs), but the
+work item's own hard-gate requirement (a completely new account,
+signed up and confirmed against the REAL deployed
+app.zenwardmobility.com, with a real cloud email) could not be
+executed this phase: the fix is not yet deployed (no auto-push,
+by design) and Supabase staging's own email sender is independently
+rate-limited. Nothing here reflects a defect found in the fix — see
+§8/§10/§17 for the exact, honest reasoning.
+
+BLOCKERS:
+(1) Fix not yet deployed — needs a human-authorized push. (2) Staging
+Supabase email sender rate-limited — needs a real SMTP provider or a
+quota reset. (3) Real stranded account not directly inspectable — db
+dump of auth schema declined by this environment's permission system.
+(4) Password recovery still missing from the application (unchanged,
+pre-production requirement, not built this phase by design).
+
+NEXT:
+Return to P1-E4-S0A — Complete Cloud Staging Validation, once this
+fix is deployed and staging email is no longer rate-limited.
+
+REPORT FILE:
+docs/reports/P1-E4-S0A1-cloud-signup-continuation-fix-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: S10 was not begun, no real customer data
+was deployed, nothing was committed or pushed. This phase stops here.
+====================================================================

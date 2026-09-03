@@ -15,6 +15,16 @@ export interface SignInState {
  * collapse to the same generic code (work item §13). `next` is
  * re-validated here (never trusted just because it round-tripped through
  * a hidden field) before being used as the post-sign-in destination.
+ *
+ * Deliberately does NOT itself call `complete_pending_signup()` (an
+ * earlier version of this fix did, then P1-E4-S0A1 centralized it): the
+ * real cloud reproduction showed a person can reach a live session
+ * WITHOUT ever submitting this form at all — Supabase's own confirmation
+ * link can establish a session directly. A check placed only here would
+ * never fire for that path. `/` (src/app/page.tsx) is the one place ALL
+ * authenticated traffic already passes through to resolve a destination,
+ * so the pending-signup/invite continuation lives there instead (routing
+ * a zero-Membership visitor to `/complete-signup`), not duplicated here.
  */
 export async function signInAction(_prevState: SignInState, formData: FormData): Promise<SignInState> {
   const emailRaw = formData.get("email");

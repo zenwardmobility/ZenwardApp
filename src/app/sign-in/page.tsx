@@ -58,14 +58,25 @@ export default async function SignInPage({
           />
         </div>
 
-        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Sign in</h1>
-        <p className={cn(typography.bodySmall, "mb-6 text-text-secondary")}>
-          Sign in to your Zenward account to continue.
+        <h1 className={cn(typography.sectionHeading, "mb-1 text-text-primary")}>Welcome back</h1>
+        <p className={cn(typography.bodySmall, "mb-8 text-text-secondary")}>
+          Sign in to continue to Zenward.
         </p>
 
         <SignInForm next={next} />
 
-        <p className={cn(typography.bodySmall, "mt-6 text-center text-text-secondary")}>
+        {/*
+          P1-E4-S0A §4: a restrained divider (not just a bare margin) to
+          separate the sign-in form from the sign-up affordance below it —
+          the one deliberate visual refinement this pass makes, kept to a
+          single subtle border rather than any new color/shadow/gradient.
+        */}
+        <p
+          className={cn(
+            typography.bodySmall,
+            "mt-8 border-t border-border-subtle pt-6 text-center text-text-secondary",
+          )}
+        >
           New to Zenward?{" "}
           <Link href="/sign-up" className="font-medium text-brand-interactive-teal">
             Create an account

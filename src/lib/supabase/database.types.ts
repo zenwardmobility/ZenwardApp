@@ -957,6 +957,26 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      complete_pending_signup: {
+        Args: never
+        Returns: Database["public"]["CompositeTypes"]["organization_signup_result"]
+        SetofOptions: {
+          from: "*"
+          to: "organization_signup_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      complete_pending_signup_manual: {
+        Args: { p_business_name: string; p_full_name: string }
+        Returns: Database["public"]["CompositeTypes"]["organization_signup_result"]
+        SetofOptions: {
+          from: "*"
+          to: "organization_signup_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       create_driver_invite: {
         Args: {
           p_display_name: string

@@ -1,7 +1,7 @@
 # Zenward Platform — Driver Invite & Linkage Model
 
-**Work item:** P1-E3-S9 — Operator Signup & Business Setup, §10 (closes GAP-15)
-**Status:** Implemented — `driver_invites` table, `create_driver_invite`/`revoke_driver_invite`/`get_driver_invite_preview`/`redeem_driver_invite`, `/join/[token]`.
+**Work item:** P1-E3-S9 — Operator Signup & Business Setup, §10 (closes GAP-15); confirmation-boundary continuation added by P1-E4-S0A1 — Cloud Signup Continuation Fix, §7
+**Status:** Implemented — `driver_invites` table, `create_driver_invite`/`revoke_driver_invite`/`get_driver_invite_preview`/`redeem_driver_invite`, `/join/[token]`, `/complete-signup` (§1A).
 **Last updated:** 2026-09-03
 
 **The highest-risk part of this phase**, per the work item's own framing. Closes `docs/product/ui-backend-gap-register.md` GAP-15: "Driver is not AuthUser/Membership, and no safe, coherent contract exists yet for inviting a new authenticated user, creating their Membership, AND linking a `drivers` row together."
@@ -14,6 +14,16 @@ The organization admin **never** creates the invitee's account or handles their 
 2. The invitee visits `/join/[token]` — a public page that previews the invite (organization name, their own invited name, the invite's status) via `get_driver_invite_preview`, a narrow, anon-callable, token-gated RPC.
 3. The invitee signs up **through ordinary Supabase Auth** (`supabase.auth.signUp()` — the identical path `/sign-up` uses), with the email locked to the invite's own email.
 4. Immediately after signup succeeds (or on a later sign-in, if they already have an account), `redeem_driver_invite(token)` — SECURITY DEFINER, requiring a real authenticated session whose account email matches the invite — atomically creates their `driver` Membership (only if none already exists for them in that org) and links (or reuses) their Driver row, then marks the invite accepted.
+
+## 1A. The confirmation-boundary continuation (P1-E4-S0A1)
+
+**The same gap §4A of `docs/product/operator-onboarding-model.md` describes exists here too:** `joinSignUpAction`'s `token` parameter is only a local variable in that one Server Action invocation. If Supabase Auth requires email confirmation, `signUp()` returns no session, `redeem_driver_invite(token)` is never called, and the token is gone — the invitee would confirm, sign in, and reach `/access-unavailable` with their invite still sitting `pending`, never redeemed.
+
+**Fix, mirroring the operator-signup continuation exactly:** `joinSignUpAction`'s `signUp()` call now also passes `options.data.pending_driver_invite_token = token`, persisted on the invitee's own `auth.users` row regardless of confirmation state. `/complete-signup` (the Route Handler described in operator-onboarding-model.md §4A) checks for this token **before** it ever looks at operator-signup metadata, and calls `redeem_driver_invite` with it:
+- Success → `/driver`.
+- Failure (revoked, stale, wrong-email, or any other denial `redeem_driver_invite` itself already enforces — §3 below, unchanged) → `/access-unavailable`. **Deliberately never** the operator organization-creation form (`/complete-signup/form`) — a Driver invitee whose invite failed must never be offered a path to create their own operator organization instead; that would silently paper over a real invite problem with an unrelated, unintended capability.
+
+Since `redeem_driver_invite` was already idempotent for a repeat call by the same already-accepted person (§3 below), no additional idempotency guard was needed for this path — unlike the operator-signup continuation (`complete_pending_signup`), which needed a new advisory-lock guard because `signup_create_organization` is deliberately non-idempotent.
 
 ## 2. Why this design, specifically
 

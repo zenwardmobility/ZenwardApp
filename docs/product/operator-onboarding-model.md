@@ -1,7 +1,7 @@
 # Zenward Platform — Operator Onboarding Model
 
-**Work item:** P1-E3-S9 — Operator Signup & Business Setup
-**Status:** Implemented — `/sign-up`, `/onboarding/*`, `signup_create_organization`, the onboarding checklist.
+**Work item:** P1-E3-S9 — Operator Signup & Business Setup (confirmation-boundary continuation added by P1-E4-S0A1 — Cloud Signup Continuation Fix)
+**Status:** Implemented — `/sign-up`, `/onboarding/*`, `signup_create_organization`, the onboarding checklist, and (§4A) the `/complete-signup` continuation for environments where email confirmation is required.
 **Last updated:** 2026-09-03
 
 Zenward's self-service path from "I run a transportation business" to "I have a usable, real Zenward organization" — for a 1–2 vehicle owner-operator, a growing 3–10 vehicle fleet, or an established 10+ vehicle operator alike. This document is the durable record of that design; see `docs/reports/P1-E3-S9-operator-signup-business-setup-report.txt` for the phase's verification evidence.
@@ -10,7 +10,7 @@ Zenward's self-service path from "I run a transportation business" to "I have a 
 
 ```
 Sign Up
-  → (email confirmation, only if the environment requires it — see §4)
+  → (email confirmation, only if the environment requires it — see §4/§4A)
   → Business Stage        /onboarding
   → Business Basics       /onboarding/basics
   → First Vehicle         /onboarding/vehicle          (skippable)
@@ -44,7 +44,19 @@ Every step after Sign Up can be skipped ("Skip for now" / "Not right now") — n
 
 ## 4. Email verification — documented truthfully
 
-Locally (`supabase/config.toml`, `enable_confirmations = false`), `signUp()` returns a real session immediately — no verification gate exists in this environment. The sign-up action does not assume this either way: it checks the actual `signUp()` response, and only proceeds to create the organization if a real `session` came back. If a deployment ever enables email confirmation, the same code path correctly shows "check your email to confirm your account" instead, and the organization is created on the person's NEXT successful sign-in with a session (not here) — this is the honest, environment-independent behavior, not a claim that doesn't hold locally.
+Locally (`supabase/config.toml`, `enable_confirmations = false`), `signUp()` returns a real session immediately — no verification gate exists in this environment. The sign-up action does not assume this either way: it checks the actual `signUp()` response, and only proceeds to create the organization immediately if a real `session` came back. If a deployment enables email confirmation (Supabase Cloud's own default), the same code path correctly shows "check your email to confirm your account" instead — and the organization is created once a real session first exists, via the continuation described in §4A, not assumed to happen automatically.
+
+## 4A. The confirmation-boundary continuation (P1-E4-S0A1)
+
+**The gap this closes:** before this fix, `fullName`/`businessName` were only local variables inside the `/sign-up` Server Action's own single invocation. When `signUp()` returned no session (confirmation required), the action returned `needsEmailConfirmation: true` and those values were gone — nothing persisted them anywhere. The person who later confirmed their email and signed in landed on `/access-unavailable` (a real session, zero Memberships) with no way to recover their original signup at all. Found via live cloud testing against a real Supabase Cloud project, not a hypothetical — Supabase's own `enable_confirmations = false` local default meant this path was never exercised until real cloud staging was tested.
+
+**The fix, in order:**
+1. **Persist minimum signup intent safely, not authority.** `signUp()`'s `options.data` now carries `pending_full_name`/`pending_business_name` (operator signup) or `pending_driver_invite_token` (Driver invite redemption, see `docs/product/driver-invite-linkage-model.md`). Supabase persists this on the `auth.users` row itself (`raw_user_meta_data`), independent of confirmation state — this is plain display/intent data, never trusted as authorization. The role granted (`organization_admin`, always) and the organization/membership identity are still derived entirely server-side from `auth.uid()` inside SECURITY DEFINER RPCs — metadata never grants privilege by itself.
+2. **One authoritative continuation route:** `/complete-signup` (`src/app/complete-signup/route.ts`) — a Route Handler, not a Server Component page. `/` (root) routes every authenticated, zero-Membership visitor here instead of straight to `/access-unavailable`, because a real session can come to exist WITHOUT the person ever submitting `/sign-in`'s own form at all: Supabase's confirmation-link redirect can establish a session directly (client-side, via the implicit-flow hash fragment `#access_token=...` its own `/auth/v1/verify` step redirects to) — a check placed only inside `signInAction` would never fire for that path. `/` is the one place ALL authenticated traffic already passes through, so the continuation lives there.
+3. **Why a Route Handler, not a page:** an earlier version of this fix put the identical logic in a Server Component page and found, via live local testing (clicking a real Mailpit-delivered confirmation link, not assumed), that a Next.js Server Component's own `redirect()` — issued from a chained client-router navigation, after an internal `await` for the mutating RPC — was silently not followed by the browser, even though the mutation succeeded server-side every time (confirmed directly against the database). A Route Handler always returns a real HTTP redirect response with a `Location` header, which Next's client-side navigation reliably follows.
+4. **Exactly-once, not "whichever request got there first."** `complete_pending_signup()` (SECURITY DEFINER RPC) is idempotent by construction: a `pg_advisory_xact_lock` keyed by the caller's own `auth.uid()` serializes concurrent calls from the same person, and an existing-Membership check makes every repeat call a safe no-op. `signup_create_organization` itself stays deliberately non-idempotent (a second call is a legitimate second business — unchanged from §2); `complete_pending_signup()` is the one-shot gate in front of it, not a looser wrapper around it. A genuinely observed local race (Next.js dev-mode firing two GET requests for one navigation) confirmed this: the org/membership were created exactly once regardless, and — since routing "onboarding vs. operations" purely from "did *this specific request* create it" is not itself race-safe — the destination decision instead checks the resolved organization's own `business_stage` (still `null` only for a genuinely brand-new, never-onboarded org), so either request in such a race correctly lands the person in onboarding.
+5. **Recovery for an account with no traceable metadata at all** (work item §9 — e.g. an account created before this fix existed): `complete_pending_signup_manual(full_name, business_name)` — the SAME idempotency guard, caller-supplied values instead of metadata, backing an explicit, user-initiated "Complete your organization setup" form at `/complete-signup/form`. Never a manual database edit; never silent/automatic — the person must actively submit it. `/complete-signup` (the Route Handler) only routes here after genuinely finding nothing to auto-complete.
+6. **Driver invitees are never routed into operator organization creation.** `/complete-signup` checks for `pending_driver_invite_token` FIRST and returns before ever looking at operator metadata; a failed/revoked/stale invite redemption goes to `/access-unavailable`, never to the organization-creation form (see `docs/product/driver-invite-linkage-model.md` §4).
 
 ## 5. Progressive complexity (work item §12)
 

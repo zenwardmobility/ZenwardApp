@@ -1,6 +1,6 @@
 # Zenward Platform — Onboarding Data Map
 
-**Work item:** P1-E3-S9 — Operator Signup & Business Setup
+**Work item:** P1-E3-S9 — Operator Signup & Business Setup (2 new RPCs added by P1-E4-S0A1 — Cloud Signup Continuation Fix, §3/§9)
 **Status:** Implemented.
 **Last updated:** 2026-09-03
 
@@ -24,6 +24,8 @@ Every mutation the onboarding flow performs, its source, and its authorization b
 | `revoke_driver_invite(invite_id)` | Organization Admin, own org, pending only | Marks an invite revoked |
 | `get_driver_invite_preview(token)` | Public (anon + authenticated) | Minimum-necessary invite preview — org name, invited name, email, status only |
 | `redeem_driver_invite(token)` | Any authenticated user whose account email matches the invite | Atomically creates driver Membership (if none exists) + links/reuses Driver row + marks invite accepted |
+| `complete_pending_signup()` | Any authenticated user | **P1-E4-S0A1** — the email-confirmation-boundary continuation. Idempotent (advisory lock + existing-Membership guard): reads `pending_full_name`/`pending_business_name` from the caller's own `auth.users.raw_user_meta_data` and calls `signup_create_organization` with them exactly once. No-op if the caller already has a Membership, or if no pending metadata exists. See `docs/product/operator-onboarding-model.md` §4A. |
+| `complete_pending_signup_manual(full_name, business_name)` | Any authenticated user | **P1-E4-S0A1** — the explicit recovery-form variant of the above, for an account with no traceable pending metadata at all. Same idempotency guard, caller-supplied values. Backs `/complete-signup/form`. |
 
 ## New column grants this phase (all narrow, additive, documented per-migration)
 

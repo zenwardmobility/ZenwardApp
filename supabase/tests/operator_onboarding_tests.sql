@@ -35,7 +35,17 @@ insert into auth.users (
   ('00000000-0000-0000-0000-000000000000', '98000000-0000-0000-0000-0000000000a1', 'authenticated', 'authenticated', 'owner-onboarding-a@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '98000000-0000-0000-0000-0000000000a2', 'authenticated', 'authenticated', 'owner-onboarding-b@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', '98000000-0000-0000-0000-0000000000a3', 'authenticated', 'authenticated', 'invited-driver@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
-  ('00000000-0000-0000-0000-000000000000', '98000000-0000-0000-0000-0000000000a4', 'authenticated', 'authenticated', 'wrong-person@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', '');
+  ('00000000-0000-0000-0000-000000000000', '98000000-0000-0000-0000-0000000000a4', 'authenticated', 'authenticated', 'wrong-person@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', ''),
+  -- P1-E4-S0A: a signup that required email confirmation — pending_full_name/
+  -- pending_business_name persisted at signUp() time, exactly as `/sign-up`'s
+  -- own Server Action now does (src/app/sign-up/actions.ts), simulating the
+  -- moment BEFORE any session ever existed for this person.
+  ('00000000-0000-0000-0000-000000000000', '98000000-0000-0000-0000-0000000000a5', 'authenticated', 'authenticated', 'pending-signup@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{"pending_full_name": "Pending Owner", "pending_business_name": "Pending Onboarding Org"}', now(), now(), '', '', '', '', '', ''),
+  -- Genuinely fresh, memberless, metadata-less — a stand-in for the real
+  -- "account created before this fix existed" recovery case (§9). a4 is
+  -- NOT reused here — it already holds a real dispatcher Membership from
+  -- the INVITE-5 fixture above by the time this file reaches §14.
+  ('00000000-0000-0000-0000-000000000000', '98000000-0000-0000-0000-0000000000a6', 'authenticated', 'authenticated', 'untraceable-account@example.test', extensions.crypt('local-test-only-fictional-pw', extensions.gen_salt('bf')), now(), '{}', '{}', now(), now(), '', '', '', '', '', '');
 
 -- =============================================================================
 -- 1/2. Organization creation isolation + owner Membership creation
@@ -476,6 +486,128 @@ begin
     raise notice 'TEST FIRSTTRIP-1 (a brand-new organization creates its own first Trip): PASS';
   else
     raise notice 'TEST FIRSTTRIP-1 (a brand-new organization creates its own first Trip): FAIL';
+  end if;
+end $$;
+
+-- =============================================================================
+-- 13. complete_pending_signup — the email-confirmation continuation
+--     (P1-E4-S0A §4/§8/§9). A real S9 gap found and fixed this phase: full
+--     name/business name must survive the confirmation boundary, and
+--     Organization/UserProfile/Membership must each be created EXACTLY
+--     ONCE regardless of how many times the continuation is called
+--     (refresh, repeated sign-in, concurrent tabs).
+-- =============================================================================
+do $$
+declare v_first public.organization_signup_result; v_second public.organization_signup_result; v_noop public.organization_signup_result;
+begin
+  -- First call: pending metadata present, zero existing Memberships — must
+  -- create the organization from the SAME values persisted at signUp().
+  set local role authenticated;
+  set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a5';
+  v_first := public.complete_pending_signup();
+  reset role;
+
+  if v_first.created and v_first.organization_id is not null and v_first.role = 'organization_admin' then
+    raise notice 'TEST SIGNUPCONT-1 (pending signup completed from persisted metadata): PASS';
+  else
+    raise notice 'TEST SIGNUPCONT-1 (pending signup completed from persisted metadata): FAIL';
+  end if;
+
+  if exists (
+    select 1 from public.organizations where id = v_first.organization_id and name = 'Pending Onboarding Org'
+  ) and exists (
+    select 1 from public.user_profiles where id = '98000000-0000-0000-0000-0000000000a5' and display_name = 'Pending Owner'
+  ) then
+    raise notice 'TEST SIGNUPCONT-2 (Organization name / UserProfile display_name match the values entered before confirmation): PASS';
+  else
+    raise notice 'TEST SIGNUPCONT-2 (Organization name / UserProfile display_name match the values entered before confirmation): FAIL';
+  end if;
+
+  -- Second call, same person: idempotency guard (work item §9) — must NOT
+  -- create a second Organization/Membership, unlike signup_create_
+  -- organization's own deliberately-non-idempotent behavior.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a5';
+  v_second := public.complete_pending_signup();
+  reset role;
+
+  if v_second.created = false and v_second.organization_id is null then
+    raise notice 'TEST SIGNUPCONT-3 (repeated call is a safe no-op, no duplicate Organization): PASS';
+  else
+    raise notice 'TEST SIGNUPCONT-3 (repeated call is a safe no-op, no duplicate Organization): FAIL';
+  end if;
+
+  if (select count(*) from public.memberships where user_id = '98000000-0000-0000-0000-0000000000a5') = 1 then
+    raise notice 'TEST SIGNUPCONT-4 (exactly one Membership exists after two calls): PASS';
+  else
+    raise notice 'TEST SIGNUPCONT-4 (exactly one Membership exists after two calls): FAIL';
+  end if;
+
+  -- A caller with NO pending metadata at all (e.g. a Driver invited via
+  -- token, who never went through /sign-up) — safe no-op, never an error.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a3';
+  v_noop := public.complete_pending_signup();
+  reset role;
+
+  if v_noop.created = false and v_noop.organization_id is null then
+    raise notice 'TEST SIGNUPCONT-5 (caller with no pending signup metadata is a safe no-op): PASS';
+  else
+    raise notice 'TEST SIGNUPCONT-5 (caller with no pending signup metadata is a safe no-op): FAIL';
+  end if;
+end $$;
+
+-- Unauthenticated call is rejected outright (ZW001), not a silent no-op.
+do $$
+begin
+  begin
+    perform public.complete_pending_signup();
+    raise notice 'TEST SIGNUPCONT-6 (unauthenticated call rejected): FAIL (expected denial, got success)';
+  exception when others then
+    if sqlstate = 'ZW001' then
+      raise notice 'TEST SIGNUPCONT-6 (unauthenticated call rejected): PASS';
+    else
+      raise notice 'TEST SIGNUPCONT-6 (unauthenticated call rejected): FAIL (unexpected sqlstate %)', sqlstate;
+    end if;
+  end;
+end $$;
+
+-- =============================================================================
+-- 14. complete_pending_signup_manual — the explicit recovery form's own RPC
+--     (P1-E4-S0A1 §9). Same idempotency contract as complete_pending_signup,
+--     caller-supplied values instead of metadata.
+-- =============================================================================
+do $$
+declare v_manual_first public.organization_signup_result; v_manual_second public.organization_signup_result;
+begin
+  -- '...a6' (untraceable-account@example.test) has zero Memberships and
+  -- empty metadata — a stand-in for the real-world "account created
+  -- before this fix existed" case this RPC exists for.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a6';
+  v_manual_first := public.complete_pending_signup_manual('Manual Recovery Owner', 'Manual Recovery Org');
+  reset role;
+
+  if v_manual_first.created and exists (
+    select 1 from public.organizations where id = v_manual_first.organization_id and name = 'Manual Recovery Org'
+  ) then
+    raise notice 'TEST SIGNUPCONT-7 (manual recovery form creates Organization from submitted values): PASS';
+  else
+    raise notice 'TEST SIGNUPCONT-7 (manual recovery form creates Organization from submitted values): FAIL';
+  end if;
+
+  -- Same idempotency guard — a second submission (double-click, refresh)
+  -- must not create a second Organization.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '98000000-0000-0000-0000-0000000000a6';
+  v_manual_second := public.complete_pending_signup_manual('Manual Recovery Owner', 'Manual Recovery Org Two');
+  reset role;
+
+  if v_manual_second.created = false
+     and (select count(*) from public.memberships where user_id = '98000000-0000-0000-0000-0000000000a6') = 1 then
+    raise notice 'TEST SIGNUPCONT-8 (repeated manual submission is a safe no-op): PASS';
+  else
+    raise notice 'TEST SIGNUPCONT-8 (repeated manual submission is a safe no-op): FAIL';
   end if;
 end $$;
 

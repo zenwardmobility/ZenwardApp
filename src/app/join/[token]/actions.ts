@@ -39,7 +39,24 @@ export async function joinSignUpAction(_prevState: JoinActionState, formData: Fo
 
   const supabase = await createServerSupabaseClient();
 
-  const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password });
+  const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      // Same reasoning as /sign-up (P1-E4-S0A1 §7): a local `token`
+      // variable would be lost the moment signUp() returns no session.
+      // Persisted on auth.users itself, this survives the confirmation
+      // boundary — /complete-signup redeems it the first time this
+      // invitee has a real session, never routing them into operator
+      // organization creation (that path only ever looks at
+      // pending_full_name/pending_business_name, which this signup never
+      // sets).
+      data: {
+        pending_driver_invite_token: token,
+        pending_full_name: fullName,
+      },
+    },
+  });
   if (signUpError) {
     if (signUpError.message.toLowerCase().includes("already registered") || signUpError.status === 422) {
       return { error: AUTH_ERROR.SIGNUP_EMAIL_TAKEN };

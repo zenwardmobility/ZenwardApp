@@ -1,0 +1,414 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E4-S0 — Cloud Staging Foundation & S9 Validation
+Repository:           /Users/datamatics/ZenWard
+Environment:          VERCEL STAGING + DEDICATED SUPABASE STAGING (attempted);
+                       LOCAL DEVELOPMENT (fully completed)
+Git branch:           main
+Git HEAD at start:    77c5566 "Implement operator signup and business onboarding"
+Date/time:            2026-09-03
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK GIT STATE
+--------------------------------------------------------------------
+`git status --short` was CLEAN at phase start. `git log --oneline -7`
+showed `77c5566` at HEAD — the P1-E3-S9 commit. This was a real,
+mid-session discovery: at the END of the S9 turn, the tree was
+deliberately left UNCOMMITTED (per S9's own "do NOT commit" instruction)
+— but by the time THIS phase's pre-work ran, the tree was clean and
+`77c5566` was already on `main`, meaning someone else (the user,
+working remotely, consistent with this session's own established
+pattern) committed it between turns. `git diff --stat` was empty —
+no unexplained diff existed anywhere. S9 was NOT rebuilt, NOT reverted,
+and NOT assumed superseded by older architecture docs — its actual
+implementation was read directly from the current source before any
+further work began (§2).
+
+--------------------------------------------------------------------
+2. S9 STATE DISCOVERED (READ DIRECTLY FROM CURRENT SOURCE)
+--------------------------------------------------------------------
+Every item the work item asked to inspect was confirmed present and
+matching the S9 report's own claims, by reading the actual files (not
+the report alone): `/sign-up` (src/app/sign-up/), honest email-
+verification branching (`signUpData.session` check), `signup_create_
+organization` (atomic Organization/UserProfile/Membership creation),
+Business Stage/Basics onboarding steps, Owner-Operator Mode
+(`link_self_as_driver`, the relaxed `current_driver_id()`), Vehicle/
+Facility/Passenger create-edit actions, the token-gated Driver invite/
+redemption contract (`driver_invites`, 4 RPCs, `/join/[token]`), the
+onboarding checklist, `/select-organization`, and `signOutAction`. No
+stale assumption from pre-S9 docs was carried forward uncritically —
+`docs/product/application-route-map.md`/`application-implementation-
+plan.md` were both already updated by S9 itself and found accurate.
+
+--------------------------------------------------------------------
+3. ENVIRONMENT VARIABLES
+--------------------------------------------------------------------
+Full inventory: `docs/deployment/environment-variable-inventory.md`.
+The application reads exactly 3 variables (`NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_APP_URL` — the
+last one currently unused by any code, confirmed via `grep`) plus
+Next.js's own built-in `NODE_ENV`. Confirmed by direct, exhaustive
+`grep -rn "process\.env\." src/` — not sampled. **No service-role or
+secret Supabase key exists anywhere in this codebase, in any commit,
+or in any doc.** Every `NEXT_PUBLIC_*` variable is safe for the browser
+by its own design (a publishable key relying entirely on RLS/RPC
+authorization, and a location string) — none was newly exposed or
+reclassified this phase.
+
+--------------------------------------------------------------------
+4. LOCALHOST ASSUMPTION AUDIT
+--------------------------------------------------------------------
+Exhaustive source search (`grep -rln "localhost\|127\.0\.0\.1" src/`)
+found **zero** hardcoded localhost/127.0.0.1 references anywhere in
+application code. Every environment-sensitive behavior already reads
+from the 3 env vars above or from Next.js request context — never a
+literal host string:
+  - Cookies (`select-organization/actions.ts`): `secure: process.env.
+    NODE_ENV === "production"` — automatically correct in every
+    environment (Vercel always sets NODE_ENV=production).
+  - Supabase clients (browser/server/proxy): all 3 read
+    `getSupabaseUrl()`/`getSupabasePublishableKey()`, never a literal.
+  - Redirects (`safeRedirectPath`): allowlist-based, relative-path-only
+    — no absolute-URL/host logic exists to be wrong.
+  - `signUp()` calls (both `/sign-up` and `/join/[token]`): no
+    `emailRedirectTo` override — correctly defers entirely to the
+    Supabase project's own Site URL setting (see §8/§14).
+No genuine environment-portability defect was found; nothing was
+"fixed" because nothing was broken — confirmed by reading the code,
+not assumed from its absence in a search.
+
+--------------------------------------------------------------------
+5. SUPABASE STAGING PROJECT / LINK
+--------------------------------------------------------------------
+Found ALREADY existing and ALREADY linked at phase start (not created
+by this phase): "ZenwardApp Staging," ref `wyocbivzgrbekuyqdfts`,
+us-east-1, status ACTIVE_HEALTHY, created 2026-09-03 (same day, before
+this phase began). `supabase/.temp/project-ref` confirmed the local
+repo already points at it. A second, separate project
+("zenwardmobility's Project," ref `bwqsowlbcuytsjquhxzh`) exists in
+the same organization but is NOT linked and was NOT touched — most
+plausibly reserved for a future production project; left entirely
+alone (work item §15).
+
+--------------------------------------------------------------------
+6. MIGRATION DRY RUN
+--------------------------------------------------------------------
+`supabase db push --dry-run`: **"Remote database is up to date."**
+`supabase migration list --linked` (read-only): every one of the 39
+local migrations, through the last S9 migration
+(`20260903100700_current_driver_id_owner_operator_mode`), has a
+matching remote entry — no gap, no drift. The staging schema was
+ALREADY fully current with S9 before this phase touched anything.
+
+--------------------------------------------------------------------
+7. MIGRATION DEPLOYMENT
+--------------------------------------------------------------------
+No `supabase db push` (the real, non-dry-run form) was executed —
+none was needed, since §6 already confirmed the remote schema matches
+local exactly. No destructive linked-reset command was run against
+staging at any point, consistent with the work item's own explicit
+prohibition.
+
+--------------------------------------------------------------------
+8. SEED DECISION
+--------------------------------------------------------------------
+Local `supabase db reset` always re-seeds; a linked `db push` does
+NOT run `seed.sql` against the remote project. Whether staging
+currently carries the Harmony Medical Transport fixture, is schema-
+only, or carries something else was **not verified this phase** — the
+live app was not reachable to check (§9-13), and no direct Postgres
+connection to staging was established (no connection string was
+available or extracted). Documented as the next session's first
+action in `docs/deployment/staging-runbook.md` §Seeding staging. No
+seed was written to staging this phase, and none will be until the
+next session confirms current state first.
+
+--------------------------------------------------------------------
+9. VERCEL DEPLOYMENT
+--------------------------------------------------------------------
+Found ALREADY connected (GitHub App integration, `zenwardmobility/
+ZenwardApp`), auto-deploying every push to `main`. The `77c5566` (S9)
+commit had ALREADY been built and deployed (`state: success`,
+deployment id `6241776188`, `created_at: 2026-09-03T10:19:04Z`) before
+this phase's own pre-work began — this phase triggered no new
+deployment. Vercel's own dashboard environment label for this
+deployment is "Production" — see §Blockers and ZD-199 for why this
+phase does not treat that label as meaning a real customer-facing
+release (no custom domain attached; Deployment Protection active).
+
+--------------------------------------------------------------------
+10. STAGING URL
+--------------------------------------------------------------------
+The deployment's own recorded `environment_url`:
+`https://zenward-dsw7aujzw-zenwardmobility-9199.vercel.app`.
+**This URL's reachability was inconsistent across this phase's own
+checks** — an initial check returned a 302 redirect to Vercel's own
+SSO gate (`vercel.com/sso-api`, i.e. Deployment Protection correctly
+active); after the user indicated they would temporarily disable
+Deployment Protection, subsequent checks (repeated several times,
+several minutes apart) returned a plain Vercel-level 404
+(`x-vercel-error: NOT_FOUND`) instead — a DIFFERENT failure mode, not
+simply "protection is off now." Several plausible alternate URL
+patterns (`zenward-app.vercel.app`, `zenwardapp.vercel.app`,
+`zenward-git-main-zenwardmobility-9199.vercel.app`, etc.) were also
+tried and none resolved. `app.zenwardmobility.com` does not resolve
+at all (confirmed not a DNS/network issue in this environment —
+`google.com`/`vercel.com` both responded normally). This was NOT
+resolved by the end of this phase — see §Blockers.
+
+--------------------------------------------------------------------
+11. AUTH URL CONFIGURATION
+--------------------------------------------------------------------
+Documented precisely, NOT applied: `docs/deployment/staging-auth-
+configuration.md`. The exact Supabase Dashboard values needed (Site
+URL, Redirect URLs) are specified, but deliberately not applied
+against an unconfirmed staging URL (§10) — applying a wrong Site URL
+would break every auth email's link for anyone who happens to sign up
+against staging in the meantime, a real, if minor, live consequence
+not worth risking on an unconfirmed value. `supabase config push` was
+deliberately never run (ZD-198) — it would push the LOCAL config.toml's
+own `site_url = "http://127.0.0.1:3000"` to the remote project, which
+would be actively wrong.
+
+--------------------------------------------------------------------
+12. SIGNUP CLOUD E2E
+--------------------------------------------------------------------
+**NOT RUN.** Blocked by §10 — no reachable, confirmed staging URL was
+available at any point this phase to drive a real browser session
+against. The equivalent flow is already fully proven LOCALLY (31/31
+live checks, `docs/reports/P1-E3-S9-operator-signup-business-setup-
+report.txt` §12) — that evidence stands unchanged, but it is LOCAL
+evidence, not cloud evidence, and this report does not conflate the
+two.
+
+--------------------------------------------------------------------
+13. ORGANIZATION CREATION CLOUD E2E
+--------------------------------------------------------------------
+**NOT RUN** — same blocker as §12. `signup_create_organization`'s own
+atomicity/isolation properties are unaffected by WHERE it runs (pure
+SQL, no environment-dependent code path) and are already proven via
+32 dedicated SQL tests plus live local testing — but "proven against
+the actual staging database, through the actual deployed app" (what
+this phase's own §9/§13 explicitly asked for) was not achieved.
+
+--------------------------------------------------------------------
+14. OWNER-OPERATOR CLOUD E2E
+--------------------------------------------------------------------
+**NOT RUN** — same blocker. Locally proven (S9 report §6, §12).
+
+--------------------------------------------------------------------
+15. DRIVER INVITE CLOUD E2E
+--------------------------------------------------------------------
+**NOT RUN** — same blocker. Locally proven, including duplicate-invite
+reuse, foreign-org denial, revoked-invite denial, and inactive-
+Membership denial (S9 report §10, §14 — 9 dedicated SQL tests plus a
+live local browser redemption).
+
+--------------------------------------------------------------------
+16. OPERATIONS CLOUD SMOKE / 17. DRIVER CLOUD SMOKE
+--------------------------------------------------------------------
+**NOT RUN** — same blocker. Every listed surface (Operations/Trips/
+Dispatch/Passengers/Facilities/Drivers/Fleet/Trip Detail, Driver
+Today/Trips/Active Trip, location sharing, Trip Assurance, exceptions,
+assign/reassign, cancel, no-show, notes, Sign Out) was locally
+regression-tested this same day, twice, cleanly, as part of S9's own
+closure and again during this phase's own local-regression pass (§20)
+— but not against the deployed cloud app.
+
+--------------------------------------------------------------------
+18. TENANT SECURITY IN CLOUD
+--------------------------------------------------------------------
+**NOT independently re-proven against Supabase Staging specifically**
+— blocked by the same lack of a route to actually exercise the
+deployed app as a real browser client (proving tenant isolation
+meaningfully requires acting AS the deployed app, with its actual
+session/cookie handling, not just querying the staging database
+directly with `SET ROLE` simulation, which would only re-prove what
+the local SQL suite already proves identically against the identical
+schema). The underlying SQL/RLS logic is byte-for-byte identical to
+what's proven 309/309 + 32/32 locally, and the staging schema is
+confirmed byte-for-byte current with local (§6) — so the SECURITY
+LOGIC is not in question, but a live, cloud-specific confirmation
+was not obtained this phase.
+
+--------------------------------------------------------------------
+19. EMAIL / INVITATION REALITY
+--------------------------------------------------------------------
+Documented precisely in `docs/deployment/staging-auth-configuration.md`:
+- **Signup confirmation:** the app's own code correctly branches on
+  whether `signUp()` returns a real session (proven locally) — but
+  whether Supabase's OWN outbound email delivery actually works from
+  the staging project (subject to Supabase's default low-rate testing
+  limits) was NOT tested this phase. Marked truthfully as UNVERIFIED,
+  not claimed working.
+- **Password reset:** confirmed, by direct code search, that **no
+  password-recovery flow exists in the application at all** —
+  `resetPasswordForEmail` is never called anywhere. This is a real
+  application gap, unrelated to staging configuration, found and
+  reported honestly rather than assumed to exist.
+- **Driver invite delivery:** has NO dependency on Supabase email at
+  all (S9's own deliberate design, ZD-196) — the org admin shares the
+  `/join/[token]` link directly. Nothing to test here beyond what S9
+  already proved locally.
+
+--------------------------------------------------------------------
+20. LOCAL SQL REGRESSION
+--------------------------------------------------------------------
+Fresh `supabase db reset`, full 22-file suite, run this phase:
+**309/309 PASS, 0 FAIL, 0 fatal psql ERROR lines** — matching the
+authoritative S9 baseline exactly (not the stale pre-S9 276 count).
+
+--------------------------------------------------------------------
+21. RLS
+--------------------------------------------------------------------
+**32/32 PASS**, from the same clean run.
+
+--------------------------------------------------------------------
+22. CONCURRENCY
+--------------------------------------------------------------------
+Both `mutation_concurrency_test.sh` (pre-existing) and `driver_invite_
+concurrency_test.sh` (new in S9) re-run this phase: **both PASS**,
+genuine multi-second row-lock contention observed in each (~1.8s),
+consistent with prior runs.
+
+--------------------------------------------------------------------
+23. TYPESCRIPT / LINT / BUILD
+--------------------------------------------------------------------
+`npx tsc --noEmit`: clean, 0 errors.
+`npm run lint`: clean, 0 errors, 0 warnings.
+`npm run build`: clean production build, all 31 routes compiled
+successfully — this is the SAME build process Vercel itself runs, and
+it succeeds locally; combined with Vercel's own reported deployment
+`state: success` for this exact commit, build/SSR/Server Actions
+correctness in the cloud environment is well-evidenced even without a
+live browser session against it.
+
+--------------------------------------------------------------------
+24. PRODUCTION LIMITATIONS (HONEST, NOT SPECULATIVE)
+--------------------------------------------------------------------
+- No password-recovery flow exists in the application (§19) —
+  independent of staging/production, a real product gap.
+- No custom domain is attached to the Vercel project; Vercel's own
+  "Production" label does not correspond to any publicly reachable,
+  branded URL today (ZD-199).
+- Supabase's default email-sending limits are test-appropriate only,
+  not production-volume — unverified whether staging's own delivery
+  even works yet (§19).
+- The second Supabase project in the same organization
+  (`bwqsowlbcuytsjquhxzh`) was left completely untouched — no
+  Production Supabase exists yet, by design (work item §15).
+
+--------------------------------------------------------------------
+25. BLOCKERS
+--------------------------------------------------------------------
+**One central, unresolved blocker**, gating §12 through §18: no
+stable, confirmed, reachable URL for the deployed staging application
+was available by the end of this phase. Timeline: (1) the recorded
+deployment URL initially returned Vercel's own Deployment Protection
+SSO redirect, as expected/correct; (2) the user indicated they would
+temporarily disable Deployment Protection; (3) subsequent checks
+(several, minutes apart) returned a Vercel-level 404 instead of a
+reachable app — a different, unexplained state, not simply
+"protection is now off." No Vercel CLI/API credential was available
+in this environment to investigate further (Vercel CLI installed
+successfully mid-phase but reports "Logged out," with no non-
+interactive login path available). **Needs:** the user to confirm the
+current, correct, live staging URL (and that Deployment Protection is
+in the intended state) before the cloud E2E work in §12-§18 can be
+completed. Nothing else in this phase is blocked by this — every
+local-only requirement (§3, §4, §20-§23) and every read-only cloud
+verification (§5, §6, §9) completed fully.
+
+--------------------------------------------------------------------
+26. GATE VERDICT
+--------------------------------------------------------------------
+**NOT READY** — not because anything was found broken, but because
+the work item's own explicit "PASS required" cloud E2E requirements
+(§9 through §13 of the work item) could not be executed against a
+reachable deployment this phase. Every requirement that COULD be
+verified — Supabase staging fully migrated and current, zero
+localhost/environment-portability defects, zero secrets exposure,
+local regression at the authoritative S9 baseline, clean build/lint/
+types, a Vercel deployment that itself reports build success — passed
+cleanly and is not in question. The remaining gap is access, not
+correctness, and is precisely scoped in §25.
+
+--------------------------------------------------------------------
+RECOMMENDED NEXT STEP (not P1-E3-S10 — see below)
+--------------------------------------------------------------------
+Resolve §25's blocker (confirm the correct staging URL / Deployment
+Protection state), then complete §12 through §18 as a direct
+continuation of this same phase before P1-E3-S10 begins — the work
+item's own explicit instruction is that S10 must not start until this
+phase's cloud validation is genuinely complete.
+====================================================================
+VERCEL STAGING:
+NOT READY
+
+SUPABASE STAGING:
+READY
+
+MIGRATIONS:
+PASS
+
+AUTH CONFIGURATION:
+DOCUMENTED, NOT APPLIED (blocked — see §11/§25)
+
+S9 SIGNUP CLOUD E2E:
+NOT RUN (blocked — see §12/§25)
+
+ORGANIZATION CREATION:
+NOT RUN (blocked — see §13/§25)
+
+OWNER-OPERATOR CLOUD E2E:
+NOT RUN (blocked — see §14/§25)
+
+DRIVER INVITE CLOUD E2E:
+NOT RUN (blocked — see §15/§25)
+
+OPERATIONS CLOUD SMOKE:
+NOT RUN (blocked — see §16/§25)
+
+DRIVER CLOUD SMOKE:
+NOT RUN (blocked — see §17/§25)
+
+TENANT ISOLATION:
+NOT INDEPENDENTLY RE-PROVEN IN CLOUD (blocked — see §18/§25; underlying logic identical to the 309/32 local baseline)
+
+EMAIL FLOW:
+LIMITED (signup-confirmation delivery unverified; password reset does not exist in the app at all; driver invite has no email dependency — see §19)
+
+SECRETS EXPOSURE:
+NONE
+
+REAL CUSTOMER DATA:
+NONE
+
+LOCAL SQL:
+309/309
+
+RLS:
+32/32
+
+CLOUD STAGING FOUNDATION:
+NOT READY
+
+BLOCKERS:
+Deployed staging URL not reliably reachable — needs the user to confirm the current, correct, live URL and Deployment Protection state (see §25)
+
+NEXT:
+Resolve the Vercel access blocker and complete §12-§18 of this same phase; only then P1-E3-S10 — Request Hub & Public Transportation Intake
+
+REPORT FILE:
+docs/reports/P1-E4-S0-cloud-staging-foundation-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: Production was not deployed, Production
+Supabase was not created, S10 was not begun, nothing was committed or
+pushed. This phase stops here pending the blocker in §25.
+====================================================================

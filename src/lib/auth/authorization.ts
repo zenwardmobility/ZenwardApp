@@ -29,7 +29,15 @@ export async function requireOperationsAccess(currentPath: string): Promise<Orga
   const resolution = await resolveOrganizationContext();
 
   if (resolution.status === "none") {
-    redirect("/access-unavailable");
+    // P1-E4-S0A1 §6: routes through the same pending-signup/invite
+    // continuation as root `/` — not straight to `/access-unavailable` —
+    // so a deep link (a bookmark, a previously-open tab) reached BEFORE
+    // ever visiting `/` doesn't strand a person whose signup/invite has
+    // never actually been completed yet. `/complete-signup` itself falls
+    // through to `/access-unavailable` if there is genuinely nothing to
+    // complete — this is a strict superset of the previous behavior, not
+    // a weaker one.
+    redirect("/complete-signup");
   }
   if (resolution.status === "select-required") {
     selectOrganizationRedirect(currentPath);
@@ -61,7 +69,8 @@ export async function requireOnboardingAccess(currentPath: string): Promise<Orga
   const resolution = await resolveOrganizationContext();
 
   if (resolution.status === "none") {
-    redirect("/access-unavailable");
+    // P1-E4-S0A1 §6 — same reasoning as requireOperationsAccess above.
+    redirect("/complete-signup");
   }
   if (resolution.status === "select-required") {
     selectOrganizationRedirect(currentPath);
@@ -110,7 +119,11 @@ export async function requireDriverAccess(currentPath: string): Promise<DriverAc
   const resolution = await resolveOrganizationContext();
 
   if (resolution.status === "none") {
-    redirect("/access-unavailable");
+    // P1-E4-S0A1 §6/§7 — same reasoning as requireOperationsAccess above;
+    // this is also the path a Driver invitee's deep link into /driver/*
+    // (e.g. a bookmarked /join/[token] tab reloaded after confirming)
+    // would hit before their invite is redeemed.
+    redirect("/complete-signup");
   }
   if (resolution.status === "select-required") {
     selectOrganizationRedirect(currentPath);

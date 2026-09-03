@@ -1,8 +1,8 @@
 # Zenward Platform — Auth, Session & Routing
 
-**Work item:** P1-E3-S1 — Authentication, Session & Role Routing Foundation
+**Work item:** P1-E3-S1 — Authentication, Session & Role Routing Foundation (the `none` → `/complete-signup` routing below updated by P1-E4-S0A1 — Cloud Signup Continuation Fix, §6)
 **Status:** Implemented and verified against the actual local Supabase Auth service and the actual running Next.js app — 41 real integration checks pass, plus 204 pre-existing database security assertions unaffected. Not a syntax-only claim.
-**Last updated:** 2026-09-01
+**Last updated:** 2026-09-03
 
 This document describes the identity/routing layer built in this phase. It complements [application-auth-boundary.md](../security/application-auth-boundary.md) (the security reasoning) and [application-auth-test-matrix.md](../security/application-auth-test-matrix.md) (the full test record).
 
@@ -44,7 +44,7 @@ No service-role key is used anywhere in this layer (work item §17) — every re
 
 | Status | Meaning | Behavior |
 |---|---|---|
-| `none` | Zero active Memberships | → `/access-unavailable` |
+| `none` | Zero active Memberships | → `/complete-signup` (P1-E4-S0A1: tries a pending operator-signup or Driver-invite continuation first; falls through to `/access-unavailable` only if there's genuinely nothing to complete — see `docs/product/operator-onboarding-model.md` §4A) |
 | `single` | Exactly one active Membership | Auto-selected, no extra screen |
 | `selected` | Multiple Memberships, and the `zw_org_context` cookie names one of them | That organization's role applies |
 | `select-required` | Multiple Memberships, no matching cookie | → `/select-organization` |

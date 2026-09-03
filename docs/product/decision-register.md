@@ -2405,6 +2405,54 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product
 - **Review Trigger:** A dedicated future work item, with exact target nav compositions specified up front.
 
+### ZD-198 — Staging Supabase Auth URLs configured via the Dashboard, never via a blind `supabase config push`
+
+- **Date:** 2026-09-03
+- **Category:** Architecture / Security
+- **Decision:** `supabase config push` (which pushes the ENTIRE local `supabase/config.toml` — including `site_url = "http://127.0.0.1:3000"` — to a linked remote project) is deliberately never run against the staging project. Auth URL Configuration (Site URL, Redirect URLs) for staging is set directly in the Supabase Dashboard instead, documented precisely in `docs/deployment/staging-auth-configuration.md` rather than automated.
+- **Status:** CONFIRMED — decision made; the actual dashboard values were NOT applied this phase (the confirmed, stable staging URL was not available — see the phase's own report, §Blockers).
+- **Reason:** Local dev's own `config.toml` is correctly tuned for `127.0.0.1` — blindly pushing it to a cloud project would silently break every auth email's link (they all resolve from Site URL when the app itself, verified directly, never passes an explicit `emailRedirectTo`). A staging-specific configuration path (a distinct profile/file, or dashboard-direct entry) is required; dashboard-direct was chosen as the simplest, lowest-risk option for a single environment.
+- **Affected Product Areas:** None (no application code) — Supabase project configuration only.
+- **Dependencies:** Blocked on confirming the stable staging URL (see report).
+- **Owner:** Engineering / DevOps
+- **Review Trigger:** If a genuine multi-environment `supabase config push` workflow is ever needed (e.g., a real production Supabase project later), design a proper per-environment config file/profile mechanism rather than continuing to configure staging by hand indefinitely.
+
+### ZD-199 — Vercel's "Production" environment label does not imply a real customer-facing release
+
+- **Date:** 2026-09-03
+- **Category:** Architecture / Deployment
+- **Decision:** The already-connected Vercel project (`zenwardmobility/ZenwardApp`) auto-deploys every push to `main`, and Vercel's own dashboard labels every such deployment "Production" — this phase does NOT treat that label as meaning a real, customer-facing release, and does not change any behavior based on it. The actual facts that matter — no custom domain attached (`app.zenwardmobility.com` does not resolve), Deployment Protection (Vercel SSO) restricting access — are what this phase relies on to treat the existing setup as safely staging-equivalent, not the Vercel-internal branch-environment label.
+- **Status:** CONFIRMED — documented in `docs/deployment/staging-architecture.md` §2. No domain configuration, no public-access change, no Production Supabase project was created or connected (work item §15).
+- **Reason:** Avoids two failure modes: (a) mistakenly treating "Production"-labeled as requiring production-grade caution that would have blocked this entire phase unnecessarily, and (b) mistakenly treating it as truly public/production-ready and skipping the real safety checks (domain, protection, data) that actually matter. Both were checked directly, not assumed either way.
+- **Affected Product Areas:** None (infrastructure/process only).
+- **Dependencies:** None
+- **Owner:** Engineering / DevOps
+- **Review Trigger:** Before any future phase attaches a real custom domain or disables Deployment Protection permanently — at that point, "Production" starts meaning what it says, and this decision should be explicitly revisited.
+
+### ZD-200 — Signup continuation lives in a Route Handler, not a Server Component page
+
+- **Date:** 2026-09-03
+- **Category:** Architecture
+- **Decision:** `/complete-signup` (P1-E4-S0A1 §5) — the authoritative continuation point for a zero-Membership authenticated visitor — is a Next.js Route Handler (`route.ts`), not a Server Component page. An earlier version of this fix put the identical routing/completion logic in a `page.tsx` and found, via live local testing (a real Mailpit-delivered confirmation email, a real link click, then sign-in), that a Server Component's own `redirect()` — issued from a chained client-router navigation, after an internal `await` for the mutating RPC — was silently not followed by the browser: the Organization/Membership were correctly created every time (confirmed directly against the database), but the on-screen URL never advanced past `/complete-signup` until a hard reload of that same URL redirected onward correctly.
+- **Status:** CONFIRMED — implemented (`src/app/complete-signup/route.ts` + `src/app/complete-signup/form/page.tsx`), verified via 9 clean local browser runs (including two full real-email-confirmation-to-Operations/`/driver` proofs) after the fix, each showing the correct destination reached without a stuck intermediate state.
+- **Reason:** A Route Handler always returns a real HTTP redirect response with a `Location` header — the well-trodden path Next.js's client-side navigation is built to follow — instead of an RSC-payload-embedded soft redirect nested inside an already-redirect-triggered render. This is a genuine, reproducible Next.js App Router behavior (observed on 16.3.3), not a one-off flake — worth remembering for any FUTURE multi-hop "mutate then redirect, reached via a redirect chain" flow in this codebase: prefer a Route Handler.
+- **Affected Product Areas:** `/complete-signup` only, this phase. Documented here as a durable pattern for future similar flows.
+- **Dependencies:** None
+- **Owner:** Engineering
+- **Review Trigger:** If a future Next.js upgrade changes this behavior, this decision (and its underlying assumption) should be re-verified rather than assumed to still hold.
+
+### ZD-201 — Signup-completion destination is decided from observable organization state, not from "did this request create it"
+
+- **Date:** 2026-09-03
+- **Category:** Architecture / Correctness
+- **Decision:** `/complete-signup`'s "already a Member" branch does not simply route every existing member to Operations/Driver. For an `organization_admin` whose organization's own `business_stage` is still `null` (never touched onboarding), it routes to `/onboarding` even though THIS particular request did not create the Membership itself.
+- **Status:** CONFIRMED — implemented, directly motivated by a genuinely observed local race: Next.js's dev-mode client navigation fired two concurrent GET requests to `/complete-signup` for one sign-in; the first created the Organization and correctly resolved to redirect to `/onboarding`, but the second (racing shortly after, seeing the now-already-created Membership) would have redirected to `/operations` instead had the destination logic only asked "did I just create this." Fixed by checking the organization's own `business_stage` instead. Re-verified: the same race, reproduced again after the fix, correctly lands on `/onboarding` from either request.
+- **Reason:** `complete_pending_signup()`'s own idempotency guarantee (advisory lock + Membership-existence check) correctly guarantees the Organization/Membership/UserProfile are created EXACTLY ONCE regardless of how many concurrent requests occur — but "exactly once" is a property of the DATA, not of which HTTP request happens to observe that fact first. Routing decisions built on "this specific request's own return value" are not safe under concurrency; routing decisions built on durable, queryable state are.
+- **Affected Product Areas:** `src/app/complete-signup/route.ts`.
+- **Dependencies:** ZD-200.
+- **Owner:** Engineering
+- **Review Trigger:** None anticipated — this is a general pattern worth keeping in mind for any future "first-time-only" UX decision reached via a potentially-racing entry point.
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

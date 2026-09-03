@@ -1,7 +1,7 @@
 # Zenward Platform — Application Route Map
 
 **Work item:** P1-E3-S0 — Stitch UI Ingestion & Implementation Mapping, amended by P1-E3-S1 — Authentication, Session & Role Routing Foundation (auth/org-context routes implemented, route access matrix added), amended by P1-E3-S9 — Operator Signup & Business Setup (`/sign-up`, `/onboarding/*`, `/join/[token]` added; `/driver/*` guard relaxed for Owner-Operator Mode)
-**Status:** P1-E3-S0's route plan was planning-only. P1-E3-S1 implemented the auth/routing shell described below — `/sign-in`, `/select-organization`, `/access-unavailable`, root `/`, and server-side guards on `/operations/*`/`/driver/*` all exist and are tested (docs/security/application-auth-test-matrix.md). P1-E3-S9 added the self-service onboarding surface. The Stitch screens themselves remain unimplemented placeholders, as this phase intended.
+**Status:** P1-E3-S0's route plan was planning-only. P1-E3-S1 implemented the auth/routing shell described below — `/sign-in`, `/select-organization`, `/access-unavailable`, root `/`, and server-side guards on `/operations/*`/`/driver/*` all exist and are tested (docs/security/application-auth-test-matrix.md). P1-E3-S9 added the self-service onboarding surface. The Stitch screens themselves remain unimplemented placeholders, as this phase intended. **P1-E4-S0 confirmed every route below is fully environment-portable** — no route, redirect, or cookie in this map depends on a hardcoded host; see `docs/deployment/staging-architecture.md` for the cloud-deployment picture and `docs/deployment/environment-variable-inventory.md` for exactly what IS environment-specific (3 env vars, none of them a route).
 **Last updated:** 2026-09-03
 
 Proposed route structure derived from the Stitch references and the existing (already-scaffolded, placeholder-only) Next.js route tree under `src/app/`. P1-E3-S0 did not create routes; P1-E3-S1 implemented the auth/context routes this document already proposed, plus the server-side guards described in [auth-session-routing.md](./auth-session-routing.md).
@@ -73,6 +73,8 @@ No Stitch reference covered any of these — built directly against the design s
 | `/onboarding/facility` | **P1-E3-S9** — First Facility (reuses the real Facilities mutation) | Protected |
 | `/onboarding/passenger` | **P1-E3-S9** — First Passenger (reuses the real, pre-existing Add Passenger action); the final step redirects into the real `/operations/trips/new` for "First Trip" — never a duplicated form | Protected |
 | `/join/[token]` | **P1-E3-S9** — Driver invite landing/redemption. The token itself is the credential (a 122-bit random UUID) — the page works for an unauthenticated visitor via the narrow, anon-callable `get_driver_invite_preview` RPC, then requires real sign-up/sign-in to redeem | Public (preview only; redemption requires auth) |
+| `/complete-signup` | **P1-E4-S0A1** — a Route Handler (not a rendered page), the authoritative continuation for a zero-Membership authenticated visitor: tries pending Driver-invite redemption, then pending operator-signup completion, then falls through to `/complete-signup/form` or `/access-unavailable`. See `docs/product/operator-onboarding-model.md` §4A. | Protected (auth required) |
+| `/complete-signup/form` | **P1-E4-S0A1** — the explicit, user-initiated "Complete your organization setup" recovery form, reached only when `/complete-signup` found nothing to auto-complete | Protected (auth required) |
 
 ## Route access matrix (work item §70)
 
@@ -81,13 +83,14 @@ No Stitch reference covered any of these — built directly against the design s
 | `/` | No (redirects if absent) | No | N/A — resolves destination | No | `/sign-in` (unauthenticated) → role-based destination |
 | `/sign-in` | No | No | N/A | No | Redirects to `/` if already authenticated |
 | `/sign-up` | No | No | N/A | No | Redirects to `/` if already authenticated |
-| `/select-organization` | Yes | No (resolves it) | Any role, in any of the caller's own Memberships | No | `/access-unavailable` if zero Memberships; onward redirect if only one (nothing to select) |
+| `/select-organization` | Yes | No (resolves it) | Any role, in any of the caller's own Memberships | No | `/complete-signup` if zero Memberships (P1-E4-S0A1); onward redirect if only one (nothing to select) |
 | `/access-unavailable` | Yes | No | N/A | No | `/sign-in` if unauthenticated |
+| `/complete-signup`, `/complete-signup/form` | Yes | No (this IS the zero-Membership case) | N/A | No | `/sign-in` if unauthenticated; onward redirect if a Membership already exists (idempotent re-visit) |
 | `/onboarding`, `/onboarding/*` | Yes | Yes (same resolution as Operations) | `organization_admin`, `dispatcher` | No | Identical fallback chain to `/operations` — see `requireOnboardingAccess` |
 | `/join/[token]` | No (preview); Yes (redeem) | No | N/A — the token IS the authority, not any Membership | No | Wrong-email/revoked/already-accepted states rendered inline, never a redirect |
-| `/operations` | Yes | Yes | `organization_admin`, `dispatcher` | No | `/sign-in` → `/select-organization` → `/driver` (if role=driver) → `/access-unavailable` |
+| `/operations` | Yes | Yes | `organization_admin`, `dispatcher` | No | `/sign-in` → `/select-organization` → `/driver` (if role=driver) → `/complete-signup` → `/access-unavailable` |
 | `/operations/*` | Yes | Yes | `organization_admin`, `dispatcher` | No | Same as `/operations` |
-| `/driver` | Yes | Yes | `driver`, **or `organization_admin`/`dispatcher` with a real linked Driver row (P1-E3-S9, Owner-Operator Mode — see `docs/product/owner-operator-mode.md`)** | Yes (inline safe state if missing, never a redirect) | `/sign-in` → `/select-organization` → `/operations` (if Ops role with NO linked Driver row) → `/access-unavailable` |
+| `/driver` | Yes | Yes | `driver`, **or `organization_admin`/`dispatcher` with a real linked Driver row (P1-E3-S9, Owner-Operator Mode — see `docs/product/owner-operator-mode.md`)** | Yes (inline safe state if missing, never a redirect) | `/sign-in` → `/select-organization` → `/operations` (if Ops role with NO linked Driver row) → `/complete-signup` → `/access-unavailable` |
 | `/driver/*` | Yes | Yes | Same as `/driver` | Yes | Same as `/driver` |
 
 ## Responsive surface split (work item §7-9)
@@ -103,8 +106,8 @@ No Stitch reference covered any of these — built directly against the design s
 | Authenticated, `organization_admin`/`dispatcher` Membership | → `/operations` |
 | Authenticated, `driver` Membership | → `/driver` (or the inline account-setup state if no linked Driver row) |
 | Authenticated, multi-org user | → `/select-organization` (see "Multi-org UX" below — the smallest-safe-approach recommendation there is what got built) |
-| Authenticated, zero Membership anywhere | → `/access-unavailable` |
-| Authenticated, Platform Admin only (no Membership) | → `/access-unavailable`, identical to any other zero-Membership user — **not** a tenant-Operations bypass (work item §39). Platform Admin's own console remains out of scope. |
+| Authenticated, zero Membership anywhere | → `/complete-signup` (P1-E4-S0A1 §6: tries a pending operator-signup or Driver-invite continuation first; falls through to `/access-unavailable` only if nothing to complete — see `docs/product/operator-onboarding-model.md` §4A) |
+| Authenticated, Platform Admin only (no Membership) | → `/complete-signup` → `/access-unavailable` (no pending signup/invite metadata to complete), identical in the end to any other zero-Membership user — **not** a tenant-Operations bypass (work item §39). Platform Admin's own console remains out of scope. |
 
 Full verification: [application-auth-test-matrix.md](../security/application-auth-test-matrix.md).
 
