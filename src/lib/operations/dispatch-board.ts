@@ -283,6 +283,18 @@ export async function getDispatchBoardData(organizationId: string, timezone: str
     driverOptions,
     vehicleOptions,
     summary: {
+      // P1-E3-S8C1 (work item §3): deliberately NOT the same count as
+      // Today's Operations' own `todayCount` — `trips` here is already
+      // filtered to `NON_TERMINAL_STATES` (line ~205 above), so this is
+      // "how many of today's trips still need dispatch attention," not
+      // "how many trips are scheduled today" (which includes trips
+      // already completed/cancelled/no-show — Today's Operations' own
+      // scope). Rendered as "open trips today" (not "trips today") on
+      // the Dispatch screen specifically so the two screens never show
+      // the same label for two different numbers — see
+      // docs/product/dispatch-board-data-map.md and
+      // docs/product/todays-operations-data-map.md for the full
+      // side-by-side definition.
       todayCount: trips.length,
       unassignedCount: unassignedTrips.length,
       activeCount: trips.filter((trip) => trip.isActiveState).length,

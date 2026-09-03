@@ -20,7 +20,7 @@ Every query is explicitly filtered by `organization_id` in addition to relying o
 
 | Screen element | Source | Notes |
 |---|---|---|
-| "24 trips today" | `todayTrips.length` (query 1) | |
+| "24 trips today" | `todayTrips.length` (query 1) | **P1-E3-S8C1:** counts EVERY trip scheduled today regardless of state — completed, cancelled, and no-show trips are all included. This is a deliberately different scope than Dispatch's own "open trips today" (`dispatch-board-data-map.md`), which excludes terminal-state trips — the two screens use different labels for exactly this reason, not by oversight. |
 | "6 active" | `activeTrips.length` (query 2) | Not bounded to today — see above. |
 | "3 need attention" | `needsAssignmentTrips.length` — subset of query 1 where `state='scheduled'` and no active assignment | |
 | "3 completed" | `completedTodayTrips.length` — subset of query 1 where `state='completed'` | A documented simplification (work item's own plan): not a separate `completed_at`-scoped query. |
@@ -29,7 +29,7 @@ Every query is explicitly filtered by `organization_id` in addition to relying o
 | Active Trips rows | `activeTrips` | Passenger name, driver + vehicle subtitle, bare state label (`En Route`/`Arrived`/`Passenger Onboard`) — lifecycle-model.md §C's own sanctioned presentation simplification. |
 | Activity Log rows | `activityLog` | Humanized `event_type` (`operationsEventLabel`, the trip_events CHECK constraint's full allow-listed vocabulary) + the trip's passenger name + `occurred_at` time. |
 | "Today's Operations" / date | `AppHeader` `title`/`description`, computed client-side in `OperationsLayoutClient` from `organization.organizationTimezone` | Persistent-chrome title per the reference's own composition (title lives in the sticky header, not the scrollable PageHeader) — see decision-register.md ZD-129. |
-| Sidebar/header identity (avatar, name) | `user_profiles.display_name`, live-resolved (`src/lib/auth/profile.ts`), falling back to email | No seed data populates `user_profiles` for any fixture user — every fixture account genuinely exercises the fallback, not a hypothetical path. |
+| Sidebar/header identity (avatar, name) | `user_profiles.display_name`, live-resolved (`src/lib/auth/profile.ts`), falling back to email | **P1-E3-S8C1 update:** the QA fixture organizations (Org A/B, etc.) still have no `user_profiles` rows and genuinely exercise the fallback — that path remains real and tested. Harmony Medical Transport's own Operations-facing staff (`owner@`/`dispatch@harmonytransport.test`) now have real `user_profiles.display_name` rows (`supabase/seed.sql`) — the earlier state (a live buyer-facing email address rendered in the sidebar's name slot) was the actual root cause of the account-menu truncation the S8C commercial audit flagged; the sidebar/account-menu layout was also hardened independently (`OperationsSidebar.tsx`, `AccountMenu.tsx`) so any future long identity value still degrades gracefully rather than clipping badly. |
 
 ## Deliberately omitted this phase
 

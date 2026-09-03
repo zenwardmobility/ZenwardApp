@@ -50,6 +50,8 @@ Setup: dispatcher session open to `/operations`. Driver session (any browser/dev
 **WHY IT MATTERS:** This is the operator's single biggest daily pain point — knowing what's wrong before a patient or a facility calls to tell them.
 **WHAT NOT TO CLAIM:** Don't say "we monitor this 24/7 with alerts" — there is no push notification or paging system yet; this is a screen a dispatcher looks at, not an alerting product.
 
+*(P1-E3-S8C1: if a buyer flips to Dispatch and notices its own "open trips today" count is lower than this screen's "trips today," that's not a bug — Dispatch's count deliberately excludes trips already completed, since it's a board about what still needs action; Today's Operations counts the full day. The two labels are worded differently on purpose so this never needs an explanation mid-demo.)*
+
 ### 2. Assign responsibility *(dispatcher, ~60 sec)*
 **WHAT TO CLICK:** Needs Attention → **Assign** on the unassigned trip → choose a driver and vehicle in the dialog → **Assign Driver**. (Or: open **Dispatch** in the left nav first, to show the fuller board — the same unassigned trip appears there too, alongside every driver's schedule for the day.)
 **WHAT BUYER SEES:** The trip leaves the unassigned queue; the Dispatch board's driver-capacity panel shows that driver now "On Trip"; the trip's row updates immediately, no page reload needed to see it reflected.

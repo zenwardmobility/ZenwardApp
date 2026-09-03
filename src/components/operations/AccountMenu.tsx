@@ -81,9 +81,17 @@ export function AccountMenu({ avatarName, organizationName, roleLabel, showSwitc
           aria-label="Account"
           className="absolute right-0 z-20 mt-2 w-56 rounded-sm border border-border-subtle bg-surface-elevated py-1 shadow-md"
         >
-          <div className="border-b border-border-subtle px-3 py-2.5">
-            <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")}>{organizationName}</p>
-            <p className={cn(typography.metadata, "text-text-muted")}>{roleLabel}</p>
+          <div className="min-w-0 border-b border-border-subtle px-3 py-2.5">
+            {/* P1-E3-S8C1 (work item §2): `title` restores the full value
+                on hover/focus for anything long enough to truncate — the
+                popup itself stays compact (w-56) rather than growing to
+                fit a long organization name. */}
+            <p className={cn(typography.bodySmall, "truncate font-medium text-text-primary")} title={organizationName}>
+              {organizationName}
+            </p>
+            <p className={cn(typography.metadata, "truncate text-text-muted")} title={roleLabel}>
+              {roleLabel}
+            </p>
           </div>
 
           {showSwitchOrganization && (

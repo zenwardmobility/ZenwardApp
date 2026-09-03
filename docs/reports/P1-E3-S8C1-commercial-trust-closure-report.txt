@@ -1,0 +1,375 @@
+====================================================================
+Project:              Zenward Platform
+Phase:                P1-E3-S8C1 — Commercial Trust Closure
+Repository:           /Users/datamatics/ZenWard
+Environment:          LOCAL DEVELOPMENT + LOCAL SUPABASE ONLY
+Git branch:           main
+Git HEAD before work: ece0e9b37ef05f9837f0d3f6f772a318b7d407dd "Complete
+                       Operations surfaces and navigation"
+Date/time:            2026-09-03
+====================================================================
+
+--------------------------------------------------------------------
+1. PRE-WORK
+--------------------------------------------------------------------
+`git status --short` was CLEAN at phase start. `git log --oneline -5`
+showed `ece0e9b` at HEAD, followed by `aa79e16`, `4ac9b39`, `17f7a6a`,
+`e6c8377`. `git diff --stat` was empty (nothing pending). `git show
+--stat ece0e9b` was inspected directly and confirmed to contain
+exactly the already-reported P1-E3-S8B1 + P1-E3-S8C diff (65 files,
+3206 insertions/76 deletions) — every file matched what those two
+phases' own completion reports already described (the 5 Operations
+master-data surfaces, AccountMenu, the Harmony Medical Transport seed
+block, all 11 `docs/commercial/` files, the commercial screenshot
+set, both prior phase reports, and the ZD-179 through ZD-190 decision
+entries). Nothing unexpected was found — no STOP condition was
+triggered, and this phase proceeded.
+
+--------------------------------------------------------------------
+2. ACCOUNT MENU — ISSUE AND FIX
+--------------------------------------------------------------------
+**Root cause, not just a CSS symptom.** `getDisplayName()`
+(`src/lib/auth/profile.ts`) falls back to the raw email address
+whenever a signed-in user has no `user_profiles.display_name` row —
+correct, deliberate, already-tested behavior in general (the QA
+fixture organizations genuinely rely on this fallback and remain
+unaffected — see §9). The problem was specific to Harmony's own
+Operations-facing staff: `owner@harmonytransport.test` and
+`dispatch@harmonytransport.test` had no `user_profiles` row, so their
+full email address rendered in the sidebar's identity slot — a slot
+sized and styled for a short human name, not an email address. That
+mismatch, not a missing CSS rule, is what actually produced the
+"awkward truncation" the S8C audit flagged.
+
+**Two-part fix, both applied:**
+1. **Data (root cause):** `supabase/seed.sql` now seeds real
+   `user_profiles.display_name` rows for all 5 Harmony auth users —
+   "Renata Castillo" (organization_admin), "Sam Delgado" (dispatcher),
+   and the 3 drivers' own names (for completeness/consistency, though
+   Driver UI never reads this table — it uses `drivers.display_name`
+   directly).
+2. **Layout (defense in depth):** `OperationsSidebar.tsx`'s bottom
+   identity block gained `min-w-0 flex-1` on the text container (a
+   flex child with no explicit width never actually shrinks without
+   it, so the existing lack of a width constraint is why a long value
+   previously overflowed rather than ellipsizing) plus `truncate` and
+   a `title` attribute on both the name and role lines.
+   `AccountMenu.tsx`'s popup header got the same `truncate`/`title`
+   treatment on both its organization-name and role lines, and its
+   container gained `min-w-0`. The popup itself was NOT widened
+   (still `w-56`) — "no huge popup" per the work item.
+
+**Verified live** (fresh reset, signed in as
+`dispatch@harmonytransport.test`, 1440×900 viewport): the sidebar
+identity block reads "Sam Delgado / Dispatcher" cleanly, no clipping,
+no overflow. The account-menu popup opens at 224px wide, showing
+"Harmony Medical Transport / Dispatcher" fully readable with no
+truncation needed at this org name's actual length; the `title`
+attribute stands ready for a longer org name in the future.
+Keyboard/accessibility behavior (Escape, click-outside, `aria-
+haspopup`/`aria-expanded`/`role="menu"`) is unchanged — no
+interaction logic was touched, only the identity-text markup/classes.
+No additional personal data is exposed — the same two fields (name,
+role) render as before; only their layout resilience changed.
+
+--------------------------------------------------------------------
+3. "TRIPS TODAY" SEMANTICS — DEFINITIONS AND FINAL LABELS
+--------------------------------------------------------------------
+Inspected the actual queries directly (not assumed from either
+screen's own prior report language):
+
+  Today's Operations `todayCount`  (src/lib/operations/todays-
+    operations.ts): `todayTrips.length` — every trip whose
+    `scheduled_pickup_at` falls within the organization's local
+    "today," in ANY state. Includes trips already completed,
+    cancelled, or no-show.
+
+  Dispatch `todayCount`  (src/lib/operations/dispatch-board.ts):
+    `trips.length`, where `trips` was ALREADY filtered to
+    `NON_TERMINAL_STATES` before this count was computed (line ~205
+    of that file) — i.e., only trips still actionable today. This
+    scope was already correct and intentional (a dispatch board's
+    natural job is "what still needs handling," not "everything that
+    happened today") — nothing about the underlying query changed
+    this phase.
+
+Both numbers were already right for their own screen's purpose; only
+the shared label ("trips today" on both) made them read as
+contradictory. **Final labels:**
+
+  Today's Operations:  "trips today"       (unchanged — this screen's
+                        own scope genuinely IS the full day)
+  Dispatch:             "open trips today"  (renamed — makes the
+                        already-correct non-terminal scope explicit)
+
+No operational logic was changed to force the numbers to match — the
+work item's own explicit instruction, and correctly so: the two
+scopes are genuinely different and both are useful. In-code comments
+were added at both `summary: {...}` definitions
+(`dispatch-board.ts`/`todays-operations.ts`) documenting exactly what
+each count measures and cross-referencing the other. Both data-map
+docs (`docs/product/dispatch-board-data-map.md`,
+`todays-operations-data-map.md`) were updated with the same
+definition, side by side.
+
+--------------------------------------------------------------------
+4. DEMO FACILITY GEOGRAPHY
+--------------------------------------------------------------------
+The original S8C phase's facility/passenger/business NAMES were
+already fictional ("Cascade Dialysis Center," "Dorothy Simmons," etc.
+— ZD-190) — the gap was that their ADDRESSES were real, identifiable
+Atlanta-area streets (Cascade Rd SW, Peachtree St NE, Johnson Ferry Rd
+NE, Ashford Dunwoody Rd, Briarcliff Rd NE, Vinings Ridge Dr in Smyrna,
+Camp Creek Pkwy in East Point, Candler Park Dr NE, Marietta Commons
+Blvd in Marietta). Replaced with an entirely fictional, internally
+consistent 4-town geography — **Ashcombe, Fernvale, Millbrook, and
+Eastfield, GA** — professionally formatted, never an obviously-fake
+placeholder ("123 Fake Street"):
+
+  Cascade Dialysis Center        4200 Millbrook Commons Dr,
+                                  Millbrook, GA 30661
+  Peachtree Family Clinic        118 Fernvale Creek Pkwy,
+                                  Fernvale, GA 30655
+  Northside Rehabilitation
+  Center                         875 Eastfield Ridge Rd,
+                                  Eastfield, GA 30673
+
+All 6 distinct passenger pickup-address strings used across the 12
+seeded Trips were replaced consistently everywhere they appear (each
+string replaced identically at every occurrence, preserving the exact
+same reuse pattern the original design had). The pending
+TransportationRequest's own pickup address was updated to match.
+Driver-location demo coordinates (`driver_location_updates`) were
+also nudged off their exact original real-Atlanta values, purely for
+full geographic coherence — though verified that the product never
+renders raw lat/lng to any user (no live map, no coordinate display
+anywhere in the UI, only a "Last Update" timestamp badge), so this was
+a belt-and-suspenders touch, not a fix to an actual exposure. Both new
+coordinate pairs remain physically valid so CDP geolocation overrides
+and any future map-adjacent code keep working unchanged. Facility
+NAMES were deliberately left unchanged (already fictional, not the
+subject of this fix). Every change is documented in `supabase/
+seed.sql`'s own comment block at the point of change.
+
+**Location demo impact:** none — the location-sharing/freshness
+narrative (driver taps "Share My Location," Dispatch sees the
+freshness signal update) is unaffected; verified via the full primary
+demo regression (§7).
+
+--------------------------------------------------------------------
+5. DEMO RESET
+--------------------------------------------------------------------
+Multiple fresh `supabase db reset` cycles were run this phase. One
+mid-phase reset surfaced a transient Docker warning
+("supabase_storage_ZenWard container is not ready: starting" / "Try
+rerunning the command with --debug") — investigated directly rather
+than assumed harmless: `docker ps` showed all 11 containers cycling
+through a restart, and the Next.js dev server (a separate,
+non-Docker-managed process) had gone unresponsive as a side effect,
+requiring a manual restart (`npm run dev`). This was a local
+Docker/dev-server orchestration flake, not a defect in any migration
+or seed data — confirmed because a subsequent, unambiguous reset
+completed cleanly ("Finished supabase db reset on branch main.", exit
+0) with identical fixture counts to every prior reset this session.
+The FINAL reset run at the end of this phase (§11) also completed
+cleanly on the first attempt. Every reset, clean or flaky, produced
+IDENTICAL Harmony Medical Transport counts — the flake never
+corrupted data, only transiently interrupted container/dev-server
+availability.
+
+Verified composition after the final clean reset:
+  trips              12
+  passengers          6
+  drivers             3
+  vehicles            3
+  facilities          3
+  open_exceptions     1
+  location_updates    2
+  user_profiles (new) 5  (Harmony's own 2 Operations staff + 3 drivers)
+
+--------------------------------------------------------------------
+6. BUYER-PATH CRAWL
+--------------------------------------------------------------------
+Signed in as `dispatch@harmonytransport.test` (1440×900), crawled
+Overview, Trips, Dispatch, Passengers, Facilities, Drivers, Fleet,
+Trip Detail (the open-exception trip), and the account menu; signed
+in as `driver.leon@harmonytransport.test` (390×844 mobile viewport)
+for Driver Today. 42/43 automated live checks PASS. The one nominal
+"failure" was a false positive in the test script's own regex (it
+searched page text for the literal substring "404" to catch a
+possible not-found page, and matched inside the phone number
+"(404) 555-0245" — confirmed via screenshot that the page rendered
+completely normally, no error, no dead control). Confirmed live: no
+account-menu truncation, "open trips today"/"trips today" labels both
+render correctly and distinctly, synthetic town names (Millbrook,
+Fernvale, Eastfield) render throughout Facilities and Trip Detail, no
+real-Atlanta street name appears anywhere, no QA terminology, no
+placeholder/dev wording, no 404, no dead control, no real
+organization/address association. Screenshots retained locally during
+the session (not re-published to `docs/design/qa/commercial-demo/`
+this phase — the existing S8C set there already documents the same
+screens' general layout; this phase's crawl was a targeted
+verification pass, not a new baseline capture).
+
+--------------------------------------------------------------------
+7. PRIMARY DEMO REGRESSION
+--------------------------------------------------------------------
+Ran the full primary flow once, end to end, as real clicks producing
+real, DB-verified state changes (not simulated): Willie Thompson's
+trip (Needs Assignment) → Dispatch → assigned to Leon Whitfield +
+Dodge Grand Caravan 07 → Leon (driver session) receives the trip →
+taps "Start to Pickup" (DB: `en_route_to_pickup`) → taps "Share My
+Location" (DB: new `driver_location_updates` row) → Dispatch board
+reflects the trip no longer unassigned → Leon taps "Report Issue" (DB:
+new open `trip_exceptions` row) → dispatcher sees it on Trip Detail,
+taps "Resolve" (DB: exception status → `resolved`) → Leon continues
+the remaining lifecycle taps to "Complete Trip" (DB: trip state →
+`completed`). 23/23 real assertions PASS.
+
+--------------------------------------------------------------------
+8. SQL REGRESSION
+--------------------------------------------------------------------
+Fresh `supabase db reset`, full 21-file suite, re-run cleanly after
+the container flake (§5) was resolved: 276/276 PASS, 0 FAIL verdicts,
+0 fatal psql ERROR lines — identical to the S8B/S8B1/S8C baseline.
+This phase touched `supabase/seed.sql` (data only) plus
+`src/components/operations/{AccountMenu,OperationsSidebar}.tsx` and
+`src/lib/operations/{dispatch-board,todays-operations}.ts` — no
+migration, RLS policy, or mutation-contract file — so an unchanged
+276 is the correct, expected outcome.
+
+--------------------------------------------------------------------
+9. RLS ADVERSARIAL
+--------------------------------------------------------------------
+32/32 PASS, from the same clean 21-file/276-assertion run
+(`rls_adversarial_tests.sql` specifically) — unchanged from baseline.
+Confirmed the QA fixture organizations (Org A/B, etc.) still have no
+`user_profiles` rows and continue to genuinely exercise the
+email-fallback path this phase did NOT touch — only Harmony's own
+staff accounts gained profile rows.
+
+--------------------------------------------------------------------
+10. CONCURRENCY
+--------------------------------------------------------------------
+`bash supabase/tests/mutation_concurrency_test.sh` — genuine two-
+process concurrent-mutation test (Session A holds a Trip row lock for
+~2s mid-`assign_trip`, Session B attempts a conflicting assign 0.3s
+later). Result: **TEST CONCURRENCY-1: PASS** — Session B blocked for
+2.723840000s on the real row lock (not a lucky interleaving), then
+correctly observed Session A's already-committed assignment and
+rejected with `assignment_conflict`. Final state: exactly 1 active
+assignment, for the correct driver. Unchanged from baseline — no
+assignment/concurrency logic was touched this phase.
+
+--------------------------------------------------------------------
+11. TYPESCRIPT
+--------------------------------------------------------------------
+`npx tsc --noEmit` — clean, 0 errors. Run after all source edits this
+phase (`AccountMenu.tsx`, `OperationsSidebar.tsx`, `dispatch-board.ts`,
+`todays-operations.ts`, `dispatch/page.tsx`).
+
+--------------------------------------------------------------------
+12. LINT
+--------------------------------------------------------------------
+`npm run lint` — clean, 0 errors, 0 warnings.
+
+--------------------------------------------------------------------
+13. BUILD
+--------------------------------------------------------------------
+`npm run build` — clean production build via Turbopack, all 24 routes
+compiled successfully (identical route list to every prior phase's
+build check — no route added or removed this phase).
+
+--------------------------------------------------------------------
+14. FILES CHANGED
+--------------------------------------------------------------------
+`git diff --stat` against the pre-work HEAD (`ece0e9b`):
+
+  docs/commercial/commercial-demo-readiness-audit.md |  17 +++-----
+  docs/commercial/zenward-demo-script.md              |   2 +
+  docs/product/decision-register.md                   |  24 ++++++
+  docs/product/dispatch-board-data-map.md              |   2 +-
+  docs/product/todays-operations-data-map.md           |   4 +-
+  src/app/operations/dispatch/page.tsx                 |   2 +-
+  src/components/operations/AccountMenu.tsx            |  14 +++-
+  src/components/operations/OperationsSidebar.tsx      |  24 +++++-
+  src/lib/operations/dispatch-board.ts                 |  12 +++
+  src/lib/operations/todays-operations.ts              |  11 +++
+  supabase/seed.sql                                    |  76 +++++++++++++-----
+  11 files changed, 152 insertions(+), 36 deletions(-)
+
+`docs/commercial/demo-navigation-map.md` and `docs/commercial/
+product-capability-matrix.md` were both reviewed against this phase's
+changes (work item §9) and found to contain nothing affected —
+neither references demo addresses, the account-menu identity slot, or
+either screen's trip-count label — so neither was edited, per the
+work item's own "do not duplicate documents unnecessarily" guidance;
+an unforced edit would have been padding, not a fix. Two new decision-
+register entries were added (ZD-191, ZD-192) — both durable product
+decisions (the label-disambiguation approach, and the
+geography/identity fixes), not merely implementation notes.
+
+--------------------------------------------------------------------
+15. BLOCKERS
+--------------------------------------------------------------------
+None.
+
+--------------------------------------------------------------------
+16. GATE VERDICT
+--------------------------------------------------------------------
+READY — see bottom verdict block. Both commercial-trust findings the
+S8C audit left open are now resolved at their root cause (a real
+display name, not merely a CSS truncation patch; a genuinely
+different-but-clear label pair, not a forced-equal count); demo
+facility geography is fully fictional and internally consistent; the
+full reset/regression/security/build baseline is unchanged and clean.
+====================================================================
+ACCOUNT MENU:
+READY
+
+OPERATIONAL COUNT SEMANTICS:
+CLEAR
+
+DEMO FACILITY DATA:
+FULLY FICTIONAL
+
+DEMO RESET:
+PASS
+
+PRIMARY DEMO:
+PASS
+
+VISIBLE PLACEHOLDERS:
+NONE
+
+VISIBLE 404s:
+NONE
+
+SQL:
+276/276
+
+RLS:
+32/32
+
+COMMERCIAL TRUST CLOSURE:
+READY
+
+BLOCKERS:
+NONE
+
+NEXT:
+P1-E3-S9 — Operator Onboarding & Business Setup
+
+REPORT FILE:
+docs/reports/P1-E3-S8C1-commercial-trust-closure-report.txt
+====================================================================
+
+--------------------------------------------------------------------
+STOP
+--------------------------------------------------------------------
+Per work item instruction: S9 was not begun. Nothing was deployed. No
+production Supabase project was linked. The public Zenward-Web project
+was not touched — all work this phase was confined to
+/Users/datamatics/ZenWard. Nothing was committed or pushed
+automatically. This phase stops here.
+====================================================================

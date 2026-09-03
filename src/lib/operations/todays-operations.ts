@@ -319,6 +319,17 @@ export async function getTodaysOperations(organizationId: string, timezone: stri
     activityLog,
     attentionItems,
     summary: {
+      // P1-E3-S8C1 (work item §3): `todayTrips` is EVERY trip scheduled
+      // today regardless of state — completed, cancelled, and no-show
+      // trips are all still counted here, since this screen's own job is
+      // "the full shape of today," not "what's still actionable." This is
+      // deliberately a DIFFERENT scope than Dispatch's own `todayCount`
+      // (that one excludes terminal-state trips — see dispatch-board.ts),
+      // which is why the two screens use different labels ("trips today"
+      // here vs. "open trips today" on Dispatch) even though both derive
+      // from a same-shaped `todayCount` field — see
+      // docs/product/todays-operations-data-map.md /
+      // docs/product/dispatch-board-data-map.md for the full definition.
       todayCount: todayTrips.length,
       activeCount: activeTrips.length,
       needsAssignmentCount: needsAssignmentTrips.length,

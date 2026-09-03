@@ -138,9 +138,27 @@ export function OperationsSidebar({
 
         <div className="flex items-center gap-3 px-1">
           <Avatar name={dispatcherName} size="sm" />
-          <div className="hidden lg:block">
-            <p className={cn(typography.bodySmall, "font-medium text-white")}>{dispatcherName}</p>
-            {dispatcherRole && <p className={cn(typography.metadata, "text-navy-text-muted")}>{dispatcherRole}</p>}
+          {/*
+            P1-E3-S8C1 (work item §2): `min-w-0` is required here — without
+            it, a flex child with no explicit width never actually shrinks
+            below its content's natural size, so `truncate` on the <p>s
+            below had nothing to truncate AGAINST and a long identity value
+            (a full email address, in Harmony's own case before real
+            `user_profiles.display_name` rows existed — see supabase/
+            seed.sql) simply overflowed the fixed-width sidebar instead of
+            ellipsizing cleanly. `title` restores the full value on hover
+            for anyone who needs it, since the visible text itself is now
+            deliberately allowed to clip.
+          */}
+          <div className="hidden min-w-0 flex-1 lg:block">
+            <p className={cn(typography.bodySmall, "truncate font-medium text-white")} title={dispatcherName}>
+              {dispatcherName}
+            </p>
+            {dispatcherRole && (
+              <p className={cn(typography.metadata, "truncate text-navy-text-muted")} title={dispatcherRole}>
+                {dispatcherRole}
+              </p>
+            )}
           </div>
         </div>
       </div>

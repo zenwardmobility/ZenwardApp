@@ -8,7 +8,7 @@
 
 | Screen element | Source | Notes |
 |---|---|---|
-| "5 trips today" | `trips.length` (today's non-terminal trips) | |
+| "5 open trips today" | `trips.length` (today's non-terminal trips) | **P1-E3-S8C1 (work item §3):** label changed from "trips today" to "open trips today" — the underlying count already excluded completed/cancelled/no-show trips (only `NON_TERMINAL_STATES`), which is the correct scope for a board about what still needs dispatch attention, but the OLD label was identical to Today's Operations' own "trips today" (a different, full-day scope), which read as two contradictory numbers for the same-sounding thing. The operational logic itself is unchanged — only the label, to make the existing, already-correct scope self-evident without a salesperson's explanation. See `todays-operations-data-map.md`'s matching note. |
 | "1 unassigned" | `unassignedTrips.length` | `state='scheduled'` AND no active `trip_assignments` row |
 | "1 active" | count of trips in one of the 5 non-terminal in-progress states | |
 | Needs Assignment cards | `unassignedTrips` | Passenger name, time (+ appointment), pickup→destination (free-text snapshot fields), `Needs Assignment` badge, `Assign` action |

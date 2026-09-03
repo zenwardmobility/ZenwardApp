@@ -2321,6 +2321,30 @@ Where no rationale has been established yet, the Reason field states: *"Reason p
 - **Owner:** Product / Sales
 - **Review Trigger:** None anticipated — revisit only if a future phase needs the demo org's own data to double as engineering test fixtures (not recommended; keep the two concerns separate).
 
+### ZD-191 — Dispatch's own trip count relabeled "open trips today"; Today's Operations keeps "trips today" — no query logic changed
+
+- **Date:** 2026-09-03
+- **Category:** Product / UX
+- **Decision:** Today's Operations and Dispatch each show a real, already-correct-for-their-own-purpose trip count that happened to share the identical label "trips today" despite measuring different scopes (Today's Operations: every trip scheduled today, any state; Dispatch: only trips still in a non-terminal state — i.e., still actionable). Dispatch's label changes to **"open trips today"**; Today's Operations' label is unchanged. The underlying queries (`dispatch-board.ts`, `todays-operations.ts`) are byte-for-byte unchanged — this is a labeling fix only, not a scope change.
+- **Status:** CONFIRMED — implemented, verified live (`docs/commercial/commercial-demo-readiness-audit.md` finding #2, now RESOLVED).
+- **Reason:** A commercial-trust audit (P1-E3-S8C) flagged that a buyer glancing between the two screens could reasonably wonder why "trips today" showed two different numbers. Forcing the counts to match would have been dishonest (the two scopes are genuinely, correctly different); instead the fix makes the existing, already-correct scope self-evident from the label alone, so no salesperson explanation is ever required.
+- **Affected Product Areas:** `src/app/operations/dispatch/page.tsx` (label only), `src/lib/operations/dispatch-board.ts` / `todays-operations.ts` (documentation comments only, no logic change).
+- **Dependencies:** None
+- **Owner:** Product
+- **Review Trigger:** If a future phase adds a third "trips today"-shaped count anywhere else in the product, define its own distinct label up front rather than reusing either existing one.
+
+### ZD-192 — Commercial demo geography made entirely fictional; a real display name resolves the account-menu identity slot for Harmony staff
+
+- **Date:** 2026-09-03
+- **Category:** Sales Enablement / Data Design / Security
+- **Decision:** Two related P1-E3-S8C1 fixes: (1) every Harmony Medical Transport facility/pickup/destination address now uses an entirely fictional, internally consistent 4-town geography (Ashcombe / Fernvale / Millbrook / Eastfield, GA) rather than the original phase's real Atlanta-area street names — facility/passenger/business NAMES were already fictional (ZD-190); only the addresses themselves needed correcting. (2) Harmony's own Operations-facing staff (`owner@`/`dispatch@harmonytransport.test`) now have real `user_profiles.display_name` rows ("Renata Castillo," "Sam Delgado") — the prior absence of a display name meant `getDisplayName()`'s documented email fallback rendered a full email address in the sidebar's identity slot, which was the actual root cause of the account-menu truncation a commercial audit flagged (not a CSS bug alone). The sidebar/account-menu layout was also hardened independently (`min-w-0`/`truncate`/`title`) so any future long identity value still degrades gracefully.
+- **Status:** CONFIRMED — implemented, verified live across a fresh `supabase db reset` (12/6/3/3/3/1/2 fixture counts unchanged) and a full crawl of every buyer-facing screen (42/43 automated checks PASS, the one "failure" a false-positive regex match on a phone number containing "404"). See `docs/reports/P1-E3-S8C1-commercial-trust-closure-report.txt`.
+- **Reason:** A real-world street/facility association in fictional demo data, and a buyer-facing screen showing a staff member's raw email instead of a name, are both commercial-trust problems even though neither was a security defect — the QA fixture orgs (Org A/B) are unaffected and intentionally keep exercising the real email-fallback path, since that remains correct, tested behavior for accounts that genuinely have no profile name.
+- **Affected Product Areas:** `supabase/seed.sql` (facility/trip/request addresses, driver-location coordinates, new `user_profiles` rows), `src/components/operations/OperationsSidebar.tsx`, `src/components/operations/AccountMenu.tsx`.
+- **Dependencies:** None
+- **Owner:** Product / Sales / Security
+- **Review Trigger:** None anticipated for the geography; the layout hardening should be revisited only if a future design system change removes `min-w-0`/`truncate` support from the underlying primitives.
+
 No decisions have been REJECTED as of this update. ZD-142 has been SUPERSEDED by ZD-145. ZD-145 has been AMENDED by ZD-146 (same day) — its one incorrect bullet is struck through and corrected in place, per explicit instruction not to preserve contradictory documentation; the rest of ZD-145 (the decision to add the parameter at all) remains valid and unedited. ZD-172 has been SUPERSEDED by ZD-177 (same day) — its "leave the direct policies in place" reasoning is struck through and corrected in place.
 
 **Related documents:** [product-definition.md](./product-definition.md) · [scope-register.md](./scope-register.md) · [domain-model.md](./domain-model.md) · [lifecycle-model.md](./lifecycle-model.md) · [authorization-model.md](./authorization-model.md) · [public-marketing-separation.md](./public-marketing-separation.md) · [schema.md](../data/schema.md) · [rls-model.md](../security/rls-model.md) · [mutation-api.md](../data/mutation-api.md) · [mutation-authorization.md](../security/mutation-authorization.md) · [read-api.md](../data/read-api.md) · [driver-data-minimization.md](../security/driver-data-minimization.md)

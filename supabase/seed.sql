@@ -409,6 +409,29 @@ where id in (
   '20000000-0000-0000-0000-0000000000f5'
 );
 
+-- P1-E3-S8C1 (work item §2 root cause): `getDisplayName()`
+-- (src/lib/auth/profile.ts) falls back to the raw email address
+-- whenever a signed-in user has no `user_profiles.display_name` row —
+-- correct, deliberate behavior in general, but it meant Harmony's own
+-- Operations-facing staff (owner/dispatcher) rendered their full email
+-- address in the sidebar identity slot, which is what actually
+-- produced the awkward truncation the S8C audit flagged (a normal
+-- human name fits; a full email address does not, in the same slot).
+-- Real staff display names close the root cause; the sidebar/account-
+-- menu layout was ALSO hardened (src/components/operations/
+-- OperationsSidebar.tsx, AccountMenu.tsx) so any future long identity
+-- value — a longer name, a longer org name — still degrades
+-- gracefully rather than clipping badly. Driver accounts don't need a
+-- row here (Driver UI shows `drivers.display_name`, e.g. "Leon
+-- Whitfield," never the signed-in email), but are included anyway for
+-- completeness/consistency.
+insert into public.user_profiles (id, display_name) values
+  ('20000000-0000-0000-0000-0000000000f1', 'Renata Castillo'),
+  ('20000000-0000-0000-0000-0000000000f2', 'Sam Delgado'),
+  ('20000000-0000-0000-0000-0000000000f3', 'Marcus Bell'),
+  ('20000000-0000-0000-0000-0000000000f4', 'Angela Reyes'),
+  ('20000000-0000-0000-0000-0000000000f5', 'Leon Whitfield');
+
 insert into public.organizations (id, name, status, timezone) values
   ('10000000-0000-0000-0000-0000000000f1', 'Harmony Medical Transport', 'active', 'America/New_York');
 
@@ -429,10 +452,19 @@ insert into public.vehicles (id, organization_id, label, status) values
   ('50000000-0000-0000-0000-0000000000f2', '10000000-0000-0000-0000-0000000000f1', 'Toyota Sienna 04', 'active'),
   ('50000000-0000-0000-0000-0000000000f3', '10000000-0000-0000-0000-0000000000f1', 'Dodge Grand Caravan 07', 'active');
 
+-- P1-E3-S8C1 (work item §4): all addresses below use an entirely
+-- fictional, internally-consistent 4-town geography (Ashcombe /
+-- Fernvale / Millbrook / Eastfield, GA) rather than real Atlanta-area
+-- streets — the facility/passenger/business NAMES were already
+-- fictional, but the original street addresses were real, identifiable
+-- Atlanta roads, which is a real-world-association risk for a
+-- buyer-facing demo. Professionally plausible formatting, no
+-- "123 Fake Street"-style placeholder, no real facility/business tied
+-- to any of these addresses.
 insert into public.facilities (id, organization_id, name, address_line1, city, state, postal_code, status) values
-  ('60000000-0000-0000-0000-0000000000f1'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Cascade Dialysis Center', '3210 Cascade Rd SW', 'Atlanta', 'GA', '30311', 'active'),
-  ('60000000-0000-0000-0000-0000000000f2'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Peachtree Family Clinic', '1745 Peachtree St NE', 'Atlanta', 'GA', '30309', 'active'),
-  ('60000000-0000-0000-0000-0000000000f3'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Northside Rehabilitation Center', '960 Johnson Ferry Rd NE', 'Atlanta', 'GA', '30342', 'active');
+  ('60000000-0000-0000-0000-0000000000f1'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Cascade Dialysis Center', '4200 Millbrook Commons Dr', 'Millbrook', 'GA', '30661', 'active'),
+  ('60000000-0000-0000-0000-0000000000f2'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Peachtree Family Clinic', '118 Fernvale Creek Pkwy', 'Fernvale', 'GA', '30655', 'active'),
+  ('60000000-0000-0000-0000-0000000000f3'::uuid, '10000000-0000-0000-0000-0000000000f1', 'Northside Rehabilitation Center', '875 Eastfield Ridge Rd', 'Eastfield', 'GA', '30673', 'active');
 
 insert into public.passengers (id, organization_id, display_name, phone, assistance_notes, status) values
   ('40000000-0000-0000-0000-0000000000f1', '10000000-0000-0000-0000-0000000000f1', 'Dorothy Simmons', '(404) 555-0201', 'Uses a walker', 'active'),
@@ -452,7 +484,7 @@ insert into public.transportation_requests (
 ) values (
   '70000000-0000-0000-0000-0000000000f1', '10000000-0000-0000-0000-0000000000f1', '40000000-0000-0000-0000-0000000000f1',
   'Cascade Dialysis Center', 'facility_coordinator', '(404) 555-0100',
-  '482 Ashford Dunwoody Rd, Atlanta, GA', 'Cascade Dialysis Center', 'no', 'pending'
+  '482 Ashcombe Grove Ln, Ashcombe, GA', 'Cascade Dialysis Center', 'no', 'pending'
 );
 
 -- Twelve Trips anchored to Harmony's own "today" (America/New_York),
@@ -472,84 +504,84 @@ insert into public.trips (
 select '80000000-0000-0000-0000-0000000000f1'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f1'::uuid, 'completed',
    midnight_ny + interval '7 hours', midnight_ny + interval '7 hours 30 minutes',
-   '482 Ashford Dunwoody Rd, Atlanta, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
+   '482 Ashcombe Grove Ln, Ashcombe, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
    midnight_ny + interval '7 hours 25 minutes'
 from harmony_today
 union all
 select '80000000-0000-0000-0000-0000000000f2'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f4'::uuid, 'completed',
    midnight_ny + interval '7 hours 30 minutes', midnight_ny + interval '8 hours',
-   '215 Briarcliff Rd NE, Atlanta, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
+   '215 Fernvale Ridge Rd, Fernvale, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
    midnight_ny + interval '7 hours 55 minutes'
 from harmony_today
 union all
 select '80000000-0000-0000-0000-0000000000f3'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f3'::uuid, 'en_route_to_pickup',
    midnight_ny + interval '8 hours', midnight_ny + interval '8 hours 30 minutes',
-   '77 Vinings Ridge Dr, Smyrna, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
+   '77 Millbrook Hollow Dr, Millbrook, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-0000000000f4'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f2'::uuid, 'en_route_to_destination',
    midnight_ny + interval '8 hours 15 minutes', midnight_ny + interval '9 hours',
-   '1440 Camp Creek Pkwy, East Point, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
+   '1440 Eastfield Crossing Pkwy, Eastfield, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-0000000000f5'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f5'::uuid, 'en_route_to_pickup',
    midnight_ny + interval '8 hours 30 minutes', midnight_ny + interval '9 hours 15 minutes',
-   '908 Candler Park Dr NE, Atlanta, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
+   '908 Ashcombe Park Dr, Ashcombe, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-0000000000f6'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f6'::uuid, 'scheduled',
    midnight_ny + interval '9 hours 15 minutes', null,
-   '36 Marietta Commons Blvd, Marietta, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
+   '36 Millbrook Commons Blvd, Millbrook, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-0000000000f7'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f1'::uuid, 'scheduled',
    midnight_ny + interval '10 hours', null,
-   '482 Ashford Dunwoody Rd, Atlanta, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
+   '482 Ashcombe Grove Ln, Ashcombe, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-0000000000f8'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f2'::uuid, 'scheduled',
    midnight_ny + interval '11 hours', null,
-   '215 Briarcliff Rd NE, Atlanta, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
+   '215 Fernvale Ridge Rd, Fernvale, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-0000000000f9'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f3'::uuid, 'scheduled',
    midnight_ny + interval '12 hours 30 minutes', null,
-   '77 Vinings Ridge Dr, Smyrna, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
+   '77 Millbrook Hollow Dr, Millbrook, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-000000000f10'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f4'::uuid, 'scheduled',
    midnight_ny + interval '14 hours', null,
-   '1440 Camp Creek Pkwy, East Point, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
+   '1440 Eastfield Crossing Pkwy, Eastfield, GA', 'Peachtree Family Clinic', '60000000-0000-0000-0000-0000000000f2'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-000000000f11'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f5'::uuid, 'scheduled',
    midnight_ny + interval '15 hours 30 minutes', null,
-   '908 Candler Park Dr NE, Atlanta, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
+   '908 Ashcombe Park Dr, Ashcombe, GA', 'Cascade Dialysis Center', '60000000-0000-0000-0000-0000000000f1'::uuid,
    null
 from harmony_today
 union all
 select '80000000-0000-0000-0000-000000000f12'::uuid, '10000000-0000-0000-0000-0000000000f1'::uuid,
    '40000000-0000-0000-0000-0000000000f6'::uuid, 'scheduled',
    midnight_ny + interval '16 hours 30 minutes', null,
-   '36 Marietta Commons Blvd, Marietta, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
+   '36 Millbrook Commons Blvd, Millbrook, GA', 'Northside Rehabilitation Center', '60000000-0000-0000-0000-0000000000f3'::uuid,
    null
 from harmony_today;
 
@@ -574,9 +606,17 @@ insert into public.trip_assignments (id, organization_id, trip_id, driver_id, ve
 -- STALE (Angela, on Trip h4 — surfaces "Location needs update"),
 -- assignment-scoped exactly the way driver_record_location itself
 -- enforces (never a stale former Driver's position).
+-- P1-E3-S8C1 (work item §4): nudged off the exact real-Atlanta
+-- coordinates the original values sat on, for the same fictional-
+-- geography reason as the address strings above — even though the
+-- product never renders raw lat/lng to a buyer (no live map, no
+-- coordinate display anywhere in the UI; only a "Last Update"
+-- timestamp badge), these stay in the same real, physically valid
+-- north Georgia region so CDP geolocation overrides and any future
+-- map-adjacent code keep working unchanged.
 insert into public.driver_location_updates (organization_id, driver_id, trip_id, assignment_id, latitude, longitude, accuracy_meters, recorded_at) values
-  ('10000000-0000-0000-0000-0000000000f1', '30000000-0000-0000-0000-0000000000f3', '80000000-0000-0000-0000-0000000000f3', '31000000-0000-0000-0000-0000000000f3', 33.881, -84.469, 12, now()),
-  ('10000000-0000-0000-0000-0000000000f1', '30000000-0000-0000-0000-0000000000f2', '80000000-0000-0000-0000-0000000000f4', '31000000-0000-0000-0000-0000000000f4', 33.660, -84.442, 15, now() - interval '9 minutes');
+  ('10000000-0000-0000-0000-0000000000f1', '30000000-0000-0000-0000-0000000000f3', '80000000-0000-0000-0000-0000000000f3', '31000000-0000-0000-0000-0000000000f3', 33.912, -84.518, 12, now()),
+  ('10000000-0000-0000-0000-0000000000f1', '30000000-0000-0000-0000-0000000000f2', '80000000-0000-0000-0000-0000000000f4', '31000000-0000-0000-0000-0000000000f4', 33.701, -84.501, 15, now() - interval '9 minutes');
 
 -- One real open operational exception — Trip h5 (Linda Okafor, en route
 -- to pickup) — the "Open issue" the demo story surfaces and resolves.

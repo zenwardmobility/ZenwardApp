@@ -40,7 +40,7 @@ export default async function DispatchBoardPage() {
       <SummaryStrip
         inline
         items={[
-          { label: "trips today", value: data.summary.todayCount },
+          { label: "open trips today", value: data.summary.todayCount },
           { label: "unassigned", value: data.summary.unassignedCount, tone: "warning", dot: true },
           { label: "active", value: data.summary.activeCount, dot: true },
           ...(data.summary.attentionCount > 0
