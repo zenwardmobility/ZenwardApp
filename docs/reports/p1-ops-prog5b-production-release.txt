@@ -1,0 +1,433 @@
+NEMRYN PLATFORM
+P1-OPS-PROG5B -- AVAILABILITY + VEHICLE CAPABILITY FOUNDATION -- PRODUCTION RELEASE
+Date: 2026-09-26. Final Progressive Operations release.
+
+Outcome in one line:
+  PROG5 is DEPLOYED and its database / security gate PASSED. The production browser smoke could NOT be completed
+  because the database connection from this workstation to production was unstable across three smoke attempts.
+  No Nemryn product assertion failed in production. Production is clean.
+  Classification: PRODUCTION VERIFICATION INCOMPLETE -- EXTERNAL CONNECTIVITY (not a product regression).
+  FINAL DISPOSITION (added 2026-09-26): owner-accepted closeout -- see section 18. Sections 1-17 are kept as recorded.
+
+======================================================================
+1. STARTING STATE
+======================================================================
+  - Branch main. HEAD = origin/main = 368a9234459acbdef3721e2d0d60c57a7a58a00e (PROG4B closeout).
+  - Production application before PROG5: 7eacc702a7edc3715ce96f721fa165f625fc6e8d.
+  - Production migration head before PROG5: 20260925100000.
+  - Working tree: the reviewed PROG5A / PROG5B candidate (41 modified tracked files, 14 new implementation files, 2
+    PROG5 reports), plus unrelated untracked historical reports and local .tmp-qa (both excluded).
+
+======================================================================
+2. IMMUTABLE RELEASE COMMIT
+======================================================================
+  SHA: ee40052933e73aeec1d320a5a350996983d3e0f8
+  Message: feat(operations): add availability and capability foundation
+  Author: Nemryn <nemryn.app@gmail.com>. Not amended.
+  Boundary: 57 files, +6139 / -234:
+    - supabase/migrations/20260926100000_availability_capability.sql;
+    - supabase/tests/availability_capability_tests.sql (new), privilege_contract_tests.sql (contract lists),
+      create_trip_privilege_tests.sql + trip_expected_duration_tests.sql (13-argument create_trip pins);
+    - src/lib/supabase/database.types.ts (regenerated);
+    - the application implementation (src/app, src/components, src/lib/operations);
+    - docs/reports/p1-ops-prog5a-availability-capability-spec.txt (amended) and
+      docs/reports/p1-ops-prog5b-availability-capability-implementation.txt.
+  Excluded: .tmp-qa, logs, screenshots, browser profiles, scratch, credentials, env files, unrelated historical reports.
+  Staged-content scan: no keys, JWTs, passwords, real e-mail addresses or tenant data. The only match was the local docker
+  container name in a test run-comment, an existing convention in 5+ committed test files.
+
+======================================================================
+3. FINAL LOCAL RELEASE GATE (sequential, before the commit)
+======================================================================
+  npx tsc --noEmit ............ PASS
+  npm run lint ................ PASS (0 errors; 95 warnings, all in untracked .tmp-qa; 0 findings in src)
+  npm test .................... 671/671
+  npm run build ............... PASS (exit 0)
+  PROG5 SQL suite ............. 25/25 PASS
+  Privilege contract (local) .. 0 violations / 29 checks
+  PROG1 E2E ................... 46/46
+  PROG2 E2E ................... 56/56
+  PROG3B E2E .................. 51/51 on an unmodified rerun (see below)
+  PROG4B E2E .................. 45/45
+  R1 integration .............. 19/19
+  R2 integration .............. 16/16
+  R2 E2E ...................... 20/20
+  PROG5B E2E .................. 74/74
+  Expectations were not changed.
+  PROG3B note: in the sequential batch, PROG3B stopped after 43 PASS / 0 FAIL on a browser navigation that never
+  resolved. Node reported an unsettled top-level await on `a.nav(...)`, a CDP / Chrome stall. Rerun alone and
+  unmodified, it passed 51/51. PROG3B uses its own fictional tenant, so the stall could not affect Org A or the other
+  suites. Org A was verified identical to its snapshot afterwards.
+
+======================================================================
+4. SQL-SUITE DISCLOSURE (not "all SQL tests pass")
+======================================================================
+  PROG5 / affected security-contract suites: GREEN
+    - availability_capability 25/25;
+    - privilege contract 0/29;
+    - create_trip, create_trip_privilege, trip_expected_duration, rls_adversarial, security_definer_exposure,
+      client_privilege_surface and function_privilege: clean (PROG5B implementation run).
+  Repository-wide known pre-existing test-hygiene failures: UNCHANGED.
+    - They were proven identical at the pre-PROG5 head by an A/B run in the implementation phase:
+        notifications_activity ACT-1 / PAGE-1 (order-dependent);
+        recurring_trip_creation RTC-04 and recurring_arrangement_mutation SKIP-05 / 08 / 09 (clock-dependent);
+        request_decision_expand_compat (historical EXPAND window);
+        website_requests_form A1 / A2 / F5 / P7 and website_request_form_publication PU4a (order-dependent);
+        website_intake_acquisition (a PASS line containing "FAILS"; grep artifact).
+    - The whole collection was NOT rerun in this phase: several suites are non-rerunnable on a shared database without a
+      reset.
+    - They were not repaired here and are not a PROG5 regression.
+
+======================================================================
+5. MIGRATION REVIEW
+======================================================================
+  Exactly one new migration, 20260926100000_availability_capability.sql (the owner-reviewed file). It contains only the
+  approved additive scope:
+    - 4 tables (driver_weekly_schedules, driver_weekly_shifts, driver_unavailability_windows,
+      vehicle_unavailability_windows);
+    - nullable vehicles.wheelchair_ramp / wheelchair_lift / wheelchair_positions / seated_capacity;
+    - trips.requires_wheelchair_access and recurring_arrangements.requires_wheelchair_access;
+    - RLS (SELECT for Admin / Dispatcher) with revokes and grants;
+    - 10 audited SECURITY DEFINER RPCs;
+    - the create_trip (13 arguments) and create_recurring_arrangement (9 arguments) compatibility updates;
+    - the occurrence snapshot in create_trip_for_recurring_occurrence.
+  Not present: backfill, service-role path, payroll / HR fields, free-text reason columns, stretcher / ambulance
+  capability, drag-and-drop, routing, optimization, PROG6.
+
+======================================================================
+6. PRODUCTION PREFLIGHT
+======================================================================
+  Project identity (supabase projects list):
+    - At first, the CLI was logged into another account (only "monatriq's Project"). Release STOPPED; the owner
+      re-logged in.
+    - Then: Nemryn / wyocbivzgrbekuyqdfts / ACTIVE_HEALTHY / linked. PASS.
+  max_rows:
+    - 1000, which is >= 500: PASS.
+    - Not stored in the database (no pgrst role settings), so it was read with the read-only Management API GET
+      /v1/projects/wyocbivzgrbekuyqdfts/postgrest (HTTP 200) using the CLI's existing credential.
+    - The response was piped straight into a filter that printed only max_rows. Nothing else was printed or stored.
+    - The api-keys endpoint was NOT used.
+  Migration delta:
+    - Production head 20260925100000.
+    - `supabase db push --dry-run`: the ONLY pending migration was 20260926100000_availability_capability.sql. PASS.
+  Pre-migration Driver RPC fingerprint:
+    - md5 of pg_get_functiondef for the 11 existing driver_* RPCs was captured.
+    - It is identical to the local database.
+
+======================================================================
+7. MIGRATION
+======================================================================
+  Command: supabase db push --linked --yes (commit ee40052 checked out).
+  Result: "Applying migration 20260926100000_availability_capability.sql... Finished supabase db push."
+  The CLI again printed the post-migration pg-delta certificate warning (CLI 2.109.0; 2.118.0 available). It was not
+  taken as success or failure; success was verified independently:
+    - schema_migrations head = 20260926100000 availability_capability;
+    - every object is present (section 8).
+  Production migration head: 20260926100000.
+
+======================================================================
+8. POST-MIGRATION SECURITY GATE (before push / deploy)
+======================================================================
+  scripts/verify-db-privileges.sh production: 0 violations / 29 checks.
+  Object verification (read-only):
+    - The 4 tables exist, RLS enabled.
+        authenticated: SELECT only (no INSERT / UPDATE / DELETE); anon: none.
+        One SELECT policy each (<table>_select_org_operations).
+    - vehicles capability columns and trips / recurring_arrangements.requires_wheelchair_access exist, boolean /
+      smallint, nullable; authenticated has NO UPDATE privilege on any of them.
+    - Exactly ONE create_trip (the reviewed 13-argument identity) and ONE create_recurring_arrangement (the reviewed
+      9-argument identity).
+    - All 10 new RPCs exist: set_driver_weekly_schedule, clear_driver_weekly_schedule, save_driver_unavailability,
+      delete_driver_unavailability, save_vehicle_unavailability, delete_vehicle_unavailability,
+      set_vehicle_capabilities, set_trip_wheelchair_requirement, set_recurring_wheelchair_requirement,
+      driver_get_own_schedule.
+    - Every new or changed function: SECURITY DEFINER, search_path=public, pg_temp, PUBLIC execute false, anon execute
+      false, authenticated execute true.
+    - Existing Driver RPC contracts are intact: the 11 driver_* definitions are byte-identical (md5) before and after
+      the migration, with unchanged grants.
+  Gate: PASS.
+
+======================================================================
+9. PUSH + VERCEL
+======================================================================
+  git push origin main: 368a923..ee40052, fast-forward, no force push.
+    After fetch: local HEAD = origin/main = ee40052933e73aeec1d320a5a350996983d3e0f8.
+  Vercel (existing GitHub -> Vercel path; no project, DNS or environment-variable change):
+    Production deployment 6675841122, environment Production, sha ee40052933e73aeec1d320a5a350996983d3e0f8,
+    state success (2026-09-26T06:58Z); Vercel commit status success.
+  https://app.nemryn.com/sign-in -> HTTP 200 (server: Vercel).
+  Deployed SHA: ee40052933e73aeec1d320a5a350996983d3e0f8.
+
+======================================================================
+10. PRODUCTION SMOKE -- WHAT RAN
+======================================================================
+Harness: .tmp-qa/p1-ops-prog5b-prod-smoke.mjs (local, untracked). Siloan Medical Centre only; fixtures labelled
+"PROG5B QA".
+  Hardening:
+    - timestamped START / END per section;
+    - per-database-call, browser, navigation and fetch timeouts;
+    - label-based cleanup that runs in `finally` BEFORE browser shutdown, on SIGINT / SIGTERM, and in a synchronous
+      exit safety net;
+    - a completion marker on PASS and FAIL.
+  Authentication and fixtures:
+    - Every authenticated write goes through the production UI with the Siloan admin's REAL session, i.e. the reviewed
+      server actions -> reviewed RPCs / RLS.
+    - No service role, no impersonation, no extra API key, no SQL shortcut.
+    - QA drivers are the one exception: an inert label-based insert, as in PROG4B, because no authenticated path
+      creates a driver record without an invited user.
+  Pre-production rehearsal: the same harness in a LOCAL target mode (identical checks) passed 129/129 against the local
+  stack, with cleanup verified.
+  Production attempts (three in total; the third is the single final owner-approved one):
+    Attempt 1:
+      - 17 PASS / 0 product failures.
+      - A browser evaluate stalled in the read-only baseline, before any fixture existed. The unguarded browser close
+        in `finally` then hung and node exited early.
+      - Harness defect, proven from the log: "unsettled top-level await" at `await a?.close()`. It was fixed by
+        running cleanup first, bounding closes and adding the exit safety net. No check was changed.
+    Attempt 2:
+      - 23 PASS / 0 product failures.
+      - A verification `supabase db query --linked` timed out on all retries during the equipment step, and the
+        automatic cleanup also timed out (ETIMEDOUT).
+      - Fixtures left: 1 QA passenger, 4 QA vans, 6 QA drivers. The same label-based cleanup was then run manually
+        and verified (0 rows).
+    Attempt 3 (final, owner-approved):
+      Phase 1 connectivity preflight: 5 sequential read-only queries through the harness's own path, all OK.
+        1 migration / object probe   09:33:32Z-09:33:42Z   9.9 s  OK (head 20260926100000; 4 PROG5 tables)
+        2 Siloan organization        09:33:42Z-09:33:51Z   8.6 s  OK
+        3 Siloan driver count        09:33:51Z-09:33:58Z   7.7 s  OK (3)
+        4 Siloan vehicle count       09:33:59Z-09:34:07Z   8.2 s  OK (1)
+        5 Siloan trip count          09:34:07Z-09:34:15Z   7.8 s  OK (15)
+      Owner DB policy was applied:
+        - 180 s ceiling per operation, and a WARN over 30 s;
+        - one retry only for idempotent operations after a transport failure;
+        - non-idempotent inserts never replayed (the persisted state is checked instead).
+      Clean start: PASS (0 QA rows of every kind; 0 schedules / shifts / windows; equipment and requirements all NULL).
+        Real-data snapshot captured.
+      Baseline: 18 PASS / 0 product failures. Then the connection degraded again:
+          09:41:43 WARN database operation failed (real tomorrow) attempt 1/2 after 73.1 s
+          09:43:27 WARN slow database operation (real tomorrow): 103.9 s   (the retry)
+      A 73 s failure followed by a 104 s success, against a 7.7-9.9 s preflight, is unstable connectivity under the
+      owner's rule.
+        - The run was stopped deliberately by SIGINT at 09:44:46, still inside the read-only baseline, BEFORE any
+          fixture was created.
+        - SIGINT cleanup ran (09:44:46-09:44:57). No fourth attempt was made.
+  Failure classification:
+    - Every stop was CONNECTIVITY / HARNESS (a browser stall, database transport timeouts).
+    - Across all three attempts no Nemryn behavior assertion failed after its request, page or query completed.
+
+======================================================================
+11. PRODUCTION BEHAVIOUR VERIFIED
+======================================================================
+Verified in production (read and UI only, before any fixture):
+  - Admin sign-in; the release build loads without runtime error on Overview, Requests, Trips, Dispatch Today /
+    Tomorrow, Tomorrow readiness, Recurring Care, Drivers (new "Working hours" column), Fleet (new "Equipment" column)
+    and Settings -> Operations; /sign-in HTTP 200.
+  Backward-compatibility baseline (no PROG5 data):
+    - Tomorrow "need preparation" count == the pre-PROG5 rule (0 = 0);
+    - no PROG5 readiness reason text;
+    - Dispatch Today rail truthful ("Schedule not set" for all 3 Siloan drivers, never "Available");
+    - Dispatch Tomorrow: no availability flags;
+    - Fleet: existing vehicles show equipment "Not recorded";
+    - Drivers: existing drivers show working hours "Not set".
+From attempt 2, on synthetic QA fixtures, before its connectivity stop:
+  - QA passenger created with Passengers "Add Passenger".
+  - QA vans created with Fleet "Add Vehicle", i.e. Admin create works through the now Admin-only server action.
+  - Fleet: Admin keeps "Add Vehicle".
+NOT verified in production (connectivity stopped the runs before these sections):
+  driver schedule; driver time off; vehicle out-of-service; equipment facts; trip wheelchair requirement (Yes / No /
+  Not specified); Request -> Trip prefill and the no-free-text-inference check; Recurring Care true -> false snapshot;
+  capable / mismatch / unknown capability; assignment warnings with Assign enabled; PROG4 overlap note first; Tomorrow
+  readiness reasons; Dispatch Today NOW states / Tomorrow row facts; Driver PWA "My working hours"; Driver redirect;
+  PROG4 regression smoke.
+  Every one of these is verified locally against the same code and migration:
+    - PROG5B E2E 74/74;
+    - the local rehearsal of this exact production harness, 129/129;
+    - the SQL suite 25/25.
+Additional notes on specific checks:
+  - Request "wheelchair_transportation" -> "Yes" prefill:
+      - Also not executable in production as things stand. No accepted Siloan Request carries that structured service
+        type.
+      - Creating one would require changing Siloan's service offerings and republishing its currently disabled public
+        form, which is out of scope. LOCAL-VERIFIED.
+      - The harness instead creates an operator-logged Request (Log Request UI) with "Uses a wheelchair at home" notes to
+        prove no free-text inference in production. That section was not reached.
+  - Dispatcher checks: MANUAL / NOT EXECUTED (no synthetic Siloan Dispatcher credential; role mutation forbidden).
+    Covered by local E2E C1-C4 and SQL.
+  - Dispatch COMMITTED / ON_TRIP states: LOCAL-VERIFIED / PRODUCTION NOT FORCED.
+
+======================================================================
+12. CLEANUP + POST-SMOKE SECURITY (independently verified, 2026-09-26 ~09:46Z)
+======================================================================
+  PROG5B QA passengers 0; drivers 0; vehicles 0; trips 0; assignments 0; requests 0; recurring arrangements 0 (so 0
+  generated occurrences).
+  Production-wide:
+    - driver_weekly_schedules 0; driver_weekly_shifts 0; driver_unavailability_windows 0;
+      vehicle_unavailability_windows 0;
+    - vehicles with recorded equipment 0; trips with a requirement 0; arrangements with a requirement 0.
+  Siloan real data matches the pre-smoke probe: 3 drivers, 1 vehicle, 15 trips; business_stage "starting" (unchanged).
+  No Membership role, organization setting, real vehicle / driver / trip / request / arrangement or other tenant was
+  modified. Zenward was not touched.
+  Append-only audit_events rows written by the reviewed RPCs during attempt 2 (vehicle create) are retained by design.
+  Post-smoke:
+    - migration head 20260926100000;
+    - privilege contract 0 violations / 29 checks;
+    - no RLS / RPC / grant change beyond the reviewed migration;
+    - deployed SHA ee40052 (deployment 6675841122);
+    - /sign-in 200.
+  No browser or harness process remains.
+
+======================================================================
+13. OPEN ISSUES
+======================================================================
+  1. PRODUCTION VERIFICATION INCOMPLETE -- EXTERNAL CONNECTIVITY.
+       - `supabase db query --linked` from this workstation swung between ~8 s and >90 s (timeouts) within minutes.
+       - Production browser verification of the PROG5 mutation paths is outstanding.
+       - Recommendation: repeat only the smoke (no code, schema or deploy change) from a stable network, or run the
+         listed checks manually in the Siloan tenant.
+  2. authenticated keeps the pre-existing table-level INSERT on vehicles (the Admin-only RLS policy).
+       - So an Organization Admin inserting a vehicle row directly through PostgREST could set the new equipment
+         columns without a vehicle_capabilities_updated audit row.
+       - Not a broadening of authority: capability writes are Admin-only (Q1), and the CHECK ranges apply.
+       - UPDATE on these columns is not granted. Candidate for a later hygiene item; not changed here.
+  3. Supabase CLI 2.109.0 prints a pg-delta certificate warning after db push (2.118.0 available).
+  4. Pre-existing repository SQL test-hygiene failures (section 4) remain.
+  5. Structured-service-type Request prefill cannot be exercised in Siloan without a tenant-configuration change.
+  6. Production Dispatcher checks remain MANUAL until a synthetic Dispatcher credential exists through normal onboarding.
+
+======================================================================
+14. DEFERRED (post-Progressive-Operations backlog, unchanged)
+======================================================================
+  effective-dated schedules; bulk hours; Activity entries for the new audit actions; a retention purge; driver
+  self-service; seated-capacity warnings; stretcher / other capabilities; a Request -> arrangement flow; running-late;
+  drag-and-drop; routing / optimization; automated dispatch; payroll / HR / hours-of-service; maintenance systems.
+
+======================================================================
+15. ROLLBACK POINT
+======================================================================
+  Application: revert ee40052933e73aeec1d320a5a350996983d3e0f8, or promote the previous Vercel production deployment
+  (7eacc70).
+  Database rollback is normally NOT required, because:
+    - the tables are additive;
+    - the new columns are nullable with no backfill;
+    - old create_trip / create_recurring_arrangement callers stay compatible through named arguments;
+    - the old application ignores PROG5 data.
+  Do not drop PROG5 tables to roll back the UI. No rollback was performed or is indicated: no product defect was found.
+
+======================================================================
+16. PROGRESSIVE OPERATIONS DISPOSITION
+======================================================================
+  PROG5 is deployed and security-verified in production. Its behavior is fully verified locally, and it is partially
+  verified in production (release build, backward-compatible baseline, Admin fleet create).
+  Progressive Operations stays NOT CLOSED until production verification of the PROG5 mutation paths is completed.
+  No new PROG remediation phase is proposed: the outstanding item is verification only. No PROG6 is planned.
+
+======================================================================
+17. P1-OPS-PROG5C -- FINAL MANUAL-STYLE PRODUCTION VERIFICATION ATTEMPT (2026-09-26, ~19:05-20:30Z)
+======================================================================
+Scope:
+  - A small, deliberate UI verification: 1 QA driver, 1 QA van, 1 QA passenger, 5 trips, 1 Request, 1 arrangement,
+    all labelled "PROG5C QA"; the existing Siloan Driver for the PWA card. This is NOT the 129-check smoke.
+  - Every write goes through the production UI as the Siloan Admin; database reads only confirm persistence.
+Preconditions (read-only), all PASS:
+  - The CLI was initially logged into another account again (403). The owner re-logged in; then Nemryn /
+    wyocbivzgrbekuyqdfts linked.
+  - Deployed SHA ee40052 (deployment 6675841122, success); migration head 20260926100000; privilege contract 0 / 29.
+  - 0 PROG5 QA objects; 0 schedules / shifts / windows; no equipment or requirements recorded; no leftover processes.
+  - Siloan real-data baseline hashes captured (drivers, vehicles, trips, assignments, requests, arrangements,
+    passengers, organization settings).
+Local rehearsal of the PROG5C script: 37/37 PASS, 0 leftovers. The rehearsal caught a SCRIPT defect first:
+  - The QA-van lookup, which walked the Fleet page DOM, resolved to a seed van, so a local out-of-service window landed
+    on it. The window was removed; the seed van's equipment was confirmed back to Not recorded.
+  - Fixed before production by an exact label lookup, plus a safety guard: every Drivers / Fleet dialog must name the
+    intended QA resource (or the existing Siloan Driver) before any save, otherwise the run aborts.
+  - This was a harness defect, not a product defect, and it never reached production.
+Production run (20:25:03Z):
+  - Clean start PASS; Admin sign-in PASS.
+  - QA passenger created through "Add Passenger" and QA van through "Add Vehicle" (Admin): PASS.
+  - Then a read-only database lookup hit the 180 s ceiling (20:28:36Z), after three 6 s probes minutes earlier.
+    Classification: CONNECTIVITY. The run was stopped by SIGINT at 20:28:54Z, before any PROG5 fact was written.
+  - SIGINT cleanup ran (20:28:54-20:29:00Z).
+Cleanup + security, independently verified after the stop:
+  - 0 PROG5C / PROG5B QA objects; 0 schedules / shifts / windows; no equipment or requirements recorded.
+  - Every Siloan baseline hash is IDENTICAL (no diff).
+  - Migration head 20260926100000; privilege contract 0 violations / 29; deployed SHA ee40052; CLI still Nemryn.
+  - No process left.
+Result: production verification of the PROG5 mutation paths is still INCOMPLETE, for the same external reason. The
+  `supabase db query --linked` path from this workstation intermittently stalls for 70-180 s, and the CLI login has
+  twice switched to another Supabase account during this release.
+  The production web application itself responded normally throughout.
+  No product defect was observed.
+SEC-HYGIENE (recorded, NOT fixed):
+  - vehicles keeps the pre-existing authenticated table-level INSERT grant (Admin-only RLS).
+  - Because the PROG5 capability columns live on vehicles, an Organization Admin using a direct PostgREST INSERT could
+    set capability values at vehicle creation without a vehicle_capabilities_updated audit row.
+  - It is not a tenant-isolation defect and does not broaden capability authority beyond Organization Admin. It does
+    not justify reopening PROG5.
+  - Post-PROG: move / narrow vehicle creation to an explicitly audited mutation contract.
+Remaining to close Progressive Operations: the PROG5C checks in the production UI. Either the owner performs them by
+  hand in Siloan, or they are run from a workstation / network with a stable database path. Both are verification only.
+
+Disposition recorded at the end of the PROG5C attempt (superseded by section 18):
+  PROG5B PRODUCTION RELEASE: INCOMPLETE -- PRODUCTION VERIFICATION INCOMPLETE (EXTERNAL CONNECTIVITY);
+  PRODUCTION VERIFICATION COMPLETE: NO; PROGRESSIVE OPERATIONS: NOT CLOSED;
+  READY FOR PILOT OPERATIONAL READINESS REVIEW: NO.
+
+======================================================================
+18. OWNER ACCEPTANCE AND CLOSEOUT (2026-09-26)
+======================================================================
+  1. Waiver:
+       - The owner reviewed the PROG5 production-release evidence and explicitly WAIVED further production
+         mutation-path verification against Siloan Medical Centre.
+  2. Nature of the waiver:
+       - The waiver is an ACCEPTED RESIDUAL VERIFICATION RISK. It is NOT evidence that those checks ran in production.
+       - Sections 10, 11 and 17 remain the accurate record of what did and did not execute in production.
+  3. Reason:
+       - Siloan is a disposable synthetic QA tenant, not an operational pilot tenant.
+       - Four production verification attempts (PROG5B attempts 1-3 and the PROG5C attempt) were each stopped by
+         workstation-side tooling / connectivity: one browser (CDP) stall and three stalls of the workstation's
+         database connection.
+       - The CLI login also switched to another Supabase account twice during the release.
+       - No completed Nemryn product assertion failed in any attempt.
+  4. Supporting evidence for the remaining mutation-path behaviors:
+       - PROG5B E2E 74/74;
+       - the identical production-harness local rehearsal 129/129 (plus the PROG5C script rehearsal 37/37);
+       - PROG5 SQL 25/25;
+       - unit 671/671;
+       - regression suites PROG1 46/46, PROG2 56/56, PROG3B 51/51, PROG4B 45/45, R1 integration 19/19,
+         R2 integration 16/16, R2 E2E 20/20;
+       - production schema / security / deployment verification: migration head 20260926100000; privilege contract
+         0 / 29; object, grant and overload checks; byte-identical Driver RPCs; deployed ee40052, Vercel success;
+       - the production backward-compatibility baseline: PASS;
+       - the partial production mutation smoke: QA passenger via Add Passenger, and QA van via Add Vehicle (Admin-only
+         action). Both PASS.
+       - Production cleanup: VERIFIED CLEAN; the Siloan baseline hashes are identical.
+  5. Future validation:
+       - Operational validation of these paths will take place during Pilot Operational Readiness, using the actual
+         pilot tenant and workflow, not further synthetic Siloan testing.
+       - This closeout does not start Pilot Operational Readiness.
+  6. Post-PROG backlog, carried forward:
+       - SEC-HYGIENE: vehicles keeps the pre-existing authenticated table-level INSERT grant (Admin-only RLS). An
+         Organization Admin using a direct PostgREST INSERT could set PROG5 capability values at vehicle creation
+         without a vehicle_capabilities_updated audit row.
+       - It is not a tenant-isolation defect and does not broaden authority beyond Organization Admin.
+       - Resolution: move / narrow vehicle creation to an explicitly audited mutation contract.
+       - Also carried: the section 14 deferred items, and the repository SQL test-hygiene failures (section 4).
+  Progressive Operations (PROG1-PROG5) is CLOSED. No PROG6 is planned.
+
+PROG5B PRODUCTION RELEASE: PASS — OWNER ACCEPTED
+
+PRODUCTION MIGRATION HEAD: 20260926100000
+
+PRODUCTION PRIVILEGE CONTRACT: 0 violations / 29 checks
+
+DEPLOYED COMMIT: ee40052933e73aeec1d320a5a350996983d3e0f8
+
+PROG5B PRODUCT DEFECT FOUND: NO
+
+PRODUCTION MUTATION SMOKE: PARTIALLY EXECUTED / REMAINDER OWNER-WAIVED
+
+PROGRESSIVE OPERATIONS: CLOSED
+
+READY FOR PILOT OPERATIONAL READINESS REVIEW: YES
+
+PROG6 PLANNED: NO
